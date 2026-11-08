@@ -1,0 +1,261 @@
+package cz.maramat.io;
+
+import cz.maramat.model.BlockCatalog;
+import cz.maramat.model.BlockDefinition;
+import cz.maramat.model.BlockInstance;
+import cz.maramat.model.Bus;
+import cz.maramat.model.DataType;
+import cz.maramat.model.GraphicElement;
+import cz.maramat.model.HeaderColor;
+import cz.maramat.model.Page;
+import cz.maramat.model.PinInstance;
+import cz.maramat.model.Project;
+import cz.maramat.model.Wire;
+
+import java.awt.Color;
+import java.awt.Point;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.util.Map;
+import java.util.Properties;
+
+public final class MflProjectSerializer {
+
+    private MflProjectSerializer() {}
+
+    public static void saveProject(Project project, File file) throws IOException {
+        Properties props = new Properties();
+        props.setProperty("maraflow.version", Project.VERSION);
+        props.setProperty("project.name", project.getProjectName());
+        props.setProperty("project.targetPlatform", project.getTargetPlatform());
+        props.setProperty("project.defaultThreadId", Integer.toString(project.getDefaultThreadId()));
+        props.setProperty("project.pageCount", Integer.toString(project.getPages().size()));
+
+        for (int pi = 0; pi < project.getPages().size(); pi++) {
+            Page page = project.getPages().get(pi);
+            String pfx = "page." + pi + ".";
+            props.setProperty(pfx + "name", page.getName());
+            props.setProperty(pfx + "blockCount", Integer.toString(page.getBlocks().size()));
+
+            for (int bi = 0; bi < page.getBlocks().size(); bi++) {
+                BlockInstance b = page.getBlocks().get(bi);
+                String bp = pfx + "block." + bi + ".";
+                props.setProperty(bp + "id", b.getId());
+                props.setProperty(bp + "defId", b.getDefinitionId());
+                props.setProperty(bp + "typeName", b.getTypeName());
+                props.setProperty(bp + "name", b.getName());
+                props.setProperty(bp + "gridX", Integer.toString(b.getGridX()));
+                props.setProperty(bp + "gridY", Integer.toString(b.getGridY()));
+                props.setProperty(bp + "threadId", Integer.toString(b.getThreadId()));
+                props.setProperty(bp + "order", Integer.toString(b.getOrder()));
+                props.setProperty(bp + "color", b.getHeaderColor().getLabel());
+                props.setProperty(bp + "description", b.getDescription());
+
+                int propIdx = 0;
+                for (Map.Entry<String, String> entry : b.getCustomProperties().entrySet()) {
+                    props.setProperty(bp + "prop." + propIdx + ".k", entry.getKey());
+                    props.setProperty(bp + "prop." + propIdx + ".v", entry.getValue());
+                    propIdx++;
+                }
+                props.setProperty(bp + "propCount", Integer.toString(propIdx));
+
+                props.setProperty(bp + "inCount", Integer.toString(b.getInputs().size()));
+                for (int ii = 0; ii < b.getInputs().size(); ii++) {
+                    PinInstance pin = b.getInputs().get(ii);
+                    props.setProperty(bp + "in." + ii + ".short", pin.getShortName());
+                    props.setProperty(bp + "in." + ii + ".full", pin.getFullName());
+                    props.setProperty(bp + "in." + ii + ".type", pin.getDataType().name());
+                    props.setProperty(bp + "in." + ii + ".const", pin.getConstantValue());
+                }
+
+                props.setProperty(bp + "outCount", Integer.toString(b.getOutputs().size()));
+                for (int oi = 0; oi < b.getOutputs().size(); oi++) {
+                    PinInstance pin = b.getOutputs().get(oi);
+                    props.setProperty(bp + "out." + oi + ".short", pin.getShortName());
+                    props.setProperty(bp + "out." + oi + ".full", pin.getFullName());
+                    props.setProperty(bp + "out." + oi + ".type", pin.getDataType().name());
+                }
+            }
+
+            props.setProperty(pfx + "wireCount", Integer.toString(page.getWires().size()));
+            for (int wi = 0; wi < page.getWires().size(); wi++) {
+                Wire w = page.getWires().get(wi);
+                String wp = pfx + "wire." + wi + ".";
+                props.setProperty(wp + "netName", w.getNetName());
+                props.setProperty(wp + "customNetName", Boolean.toString(w.isCustomNetName()));
+                props.setProperty(wp + "srcBlock", w.getSourceBlockId());
+                props.setProperty(wp + "srcPin", Integer.toString(w.getSourcePinIndex()));
+                props.setProperty(wp + "dstBlock", w.getTargetBlockId());
+                props.setProperty(wp + "dstPin", Integer.toString(w.getTargetPinIndex()));
+                props.setProperty(wp + "hidden", Boolean.toString(w.isHidden()));
+                props.setProperty(wp + "busId", w.getBusId() == null ? "" : w.getBusId());
+                StringBuilder pts = new StringBuilder();
+                for (int k = 0; k < w.getGridPoints().size(); k++) {
+                    if (k > 0) pts.append(";");
+                    Point pt = w.getGridPoints().get(k);
+                    pts.append(pt.x).append(",").append(pt.y);
+                }
+                props.setProperty(wp + "points", pts.toString());
+            }
+
+            props.setProperty(pfx + "graphicCount", Integer.toString(page.getGraphics().size()));
+            for (int gi = 0; gi < page.getGraphics().size(); gi++) {
+                GraphicElement g = page.getGraphics().get(gi);
+                String gp = pfx + "graphic." + gi + ".";
+                props.setProperty(gp + "kind", g.getKind().name());
+                props.setProperty(gp + "gridX", Integer.toString(g.getGridX()));
+                props.setProperty(gp + "gridY", Integer.toString(g.getGridY()));
+                props.setProperty(gp + "gridW", Integer.toString(g.getGridW()));
+                props.setProperty(gp + "gridH", Integer.toString(g.getGridH()));
+                props.setProperty(gp + "strokeRgb", Integer.toString(g.getStrokeColor().getRGB()));
+                props.setProperty(gp + "fillRgb", Integer.toString(g.getFillColor().getRGB()));
+                props.setProperty(gp + "filled", Boolean.toString(g.isFilled()));
+                props.setProperty(gp + "strokeWidth", Integer.toString(g.getStrokeWidth()));
+                props.setProperty(gp + "dashed", Boolean.toString(g.isDashed()));
+                props.setProperty(gp + "ngonSides", Integer.toString(g.getNgonSides()));
+                props.setProperty(gp + "text", g.getText());
+                props.setProperty(gp + "fontSize", Integer.toString(g.getFontSize()));
+                props.setProperty(gp + "boundTargetPin", g.getBoundTargetPin());
+                props.setProperty(gp + "toggleButton", Boolean.toString(g.isToggleButton()));
+            }
+        }
+
+        try (FileOutputStream out = new FileOutputStream(file)) {
+            props.storeToXML(out, "Maraflow PLC Project (.mfl)", "UTF-8");
+        }
+        project.setProjectFile(file);
+        project.setDirty(false);
+    }
+
+    public static Project loadProject(File file) throws IOException {
+        Properties props = new Properties();
+        try (FileInputStream in = new FileInputStream(file)) {
+            props.loadFromXML(in);
+        }
+        Project project = new Project();
+        project.getPages().clear();
+        project.setProjectFile(file);
+        project.setProjectName(props.getProperty("project.name", "test"));
+        project.setTargetPlatform(props.getProperty("project.targetPlatform", "STM32F407-Maraflow-Std"));
+        project.setDefaultThreadId(Integer.parseInt(props.getProperty("project.defaultThreadId", "2")));
+
+        int pageCount = Integer.parseInt(props.getProperty("project.pageCount", "1"));
+        for (int pi = 0; pi < pageCount; pi++) {
+            String pfx = "page." + pi + ".";
+            Page page = new Page(props.getProperty(pfx + "name", "Page " + (pi + 1)));
+
+            int blockCount = Integer.parseInt(props.getProperty(pfx + "blockCount", "0"));
+            for (int bi = 0; bi < blockCount; bi++) {
+                String bp = pfx + "block." + bi + ".";
+                String defId = props.getProperty(bp + "defId", "Bool.And");
+                BlockDefinition def = BlockCatalog.getById(defId);
+                if (def == null) {
+                    def = BlockCatalog.getById("Bool.And");
+                }
+                String name = props.getProperty(bp + "name", "Block" + (bi + 1));
+                int gx = Integer.parseInt(props.getProperty(bp + "gridX", "10"));
+                int gy = Integer.parseInt(props.getProperty(bp + "gridY", "10"));
+                int tid = Integer.parseInt(props.getProperty(bp + "threadId", "2"));
+                int ord = Integer.parseInt(props.getProperty(bp + "order", "10"));
+
+                BlockInstance b = new BlockInstance(def, name, gx, gy, tid, ord);
+                b.setId(props.getProperty(bp + "id", b.getId()));
+                b.setTypeName(props.getProperty(bp + "typeName", def.getTypeName()));
+                b.setHeaderColor(HeaderColor.fromLabel(props.getProperty(bp + "color", "clDefault")));
+                b.setDescription(props.getProperty(bp + "description", ""));
+
+                int propCount = Integer.parseInt(props.getProperty(bp + "propCount", "0"));
+                for (int k = 0; k < propCount; k++) {
+                    String key = props.getProperty(bp + "prop." + k + ".k");
+                    String val = props.getProperty(bp + "prop." + k + ".v");
+                    if (key != null && val != null) {
+                        b.getCustomProperties().put(key, val);
+                    }
+                }
+
+                int inCount = Integer.parseInt(props.getProperty(bp + "inCount", "0"));
+                if (inCount > 0) {
+                    b.getInputs().clear();
+                    for (int ii = 0; ii < inCount; ii++) {
+                        String sn = props.getProperty(bp + "in." + ii + ".short", "X");
+                        String fn = props.getProperty(bp + "in." + ii + ".full", sn);
+                        DataType dt = DataType.valueOf(props.getProperty(bp + "in." + ii + ".type", "BOOL"));
+                        String cv = props.getProperty(bp + "in." + ii + ".const", dt.getDefaultConstant());
+                        b.getInputs().add(new PinInstance(sn, fn, dt, true, cv));
+                    }
+                }
+
+                int outCount = Integer.parseInt(props.getProperty(bp + "outCount", "0"));
+                if (outCount > 0) {
+                    b.getOutputs().clear();
+                    for (int oi = 0; oi < outCount; oi++) {
+                        String sn = props.getProperty(bp + "out." + oi + ".short", "Y");
+                        String fn = props.getProperty(bp + "out." + oi + ".full", sn);
+                        DataType dt = DataType.valueOf(props.getProperty(bp + "out." + oi + ".type", "BOOL"));
+                        b.getOutputs().add(new PinInstance(sn, fn, dt, false, dt.getDefaultConstant()));
+                    }
+                }
+                page.getBlocks().add(b);
+            }
+
+            int wireCount = Integer.parseInt(props.getProperty(pfx + "wireCount", "0"));
+            for (int wi = 0; wi < wireCount; wi++) {
+                String wp = pfx + "wire." + wi + ".";
+                String srcB = props.getProperty(wp + "srcBlock", "");
+                int srcP = Integer.parseInt(props.getProperty(wp + "srcPin", "0"));
+                String dstB = props.getProperty(wp + "dstBlock", "");
+                int dstP = Integer.parseInt(props.getProperty(wp + "dstPin", "0"));
+                String netName = props.getProperty(wp + "netName", "Net");
+                Wire w = new Wire(srcB, srcP, dstB, dstP, netName, new Point(0, 0), new Point(1, 0));
+                w.setNetName(netName, Boolean.parseBoolean(props.getProperty(wp + "customNetName", "false")));
+                w.setHidden(Boolean.parseBoolean(props.getProperty(wp + "hidden", "false")));
+                String busId = props.getProperty(wp + "busId", "");
+                w.setBusId(busId.isEmpty() ? null : busId);
+
+                String ptsStr = props.getProperty(wp + "points", "");
+                if (!ptsStr.isEmpty()) {
+                    w.getGridPoints().clear();
+                    for (String tok : ptsStr.split(";")) {
+                        String[] xy = tok.split(",");
+                        if (xy.length == 2) {
+                            w.getGridPoints().add(new Point(Integer.parseInt(xy[0]), Integer.parseInt(xy[1])));
+                        }
+                    }
+                }
+                page.getWires().add(w);
+            }
+
+            int graphicCount = Integer.parseInt(props.getProperty(pfx + "graphicCount", "0"));
+            for (int gi = 0; gi < graphicCount; gi++) {
+                String gp = pfx + "graphic." + gi + ".";
+                GraphicElement.Kind kind = GraphicElement.Kind.valueOf(props.getProperty(gp + "kind", "RECTANGLE"));
+                int gx = Integer.parseInt(props.getProperty(gp + "gridX", "5"));
+                int gy = Integer.parseInt(props.getProperty(gp + "gridY", "5"));
+                int gw = Integer.parseInt(props.getProperty(gp + "gridW", "6"));
+                int gh = Integer.parseInt(props.getProperty(gp + "gridH", "4"));
+                GraphicElement g = new GraphicElement(kind, gx, gy, gw, gh);
+                g.setStrokeColor(new Color(Integer.parseInt(props.getProperty(gp + "strokeRgb", "-13421773"))));
+                g.setFillColor(new Color(Integer.parseInt(props.getProperty(gp + "fillRgb", "-984840"))));
+                g.setFilled(Boolean.parseBoolean(props.getProperty(gp + "filled", "false")));
+                g.setStrokeWidth(Integer.parseInt(props.getProperty(gp + "strokeWidth", "1")));
+                g.setDashed(Boolean.parseBoolean(props.getProperty(gp + "dashed", "false")));
+                g.setNgonSides(Integer.parseInt(props.getProperty(gp + "ngonSides", "6")));
+                g.setText(props.getProperty(gp + "text", "Label"));
+                g.setFontSize(Integer.parseInt(props.getProperty(gp + "fontSize", "11")));
+                g.setBoundTargetPin(props.getProperty(gp + "boundTargetPin", ""));
+                g.setToggleButton(Boolean.parseBoolean(props.getProperty(gp + "toggleButton", "false")));
+                page.getGraphics().add(g);
+            }
+
+            project.getPages().add(page);
+        }
+        if (project.getPages().isEmpty()) {
+            project.getPages().add(new Page("Page 1"));
+        }
+        project.setDirty(false);
+        BlockCatalog.syncMacrosFromProject(project);
+        return project;
+    }
+}

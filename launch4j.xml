@@ -1,0 +1,32 @@
+<launch4jConfig>
+  <headerType>gui</headerType>
+  <jar>target/Maraflow-1.0-SNAPSHOT.jar</jar>
+  <outfile>target/Maraflow.exe</outfile>
+  <errTitle>Maraflow Startup Error</errTitle>
+  <cmdLine></cmdLine>
+  <chdir>.</chdir>
+  <priority>normal</priority>
+  <stayAlive>false</stayAlive>
+  <restartOnCrash>false</restartOnCrash>
+  <jre>
+    <!-- Relative path if bundled JRE folder is shipped alongside the exe -->
+    <path>jre;%JAVA_HOME%</path>
+    <bundledJre64Bit>false</bundledJre64Bit>
+    <bundledJreAsFallback>false</bundledJreAsFallback>
+    <minVersion>21.0.0</minVersion>
+    <maxVersion></maxVersion>
+    <jdkPreference>preferJre</jdkPreference>
+    <runtimeBits>64/32</runtimeBits>
+  </jre>
+  <versionInfo>
+    <fileVersion>1.0.0.0</fileVersion>
+    <txtFileVersion>1.0.0.0</txtFileVersion>
+    <fileDescription>Maraflow PLC Programming IDE</fileDescription>
+    <copyright>Maraflow</copyright>
+    <productVersion>1.0.0.0</productVersion>
+    <txtProductVersion>1.0.0.0</txtProductVersion>
+    <productName>Maraflow</productName>
+    <internalName>Maraflow</internalName>
+    <originalFilename>Maraflow.exe</originalFilename>
+  </versionInfo>
+</launch4jConfig>
