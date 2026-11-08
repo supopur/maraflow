@@ -2,6 +2,8 @@ package cz.maramat.ui.panels;
 
 import cz.maramat.model.BlockInstance;
 import cz.maramat.model.DataType;
+import cz.maramat.model.LadderElement;
+import cz.maramat.model.LadderRung;
 import cz.maramat.model.Page;
 import cz.maramat.model.PinInstance;
 import cz.maramat.model.Project;
@@ -242,7 +244,7 @@ public class ScopePanel extends JPanel {
 
         for (Page page : project.getPages()) {
             if (page.isMacro()) continue;
-            for (BlockInstance b : page.getBlocks()) {
+            for (BlockInstance b : page.getAllBlockInstances()) {
                 for (PinInstance in : b.getInputs()) {
                     String ref = b.getName() + "." + in.getShortName();
                     if (selectedPins.contains(ref)) {
@@ -253,6 +255,25 @@ public class ScopePanel extends JPanel {
                     String ref = b.getName() + "." + out.getShortName();
                     if (selectedPins.contains(ref)) {
                         pushValue(ref, out.getRuntimeValue(), out.getDataType(), maxSamples, colorIdx++);
+                    }
+                }
+            }
+            for (LadderRung rung : page.getRungs()) {
+                for (LadderElement el : rung.getMainElements()) {
+                    if (el.getKind().isContact() && selectedPins.contains(el.getOperand())) {
+                        pushValue(el.getOperand(), el.isOperandState() ? 1.0 : 0.0, DataType.BOOL, maxSamples, colorIdx++);
+                    }
+                }
+                for (LadderElement coil : rung.getCoils()) {
+                    if (coil.getKind() == LadderElement.Kind.ANALOG_COIL) {
+                        if (selectedPins.contains(coil.getOperand())) {
+                            pushValue(coil.getOperand(), coil.getNumericRuntimeValue(), DataType.FLOAT, maxSamples, colorIdx++);
+                        }
+                        if (coil.getSourceOperand() != null && selectedPins.contains(coil.getSourceOperand())) {
+                            pushValue(coil.getSourceOperand(), coil.getNumericRuntimeValue(), DataType.FLOAT, maxSamples, colorIdx++);
+                        }
+                    } else if (selectedPins.contains(coil.getOperand())) {
+                        pushValue(coil.getOperand(), coil.isOperandState() ? 1.0 : 0.0, DataType.BOOL, maxSamples, colorIdx++);
                     }
                 }
             }
@@ -292,10 +313,12 @@ public class ScopePanel extends JPanel {
         record PinOption(String ref, String display, JCheckBox checkBox) {}
         List<PinOption> options = new ArrayList<>();
 
+        Set<String> seenRefs = new LinkedHashSet<>();
         for (Page page : proj.getPages()) {
-            for (BlockInstance b : page.getBlocks()) {
+            for (BlockInstance b : page.getAllBlockInstances()) {
                 for (PinInstance out : b.getOutputs()) {
                     String ref = b.getName() + "." + out.getShortName();
+                    if (!seenRefs.add(ref)) continue;
                     String disp = ref + "  [OUT - " + out.getDataType().getDisplayName() + "]";
                     JCheckBox cb = new JCheckBox(disp, selectedPins.contains(ref));
                     cb.setBackground(Color.WHITE);
@@ -304,11 +327,35 @@ public class ScopePanel extends JPanel {
                 }
                 for (PinInstance in : b.getInputs()) {
                     String ref = b.getName() + "." + in.getShortName();
+                    if (!seenRefs.add(ref)) continue;
                     String disp = ref + "  [IN - " + in.getDataType().getDisplayName() + "]";
                     JCheckBox cb = new JCheckBox(disp, selectedPins.contains(ref));
                     cb.setBackground(Color.WHITE);
                     options.add(new PinOption(ref, disp, cb));
                     checkListPanel.add(cb);
+                }
+            }
+            for (LadderRung rung : page.getRungs()) {
+                for (LadderElement el : rung.getMainElements()) {
+                    if (el.getKind().isContact() && seenRefs.add(el.getOperand())) {
+                        String disp = el.getOperand() + "  [LD Contact - BOOL]";
+                        JCheckBox cb = new JCheckBox(disp, selectedPins.contains(el.getOperand()));
+                        cb.setBackground(Color.WHITE);
+                        options.add(new PinOption(el.getOperand(), disp, cb));
+                        checkListPanel.add(cb);
+                    }
+                }
+                for (LadderElement coil : rung.getCoils()) {
+                    if (seenRefs.add(coil.getOperand())) {
+                        String typeDesc = coil.getKind() == LadderElement.Kind.ANALOG_COIL
+                                ? "  [LD Analog Out - FLOAT]"
+                                : "  [LD Coil - BOOL]";
+                        String disp = coil.getOperand() + typeDesc;
+                        JCheckBox cb = new JCheckBox(disp, selectedPins.contains(coil.getOperand()));
+                        cb.setBackground(Color.WHITE);
+                        options.add(new PinOption(coil.getOperand(), disp, cb));
+                        checkListPanel.add(cb);
+                    }
                 }
             }
         }

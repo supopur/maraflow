@@ -374,4 +374,95 @@ public final class VectorIcons {
             }
         };
     }
+
+    public static Icon ladderAddRungIcon() {
+        return new ScaledIcon(18, 16) {
+            @Override
+            protected void paintLogical(Component c, Graphics2D g2) {
+                g2.setColor(new Color(0x1E, 0x29, 0x3B));
+                g2.setStroke(new BasicStroke(1.8f));
+                g2.drawLine(2, 2, 2, 14);
+                g2.drawLine(15, 2, 15, 14);
+                g2.setStroke(new BasicStroke(1.2f));
+                g2.drawLine(2, 8, 15, 8);
+                g2.setColor(new Color(0x1E, 0x84, 0x49));
+                g2.setStroke(new BasicStroke(1.8f));
+                g2.drawLine(8, 4, 8, 12);
+                g2.drawLine(4, 8, 12, 8);
+            }
+        };
+    }
+
+    public static Icon ladderContactIcon(boolean nc, String innerLetter) {
+        return new ScaledIcon(20, 16) {
+            @Override
+            protected void paintLogical(Component c, Graphics2D g2) {
+                g2.setColor(new Color(0x1A, 0x1A, 0x1A));
+                g2.setStroke(new BasicStroke(1.4f));
+                g2.drawLine(1, 8, 6, 8);
+                g2.drawLine(13, 8, 18, 8);
+                g2.setStroke(new BasicStroke(1.8f));
+                g2.drawLine(6, 3, 6, 13);
+                g2.drawLine(13, 3, 13, 13);
+                if (nc) {
+                    g2.setStroke(new BasicStroke(1.4f));
+                    g2.drawLine(5, 12, 14, 4);
+                } else if (innerLetter != null && !innerLetter.isEmpty()) {
+                    g2.setFont(new Font("SansSerif", Font.BOLD, 8));
+                    g2.drawString(innerLetter, 7, 11);
+                }
+            }
+        };
+    }
+
+    public static Icon ladderCoilIcon(String innerLetter) {
+        return new ScaledIcon(20, 16) {
+            @Override
+            protected void paintLogical(Component c, Graphics2D g2) {
+                g2.setColor(new Color(0x1A, 0x1A, 0x1A));
+                g2.setStroke(new BasicStroke(1.4f));
+                g2.drawLine(1, 8, 5, 8);
+                g2.drawLine(14, 8, 18, 8);
+                g2.setStroke(new BasicStroke(1.6f));
+                g2.drawArc(5, 3, 5, 10, 90, 180);
+                g2.drawArc(9, 3, 5, 10, -90, 180);
+                if (innerLetter != null && !innerLetter.isEmpty()) {
+                    g2.setFont(new Font("SansSerif", Font.BOLD, 8));
+                    g2.drawString(innerLetter, 7, 11);
+                }
+            }
+        };
+    }
+
+    public static Icon ladderParallelBranchIcon() {
+        return new ScaledIcon(20, 16) {
+            @Override
+            protected void paintLogical(Component c, Graphics2D g2) {
+                g2.setColor(new Color(0x1F, 0x61, 0x8D));
+                g2.setStroke(new BasicStroke(1.4f));
+                g2.drawLine(1, 4, 18, 4);
+                g2.drawLine(4, 4, 4, 12);
+                g2.drawLine(15, 4, 15, 12);
+                g2.drawLine(4, 12, 8, 12);
+                g2.drawLine(11, 12, 15, 12);
+                g2.drawLine(8, 9, 8, 15);
+                g2.drawLine(11, 9, 11, 15);
+            }
+        };
+    }
+
+    public static Icon ladderAnalogCoilIcon() {
+        return new ScaledIcon(22, 16) {
+            @Override
+            protected void paintLogical(Component c, Graphics2D g2) {
+                g2.setColor(new Color(0x1F, 0x61, 0x8D));
+                g2.setStroke(new BasicStroke(1.3f));
+                g2.drawLine(0, 8, 3, 8);
+                g2.drawLine(18, 8, 21, 8);
+                g2.drawRect(3, 2, 15, 11);
+                g2.setFont(new Font("SansSerif", Font.BOLD, 7));
+                g2.drawString("AO", 5, 10);
+            }
+        };
+    }
 }

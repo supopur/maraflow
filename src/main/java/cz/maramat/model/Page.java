@@ -6,21 +6,29 @@ import java.util.List;
 
 public class Page {
     private String name;
+    private IecLanguage language = IecLanguage.FBD;
     private final List<BlockInstance> blocks = new ArrayList<>();
     private final List<Wire> wires = new ArrayList<>();
     private final List<Bus> busses = new ArrayList<>();
     private final List<GraphicElement> graphics = new ArrayList<>();
+    private final List<LadderRung> rungs = new ArrayList<>();
 
     public Page(String name) {
+        this(name, IecLanguage.FBD);
+    }
+
+    public Page(String name, IecLanguage language) {
         this.name = name;
+        this.language = (language == null) ? IecLanguage.FBD : language;
     }
 
     public Page copy() {
-        Page p = new Page(name);
+        Page p = new Page(name, language);
         for (BlockInstance b : blocks) p.blocks.add(b.copy());
         for (Wire w : wires) p.wires.add(w.copy());
         for (Bus b : busses) p.busses.add(b.copy());
         for (GraphicElement g : graphics) p.graphics.add(g.copy());
+        for (LadderRung r : rungs) p.rungs.add(r.copy());
         return p;
     }
 
@@ -30,6 +38,14 @@ public class Page {
 
     public void setName(String name) {
         this.name = (name == null || name.isBlank()) ? "Page" : name.trim();
+    }
+
+    public IecLanguage getLanguage() {
+        return language;
+    }
+
+    public void setLanguage(IecLanguage language) {
+        this.language = (language == null) ? IecLanguage.FBD : language;
     }
 
     /**
@@ -55,15 +71,44 @@ public class Page {
         return graphics;
     }
 
+    public List<LadderRung> getRungs() {
+        return rungs;
+    }
+
+    /**
+     * Returns all BlockInstances on this page, including Function Blocks embedded inside Ladder rungs.
+     */
+    public List<BlockInstance> getAllBlockInstances() {
+        if (language == IecLanguage.FBD) {
+            return blocks;
+        }
+        List<BlockInstance> all = new ArrayList<>(blocks);
+        for (LadderRung r : rungs) {
+            for (LadderElement el : r.getMainElements()) {
+                if (el.getKind() == LadderElement.Kind.FUNCTION_BLOCK && el.getBlockInstance() != null) {
+                    all.add(el.getBlockInstance());
+                }
+            }
+            for (LadderBranch br : r.getParallelBranches()) {
+                for (LadderElement el : br.getElements()) {
+                    if (el.getKind() == LadderElement.Kind.FUNCTION_BLOCK && el.getBlockInstance() != null) {
+                        all.add(el.getBlockInstance());
+                    }
+                }
+            }
+        }
+        return all;
+    }
+
     public BlockInstance findBlockById(String id) {
-        for (BlockInstance b : blocks) {
+        for (BlockInstance b : getAllBlockInstances()) {
             if (b.getId().equals(id)) return b;
         }
         return null;
     }
 
     public BlockInstance findBlockByName(String blockName) {
-        for (BlockInstance b : blocks) {
+        for (BlockInstance b : getAllBlockInstances()) {
             if (b.getName().equalsIgnoreCase(blockName)) return b;
         }
         return null;
@@ -88,9 +133,10 @@ public class Page {
     }
 
     public String nextUniqueBlockName(String prefix) {
+        String cleanPrefix = prefix.replaceAll("\\s+", "");
         int idx = 1;
         while (true) {
-            String candidate = prefix + idx;
+            String candidate = cleanPrefix + idx;
             if (findBlockByName(candidate) == null) {
                 return candidate;
             }
@@ -100,9 +146,14 @@ public class Page {
 
     public int nextOrderForThread(int threadId) {
         int maxOrder = 0;
-        for (BlockInstance b : blocks) {
+        for (BlockInstance b : getAllBlockInstances()) {
             if (b.getThreadId() == threadId && b.getOrder() > maxOrder) {
                 maxOrder = b.getOrder();
+            }
+        }
+        for (LadderRung r : rungs) {
+            if (r.getThreadId() == threadId && r.getOrder() > maxOrder) {
+                maxOrder = r.getOrder();
             }
         }
         return ((maxOrder / 10) + 1) * 10;

@@ -4,6 +4,10 @@ import cz.maramat.model.BlockCatalog;
 import cz.maramat.model.BlockDefinition;
 import cz.maramat.model.BlockInstance;
 import cz.maramat.model.DataType;
+import cz.maramat.model.IecLanguage;
+import cz.maramat.model.LadderBranch;
+import cz.maramat.model.LadderElement;
+import cz.maramat.model.LadderRung;
 import cz.maramat.model.Page;
 import cz.maramat.model.PinInstance;
 import cz.maramat.model.PlcThread;
@@ -47,6 +51,8 @@ public final class BytecodeCompiler {
 
         int totalModules = 0;
         int expandedModules = 0;
+        int ladderRungCount = 0;
+        int ladderContactCoilCount = 0;
         int eepromBytes = 32; // Header in 64KiB EEPROM
         int flashBytes = 64;  // 32B VM image header + 32B thread vector table
         double[] threadUs = new double[6];
@@ -55,14 +61,55 @@ public final class BytecodeCompiler {
 
         for (Page page : project.getPages()) {
             if (page.isMacro()) continue;
-            for (BlockInstance b : page.getBlocks()) {
+
+            if (page.getLanguage() == IecLanguage.LD) {
+                for (LadderRung rung : page.getRungs()) {
+                    ladderRungCount++;
+                    int tid = Math.clamp(rung.getThreadId(), 1, 5);
+                    flashBytes += 8; // Rung header opcode
+                    threadUs[tid] += 0.05;
+
+                    for (LadderElement el : rung.getMainElements()) {
+                        if (el.getKind().isContact() || el.getKind().isCoil()) {
+                            ladderContactCoilCount++;
+                            totalModules++;
+                            expandedModules++;
+                            ramByType.put(DataType.BOOL, ramByType.get(DataType.BOOL) + 1);
+                            flashBytes += 6;
+                            threadUs[tid] += 0.06;
+                        }
+                    }
+                    for (LadderBranch br : rung.getParallelBranches()) {
+                        flashBytes += 4;
+                        for (LadderElement el : br.getElements()) {
+                            if (el.getKind().isContact() || el.getKind().isCoil()) {
+                                ladderContactCoilCount++;
+                                totalModules++;
+                                expandedModules++;
+                                ramByType.put(DataType.BOOL, ramByType.get(DataType.BOOL) + 1);
+                                flashBytes += 6;
+                                threadUs[tid] += 0.06;
+                            }
+                        }
+                    }
+                    for (LadderElement coil : rung.getCoils()) {
+                        ladderContactCoilCount++;
+                        totalModules++;
+                        expandedModules++;
+                        ramByType.put(DataType.BOOL, ramByType.get(DataType.BOOL) + 1);
+                        flashBytes += 6;
+                        threadUs[tid] += 0.06;
+                    }
+                }
+            }
+
+            for (BlockInstance b : page.getAllBlockInstances()) {
                 totalModules++;
                 expandedModules++;
                 if (b.getDefinitionId().startsWith("Macro.User.")) {
                     expandedModules += 2;
                 }
 
-                // Allocate output slots in RAM by data type
                 for (PinInstance out : b.getOutputs()) {
                     DataType dt = out.getDataType();
                     int bytes = switch (dt) {
@@ -74,7 +121,6 @@ public final class BytecodeCompiler {
                     ramByType.put(dt, ramByType.get(dt) + bytes);
                 }
 
-                // Allocate input constants & state slots
                 for (PinInstance in : b.getInputs()) {
                     DataType dt = in.getDataType();
                     int bytes = switch (dt) {
@@ -86,14 +132,12 @@ public final class BytecodeCompiler {
                     ramByType.put(dt, ramByType.get(dt) + bytes);
                 }
 
-                // Retentive EEPROM registers or xVar parameters
                 if (b.getDefinitionId().startsWith("Visual.Vars.")) {
                     eepromBytes += 8;
                 } else if ("true".equalsIgnoreCase(b.getCustomProperties().get("RetentiveEeprom"))) {
                     eepromBytes += 8;
                 }
 
-                // Bytecode size and execution time cost
                 BlockDefinition def = BlockCatalog.getById(b.getDefinitionId());
                 double costUs = (def != null) ? def.getEstimatedCostUs() : 0.25;
                 int tid = Math.clamp(b.getThreadId(), 1, 5);
@@ -101,7 +145,6 @@ public final class BytecodeCompiler {
                 flashBytes += 12 + (b.getInputs().size() * 4) + (b.getOutputs().size() * 2);
             }
 
-            // Account for implicit type conversion instructions on split-color wires
             for (Wire w : page.getWires()) {
                 BlockInstance src = page.findBlockById(w.getSourceBlockId());
                 BlockInstance dst = page.findBlockById(w.getTargetBlockId());
@@ -124,6 +167,9 @@ public final class BytecodeCompiler {
         int totalDataRam = ramByType.values().stream().mapToInt(Integer::intValue).sum();
         int totalRam = totalDataRam + vmOverhead;
 
+        if (ladderRungCount > 0) {
+            logs.add("Info: Compiled " + ladderRungCount + " IEC 61131-3 Ladder rung(s) (" + ladderContactCoilCount + " contacts/coils).");
+        }
         logs.add("Info: Building constant arrays in rom memory (" + flashBytes + " bytes).");
         logs.add("Info: Building parameters array in eeprom memory (" + eepromBytes + " / 65536 bytes).");
         if (typeCastCount > 0) {

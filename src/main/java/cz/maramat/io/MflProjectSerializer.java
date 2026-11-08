@@ -3,10 +3,13 @@ package cz.maramat.io;
 import cz.maramat.model.BlockCatalog;
 import cz.maramat.model.BlockDefinition;
 import cz.maramat.model.BlockInstance;
-import cz.maramat.model.Bus;
 import cz.maramat.model.DataType;
 import cz.maramat.model.GraphicElement;
 import cz.maramat.model.HeaderColor;
+import cz.maramat.model.IecLanguage;
+import cz.maramat.model.LadderBranch;
+import cz.maramat.model.LadderElement;
+import cz.maramat.model.LadderRung;
 import cz.maramat.model.Page;
 import cz.maramat.model.PinInstance;
 import cz.maramat.model.Project;
@@ -29,54 +32,33 @@ public final class MflProjectSerializer {
         Properties props = new Properties();
         props.setProperty("maraflow.version", Project.VERSION);
         props.setProperty("project.name", project.getProjectName());
+        props.setProperty("project.author", project.getAuthor());
+        props.setProperty("project.description", project.getDescription());
         props.setProperty("project.targetPlatform", project.getTargetPlatform());
         props.setProperty("project.defaultThreadId", Integer.toString(project.getDefaultThreadId()));
+        props.setProperty("project.primaryLanguage", project.getPrimaryLanguage().name());
+
+        int tagIdx = 0;
+        for (Map.Entry<String, DataType> tag : project.getSymbolicTags().entrySet()) {
+            props.setProperty("project.tag." + tagIdx + ".name", tag.getKey());
+            props.setProperty("project.tag." + tagIdx + ".type", tag.getValue().name());
+            props.setProperty("project.tag." + tagIdx + ".desc",
+                    project.getSymbolicTagDescriptions().getOrDefault(tag.getKey(), ""));
+            tagIdx++;
+        }
+        props.setProperty("project.tagCount", Integer.toString(tagIdx));
+
         props.setProperty("project.pageCount", Integer.toString(project.getPages().size()));
 
         for (int pi = 0; pi < project.getPages().size(); pi++) {
             Page page = project.getPages().get(pi);
             String pfx = "page." + pi + ".";
             props.setProperty(pfx + "name", page.getName());
+            props.setProperty(pfx + "language", page.getLanguage().name());
             props.setProperty(pfx + "blockCount", Integer.toString(page.getBlocks().size()));
 
             for (int bi = 0; bi < page.getBlocks().size(); bi++) {
-                BlockInstance b = page.getBlocks().get(bi);
-                String bp = pfx + "block." + bi + ".";
-                props.setProperty(bp + "id", b.getId());
-                props.setProperty(bp + "defId", b.getDefinitionId());
-                props.setProperty(bp + "typeName", b.getTypeName());
-                props.setProperty(bp + "name", b.getName());
-                props.setProperty(bp + "gridX", Integer.toString(b.getGridX()));
-                props.setProperty(bp + "gridY", Integer.toString(b.getGridY()));
-                props.setProperty(bp + "threadId", Integer.toString(b.getThreadId()));
-                props.setProperty(bp + "order", Integer.toString(b.getOrder()));
-                props.setProperty(bp + "color", b.getHeaderColor().getLabel());
-                props.setProperty(bp + "description", b.getDescription());
-
-                int propIdx = 0;
-                for (Map.Entry<String, String> entry : b.getCustomProperties().entrySet()) {
-                    props.setProperty(bp + "prop." + propIdx + ".k", entry.getKey());
-                    props.setProperty(bp + "prop." + propIdx + ".v", entry.getValue());
-                    propIdx++;
-                }
-                props.setProperty(bp + "propCount", Integer.toString(propIdx));
-
-                props.setProperty(bp + "inCount", Integer.toString(b.getInputs().size()));
-                for (int ii = 0; ii < b.getInputs().size(); ii++) {
-                    PinInstance pin = b.getInputs().get(ii);
-                    props.setProperty(bp + "in." + ii + ".short", pin.getShortName());
-                    props.setProperty(bp + "in." + ii + ".full", pin.getFullName());
-                    props.setProperty(bp + "in." + ii + ".type", pin.getDataType().name());
-                    props.setProperty(bp + "in." + ii + ".const", pin.getConstantValue());
-                }
-
-                props.setProperty(bp + "outCount", Integer.toString(b.getOutputs().size()));
-                for (int oi = 0; oi < b.getOutputs().size(); oi++) {
-                    PinInstance pin = b.getOutputs().get(oi);
-                    props.setProperty(bp + "out." + oi + ".short", pin.getShortName());
-                    props.setProperty(bp + "out." + oi + ".full", pin.getFullName());
-                    props.setProperty(bp + "out." + oi + ".type", pin.getDataType().name());
-                }
+                saveBlockInstance(props, pfx + "block." + bi + ".", page.getBlocks().get(bi));
             }
 
             props.setProperty(pfx + "wireCount", Integer.toString(page.getWires().size()));
@@ -120,6 +102,40 @@ public final class MflProjectSerializer {
                 props.setProperty(gp + "boundTargetPin", g.getBoundTargetPin());
                 props.setProperty(gp + "toggleButton", Boolean.toString(g.isToggleButton()));
             }
+
+            // Save Ladder Rungs
+            props.setProperty(pfx + "rungCount", Integer.toString(page.getRungs().size()));
+            for (int ri = 0; ri < page.getRungs().size(); ri++) {
+                LadderRung rung = page.getRungs().get(ri);
+                String rp = pfx + "rung." + ri + ".";
+                props.setProperty(rp + "id", rung.getId());
+                props.setProperty(rp + "comment", rung.getComment());
+                props.setProperty(rp + "threadId", Integer.toString(rung.getThreadId()));
+                props.setProperty(rp + "order", Integer.toString(rung.getOrder()));
+
+                props.setProperty(rp + "mainCount", Integer.toString(rung.getMainElements().size()));
+                for (int mi = 0; mi < rung.getMainElements().size(); mi++) {
+                    saveLadderElement(props, rp + "main." + mi + ".", rung.getMainElements().get(mi));
+                }
+
+                props.setProperty(rp + "branchCount", Integer.toString(rung.getParallelBranches().size()));
+                for (int bri = 0; bri < rung.getParallelBranches().size(); bri++) {
+                    LadderBranch br = rung.getParallelBranches().get(bri);
+                    String brp = rp + "branch." + bri + ".";
+                    props.setProperty(brp + "id", br.getId());
+                    props.setProperty(brp + "startCol", Integer.toString(br.getStartColumn()));
+                    props.setProperty(brp + "endCol", Integer.toString(br.getEndColumn()));
+                    props.setProperty(brp + "elCount", Integer.toString(br.getElements().size()));
+                    for (int eli = 0; eli < br.getElements().size(); eli++) {
+                        saveLadderElement(props, brp + "el." + eli + ".", br.getElements().get(eli));
+                    }
+                }
+
+                props.setProperty(rp + "coilCount", Integer.toString(rung.getCoils().size()));
+                for (int ci = 0; ci < rung.getCoils().size(); ci++) {
+                    saveLadderElement(props, rp + "coil." + ci + ".", rung.getCoils().get(ci));
+                }
+            }
         }
 
         try (FileOutputStream out = new FileOutputStream(file)) {
@@ -127,6 +143,56 @@ public final class MflProjectSerializer {
         }
         project.setProjectFile(file);
         project.setDirty(false);
+    }
+
+    private static void saveLadderElement(Properties props, String ep, LadderElement el) {
+        props.setProperty(ep + "id", el.getId());
+        props.setProperty(ep + "kind", el.getKind().name());
+        props.setProperty(ep + "operand", el.getOperand());
+        props.setProperty(ep + "srcOperand", el.getSourceOperand());
+        props.setProperty(ep + "comment", el.getComment());
+        if (el.getKind() == LadderElement.Kind.FUNCTION_BLOCK && el.getBlockInstance() != null) {
+            saveBlockInstance(props, ep + "fb.", el.getBlockInstance());
+        }
+    }
+
+    private static void saveBlockInstance(Properties props, String bp, BlockInstance b) {
+        props.setProperty(bp + "id", b.getId());
+        props.setProperty(bp + "defId", b.getDefinitionId());
+        props.setProperty(bp + "typeName", b.getTypeName());
+        props.setProperty(bp + "name", b.getName());
+        props.setProperty(bp + "gridX", Integer.toString(b.getGridX()));
+        props.setProperty(bp + "gridY", Integer.toString(b.getGridY()));
+        props.setProperty(bp + "threadId", Integer.toString(b.getThreadId()));
+        props.setProperty(bp + "order", Integer.toString(b.getOrder()));
+        props.setProperty(bp + "color", b.getHeaderColor().getLabel());
+        props.setProperty(bp + "description", b.getDescription());
+
+        int propIdx = 0;
+        for (Map.Entry<String, String> entry : b.getCustomProperties().entrySet()) {
+            props.setProperty(bp + "prop." + propIdx + ".k", entry.getKey());
+            props.setProperty(bp + "prop." + propIdx + ".v", entry.getValue());
+            propIdx++;
+        }
+        props.setProperty(bp + "propCount", Integer.toString(propIdx));
+
+        props.setProperty(bp + "inCount", Integer.toString(b.getInputs().size()));
+        for (int ii = 0; ii < b.getInputs().size(); ii++) {
+            PinInstance pin = b.getInputs().get(ii);
+            props.setProperty(bp + "in." + ii + ".short", pin.getShortName());
+            props.setProperty(bp + "in." + ii + ".full", pin.getFullName());
+            props.setProperty(bp + "in." + ii + ".type", pin.getDataType().name());
+            props.setProperty(bp + "in." + ii + ".const", pin.getConstantValue());
+        }
+
+        props.setProperty(bp + "outCount", Integer.toString(b.getOutputs().size()));
+        for (int oi = 0; oi < b.getOutputs().size(); oi++) {
+            PinInstance pin = b.getOutputs().get(oi);
+            props.setProperty(bp + "out." + oi + ".short", pin.getShortName());
+            props.setProperty(bp + "out." + oi + ".full", pin.getFullName());
+            props.setProperty(bp + "out." + oi + ".type", pin.getDataType().name());
+            props.setProperty(bp + "out." + oi + ".const", pin.getConstantValue());
+        }
     }
 
     public static Project loadProject(File file) throws IOException {
@@ -138,66 +204,35 @@ public final class MflProjectSerializer {
         project.getPages().clear();
         project.setProjectFile(file);
         project.setProjectName(props.getProperty("project.name", "test"));
+        project.setAuthor(props.getProperty("project.author", ""));
+        project.setDescription(props.getProperty("project.description", ""));
         project.setTargetPlatform(props.getProperty("project.targetPlatform", "STM32F407-Maraflow-Std"));
         project.setDefaultThreadId(Integer.parseInt(props.getProperty("project.defaultThreadId", "2")));
+        project.setPrimaryLanguage(IecLanguage.fromCode(props.getProperty("project.primaryLanguage", "FBD")));
+
+        int tagCount = Integer.parseInt(props.getProperty("project.tagCount", "0"));
+        if (tagCount > 0) {
+            project.getSymbolicTags().clear();
+            project.getSymbolicTagDescriptions().clear();
+            for (int ti = 0; ti < tagCount; ti++) {
+                String tName = props.getProperty("project.tag." + ti + ".name");
+                String tType = props.getProperty("project.tag." + ti + ".type", "BOOL");
+                String tDesc = props.getProperty("project.tag." + ti + ".desc", "");
+                if (tName != null && !tName.isBlank()) {
+                    project.putSymbolicTag(tName, DataType.valueOf(tType), tDesc);
+                }
+            }
+        }
 
         int pageCount = Integer.parseInt(props.getProperty("project.pageCount", "1"));
         for (int pi = 0; pi < pageCount; pi++) {
             String pfx = "page." + pi + ".";
-            Page page = new Page(props.getProperty(pfx + "name", "Page " + (pi + 1)));
+            IecLanguage lang = IecLanguage.fromCode(props.getProperty(pfx + "language", "FBD"));
+            Page page = new Page(props.getProperty(pfx + "name", "Page " + (pi + 1)), lang);
 
             int blockCount = Integer.parseInt(props.getProperty(pfx + "blockCount", "0"));
             for (int bi = 0; bi < blockCount; bi++) {
-                String bp = pfx + "block." + bi + ".";
-                String defId = props.getProperty(bp + "defId", "Bool.And");
-                BlockDefinition def = BlockCatalog.getById(defId);
-                if (def == null) {
-                    def = BlockCatalog.getById("Bool.And");
-                }
-                String name = props.getProperty(bp + "name", "Block" + (bi + 1));
-                int gx = Integer.parseInt(props.getProperty(bp + "gridX", "10"));
-                int gy = Integer.parseInt(props.getProperty(bp + "gridY", "10"));
-                int tid = Integer.parseInt(props.getProperty(bp + "threadId", "2"));
-                int ord = Integer.parseInt(props.getProperty(bp + "order", "10"));
-
-                BlockInstance b = new BlockInstance(def, name, gx, gy, tid, ord);
-                b.setId(props.getProperty(bp + "id", b.getId()));
-                b.setTypeName(props.getProperty(bp + "typeName", def.getTypeName()));
-                b.setHeaderColor(HeaderColor.fromLabel(props.getProperty(bp + "color", "clDefault")));
-                b.setDescription(props.getProperty(bp + "description", ""));
-
-                int propCount = Integer.parseInt(props.getProperty(bp + "propCount", "0"));
-                for (int k = 0; k < propCount; k++) {
-                    String key = props.getProperty(bp + "prop." + k + ".k");
-                    String val = props.getProperty(bp + "prop." + k + ".v");
-                    if (key != null && val != null) {
-                        b.getCustomProperties().put(key, val);
-                    }
-                }
-
-                int inCount = Integer.parseInt(props.getProperty(bp + "inCount", "0"));
-                if (inCount > 0) {
-                    b.getInputs().clear();
-                    for (int ii = 0; ii < inCount; ii++) {
-                        String sn = props.getProperty(bp + "in." + ii + ".short", "X");
-                        String fn = props.getProperty(bp + "in." + ii + ".full", sn);
-                        DataType dt = DataType.valueOf(props.getProperty(bp + "in." + ii + ".type", "BOOL"));
-                        String cv = props.getProperty(bp + "in." + ii + ".const", dt.getDefaultConstant());
-                        b.getInputs().add(new PinInstance(sn, fn, dt, true, cv));
-                    }
-                }
-
-                int outCount = Integer.parseInt(props.getProperty(bp + "outCount", "0"));
-                if (outCount > 0) {
-                    b.getOutputs().clear();
-                    for (int oi = 0; oi < outCount; oi++) {
-                        String sn = props.getProperty(bp + "out." + oi + ".short", "Y");
-                        String fn = props.getProperty(bp + "out." + oi + ".full", sn);
-                        DataType dt = DataType.valueOf(props.getProperty(bp + "out." + oi + ".type", "BOOL"));
-                        b.getOutputs().add(new PinInstance(sn, fn, dt, false, dt.getDefaultConstant()));
-                    }
-                }
-                page.getBlocks().add(b);
+                page.getBlocks().add(loadBlockInstance(props, pfx + "block." + bi + ".", bi));
             }
 
             int wireCount = Integer.parseInt(props.getProperty(pfx + "wireCount", "0"));
@@ -249,13 +284,120 @@ public final class MflProjectSerializer {
                 page.getGraphics().add(g);
             }
 
+            int rungCount = Integer.parseInt(props.getProperty(pfx + "rungCount", "0"));
+            for (int ri = 0; ri < rungCount; ri++) {
+                String rp = pfx + "rung." + ri + ".";
+                int tid = Integer.parseInt(props.getProperty(rp + "threadId", "2"));
+                int ord = Integer.parseInt(props.getProperty(rp + "order", Integer.toString((ri + 1) * 10)));
+                String comment = props.getProperty(rp + "comment", "");
+                LadderRung rung = new LadderRung(tid, ord, comment);
+                rung.setId(props.getProperty(rp + "id", rung.getId()));
+
+                int mainCount = Integer.parseInt(props.getProperty(rp + "mainCount", "0"));
+                for (int mi = 0; mi < mainCount; mi++) {
+                    rung.getMainElements().add(loadLadderElement(props, rp + "main." + mi + ".", mi));
+                }
+
+                int branchCount = Integer.parseInt(props.getProperty(rp + "branchCount", "0"));
+                for (int bri = 0; bri < branchCount; bri++) {
+                    String brp = rp + "branch." + bri + ".";
+                    int sCol = Integer.parseInt(props.getProperty(brp + "startCol", "0"));
+                    int eCol = Integer.parseInt(props.getProperty(brp + "endCol", "0"));
+                    LadderBranch br = new LadderBranch(sCol, eCol);
+                    br.setId(props.getProperty(brp + "id", br.getId()));
+                    int elCount = Integer.parseInt(props.getProperty(brp + "elCount", "0"));
+                    for (int eli = 0; eli < elCount; eli++) {
+                        br.getElements().add(loadLadderElement(props, brp + "el." + eli + ".", eli));
+                    }
+                    rung.getParallelBranches().add(br);
+                }
+
+                int coilCount = Integer.parseInt(props.getProperty(rp + "coilCount", "0"));
+                for (int ci = 0; ci < coilCount; ci++) {
+                    rung.getCoils().add(loadLadderElement(props, rp + "coil." + ci + ".", ci));
+                }
+
+                page.getRungs().add(rung);
+            }
+
             project.getPages().add(page);
         }
         if (project.getPages().isEmpty()) {
-            project.getPages().add(new Page("Page 1"));
+            project.getPages().add(new Page("Page 1", IecLanguage.FBD));
         }
         project.setDirty(false);
         BlockCatalog.syncMacrosFromProject(project);
         return project;
+    }
+
+    private static LadderElement loadLadderElement(Properties props, String ep, int indexHint) {
+        LadderElement.Kind kind = LadderElement.Kind.valueOf(
+                props.getProperty(ep + "kind", LadderElement.Kind.NO_CONTACT.name())
+        );
+        String operand = props.getProperty(ep + "operand", kind.isCoil() ? "DO0" : "DI0");
+        String srcOperand = props.getProperty(ep + "srcOperand", "AI0");
+        LadderElement el;
+        if (kind == LadderElement.Kind.FUNCTION_BLOCK) {
+            BlockInstance fb = loadBlockInstance(props, ep + "fb.", indexHint);
+            el = new LadderElement(fb);
+        } else {
+            el = new LadderElement(kind, srcOperand, operand);
+        }
+        el.setId(props.getProperty(ep + "id", el.getId()));
+        el.setComment(props.getProperty(ep + "comment", ""));
+        return el;
+    }
+
+    private static BlockInstance loadBlockInstance(Properties props, String bp, int indexHint) {
+        String defId = props.getProperty(bp + "defId", "Bool.And");
+        BlockDefinition def = BlockCatalog.getById(defId);
+        if (def == null) {
+            def = BlockCatalog.getById("Bool.And");
+        }
+        String name = props.getProperty(bp + "name", "Block" + (indexHint + 1));
+        int gx = Integer.parseInt(props.getProperty(bp + "gridX", "10"));
+        int gy = Integer.parseInt(props.getProperty(bp + "gridY", "10"));
+        int tid = Integer.parseInt(props.getProperty(bp + "threadId", "2"));
+        int ord = Integer.parseInt(props.getProperty(bp + "order", "10"));
+
+        BlockInstance b = new BlockInstance(def, name, gx, gy, tid, ord);
+        b.setId(props.getProperty(bp + "id", b.getId()));
+        b.setTypeName(props.getProperty(bp + "typeName", def.getTypeName()));
+        b.setHeaderColor(HeaderColor.fromLabel(props.getProperty(bp + "color", "clDefault")));
+        b.setDescription(props.getProperty(bp + "description", ""));
+
+        int propCount = Integer.parseInt(props.getProperty(bp + "propCount", "0"));
+        for (int k = 0; k < propCount; k++) {
+            String key = props.getProperty(bp + "prop." + k + ".k");
+            String val = props.getProperty(bp + "prop." + k + ".v");
+            if (key != null && val != null) {
+                b.getCustomProperties().put(key, val);
+            }
+        }
+
+        int inCount = Integer.parseInt(props.getProperty(bp + "inCount", "0"));
+        if (inCount > 0) {
+            b.getInputs().clear();
+            for (int ii = 0; ii < inCount; ii++) {
+                String sn = props.getProperty(bp + "in." + ii + ".short", "X");
+                String fn = props.getProperty(bp + "in." + ii + ".full", sn);
+                DataType dt = DataType.valueOf(props.getProperty(bp + "in." + ii + ".type", "BOOL"));
+                String cv = props.getProperty(bp + "in." + ii + ".const", dt.getDefaultConstant());
+                b.getInputs().add(new PinInstance(sn, fn, dt, true, cv));
+            }
+        }
+
+        int outCount = Integer.parseInt(props.getProperty(bp + "outCount", "0"));
+        if (outCount > 0) {
+            b.getOutputs().clear();
+            for (int oi = 0; oi < outCount; oi++) {
+                String sn = props.getProperty(bp + "out." + oi + ".short", "Y");
+                String fn = props.getProperty(bp + "out." + oi + ".full", sn);
+                DataType dt = DataType.valueOf(props.getProperty(bp + "out." + oi + ".type", "BOOL"));
+                String cv = props.getProperty(bp + "out." + oi + ".const", dt.getDefaultConstant());
+                b.getOutputs().add(new PinInstance(sn, fn, dt, false, cv));
+            }
+        }
+        return b;
     }
 }

@@ -498,11 +498,61 @@ public final class BlockCatalog {
                 List.of(pin("Y", "Injected 64-bit Long Value", DataType.LONG, "0")),
                 4, 2, false, false, 0.05
         ));
+        // 8. Ladder (LD) Contacts & Coils
         reg(new BlockDefinition(
-                "Visual.Vars.FloatVar", "Visual/Vars", "FloatVar", "FloatVar",
-                List.of(),
-                List.of(pin("Y", "Injected 32-bit Float Value", DataType.FLOAT, "0")),
-                4, 2, false, false, 0.05
+                "Ladder.Contact.NO", "Ladder (LD)/Contacts", "NO Contact (--| |--)", "NO",
+                List.of(enPin()), List.of(pin("Q", "Contact Output", DataType.BOOL, "0")),
+                3, 2, false, false, 0.06
+        ));
+        reg(new BlockDefinition(
+                "Ladder.Contact.NC", "Ladder (LD)/Contacts", "NC Contact (--|/|--)", "NC",
+                List.of(enPin()), List.of(pin("Q", "Contact Output", DataType.BOOL, "0")),
+                3, 2, false, false, 0.06
+        ));
+        reg(new BlockDefinition(
+                "Ladder.Contact.POS", "Ladder (LD)/Contacts", "Rising Contact (--|P|--)", "POS",
+                List.of(enPin()), List.of(pin("Q", "Contact Output", DataType.BOOL, "0")),
+                3, 2, false, false, 0.06
+        ));
+        reg(new BlockDefinition(
+                "Ladder.Contact.NEG", "Ladder (LD)/Contacts", "Falling Contact (--|N|--)", "NEG",
+                List.of(enPin()), List.of(pin("Q", "Contact Output", DataType.BOOL, "0")),
+                3, 2, false, false, 0.06
+        ));
+        reg(new BlockDefinition(
+                "Ladder.Coil.NORMAL", "Ladder (LD)/Coils", "Normal Coil (--( )--)", "Coil",
+                List.of(enPin()), List.of(),
+                3, 2, false, false, 0.06
+        ));
+        reg(new BlockDefinition(
+                "Ladder.Coil.NEGATED", "Ladder (LD)/Coils", "Negated Coil (--(/)--)", "NCoil",
+                List.of(enPin()), List.of(),
+                3, 2, false, false, 0.06
+        ));
+        reg(new BlockDefinition(
+                "Ladder.Coil.SET", "Ladder (LD)/Coils", "Set Coil (--(S)--)", "SCoil",
+                List.of(enPin()), List.of(),
+                3, 2, false, false, 0.06
+        ));
+        reg(new BlockDefinition(
+                "Ladder.Coil.RESET", "Ladder (LD)/Coils", "Reset Coil (--(R)--)", "RCoil",
+                List.of(enPin()), List.of(),
+                3, 2, false, false, 0.06
+        ));
+        reg(new BlockDefinition(
+                "Ladder.Coil.POS", "Ladder (LD)/Coils", "Rising Coil (--(P)--)", "PCoil",
+                List.of(enPin()), List.of(),
+                3, 2, false, false, 0.06
+        ));
+        reg(new BlockDefinition(
+                "Ladder.Coil.NEG", "Ladder (LD)/Coils", "Falling Coil (--(N)--)", "FCoil",
+                List.of(enPin()), List.of(),
+                3, 2, false, false, 0.06
+        ));
+        reg(new BlockDefinition(
+                "Ladder.Coil.ANALOG", "Ladder (LD)/Analog & Move", "Analog Output / Move (--[AO :=]--)", "AOCoil",
+                List.of(enPin(), pin("In", "Analog Source", DataType.INT, "AI0")), List.of(),
+                4, 2, false, true, 0.12
         ));
     }
 

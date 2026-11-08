@@ -78,6 +78,7 @@ public class LibraryTreePanel extends JPanel {
 
         // Pre-create top-level categories in exact specification order
         String[] topCategories = {
+                "Ladder (LD)",
                 "Bool",
                 "Math",
                 "I/O",

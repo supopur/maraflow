@@ -1,6 +1,8 @@
 package cz.maramat.ui.toolbar;
 
 import cz.maramat.model.GraphicElement;
+import cz.maramat.model.IecLanguage;
+import cz.maramat.model.LadderElement;
 import cz.maramat.model.PlcThread;
 import cz.maramat.sim.BlockSorter.OrderSortMode;
 import cz.maramat.sim.SimulationEngine;
@@ -13,6 +15,7 @@ import javax.swing.Box;
 import javax.swing.ButtonGroup;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
@@ -60,6 +63,12 @@ public class EditorToolbar extends JToolBar {
         void onWatchToggle();
         void onPlcConfig();
         void onDefaultThreadChanged(int threadId);
+
+        // Ladder (LD) specific toolbar actions
+        default void onLadderAddRung() {}
+        default void onLadderInsertContact(LadderElement.Kind contactKind) {}
+        default void onLadderInsertCoil(LadderElement.Kind coilKind) {}
+        default void onLadderAddParallelBranch() {}
     }
 
     private final ToolbarListener listener;
@@ -70,6 +79,9 @@ public class EditorToolbar extends JToolBar {
     private GraphicElement.Kind currentCircleKind = GraphicElement.Kind.CIRCLE;
     private int customNgonSides = 6;
     private OrderSortMode currentOrderSortMode = OrderSortMode.LEFT_TO_RIGHT;
+
+    private final List<JComponent> fbdToolButtons = new ArrayList<>();
+    private final List<JComponent> ladderToolButtons = new ArrayList<>();
 
     private JToggleButton cursorBtn;
     private JToggleButton lineBtn;
@@ -112,13 +124,13 @@ public class EditorToolbar extends JToolBar {
         toolGroup.add(cursorBtn);
         add(cursorBtn);
 
-        // 2. Graphical Line Tool
+        // 2. FBD Graphical Tools (Directly added to JToolBar so everything stays strictly left-aligned)
         lineBtn = createToggleToolButton(VectorIcons.lineToolIcon(), "Graphical Line Tool");
         lineBtn.addActionListener(e -> selectTool(ToolMode.LINE, GraphicElement.Kind.LINE));
         toolGroup.add(lineBtn);
+        fbdToolButtons.add(lineBtn);
         add(lineBtn);
 
-        // 3. Graphical Square / Polygon Flyout Button (Photoshop style hold or RMB)
         polyFlyoutBtn = createToggleToolButton(
                 VectorIcons.shapeToolIcon(currentPolygonKind, true),
                 "Graphical Shape Tool (Hold LMB or Right-Click for Polygon/N-Gon Submenu)"
@@ -134,9 +146,9 @@ public class EditorToolbar extends JToolBar {
                 GraphicElement.Kind.CUSTOM_NGON
         }, true);
         toolGroup.add(polyFlyoutBtn);
+        fbdToolButtons.add(polyFlyoutBtn);
         add(polyFlyoutBtn);
 
-        // 4. Graphical Circle / Oval Flyout Button (Photoshop style hold or RMB)
         circleFlyoutBtn = createToggleToolButton(
                 VectorIcons.shapeToolIcon(currentCircleKind, true),
                 "Graphical Circle/Oval Tool (Hold LMB or Right-Click for Submenu)"
@@ -149,19 +161,100 @@ public class EditorToolbar extends JToolBar {
                 GraphicElement.Kind.SECTOR
         }, false);
         toolGroup.add(circleFlyoutBtn);
+        fbdToolButtons.add(circleFlyoutBtn);
         add(circleFlyoutBtn);
 
-        // 5. Text Tool
         textBtn = createToggleToolButton(VectorIcons.textToolIcon(), "Text Annotation Tool");
         textBtn.addActionListener(e -> selectTool(ToolMode.TEXT, GraphicElement.Kind.TEXT));
         toolGroup.add(textBtn);
+        fbdToolButtons.add(textBtn);
         add(textBtn);
 
-        // 6. Visual Button Tool
         visualButtonBtn = createToggleToolButton(VectorIcons.visualButtonToolIcon(), "Visual Button Tool (Interactive Input Driver)");
         visualButtonBtn.addActionListener(e -> selectTool(ToolMode.VISUAL_BUTTON, GraphicElement.Kind.VISUAL_BUTTON));
         toolGroup.add(visualButtonBtn);
+        fbdToolButtons.add(visualButtonBtn);
         add(visualButtonBtn);
+
+        // 3. Ladder (LD) Quick Insert Tools (Directly added to JToolBar)
+        JButton addRungBtn = createActionBtn(VectorIcons.ladderAddRungIcon(), "Insert New Ladder Rung Below");
+        addRungBtn.addActionListener(e -> listener.onLadderAddRung());
+        ladderToolButtons.add(addRungBtn);
+        add(addRungBtn);
+
+        JButton noContactBtn = createActionBtn(VectorIcons.ladderContactIcon(false, ""), "Insert Normally Open Contact (--| |--)");
+        noContactBtn.addActionListener(e -> listener.onLadderInsertContact(LadderElement.Kind.NO_CONTACT));
+        ladderToolButtons.add(noContactBtn);
+        add(noContactBtn);
+
+        JButton ncContactBtn = createActionBtn(VectorIcons.ladderContactIcon(true, ""), "Insert Normally Closed Contact (--|/|--)" );
+        ncContactBtn.addActionListener(e -> listener.onLadderInsertContact(LadderElement.Kind.NC_CONTACT));
+        ladderToolButtons.add(ncContactBtn);
+        add(ncContactBtn);
+
+        JButton edgeContactBtn = createActionBtn(VectorIcons.ladderContactIcon(false, "P"), "Insert Rising/Falling Edge Contact (Click for --|P|--, Right-Click for --|N|--)");
+        edgeContactBtn.addActionListener(e -> listener.onLadderInsertContact(LadderElement.Kind.POS_EDGE_CONTACT));
+        edgeContactBtn.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (SwingUtilities.isRightMouseButton(e)) {
+                    JPopupMenu pm = new JPopupMenu();
+                    JMenuItem pos = new JMenuItem("Rising Edge Contact (--|P|--)");
+                    pos.addActionListener(ev -> listener.onLadderInsertContact(LadderElement.Kind.POS_EDGE_CONTACT));
+                    JMenuItem neg = new JMenuItem("Falling Edge Contact (--|N|--)");
+                    neg.addActionListener(ev -> listener.onLadderInsertContact(LadderElement.Kind.NEG_EDGE_CONTACT));
+                    pm.add(pos);
+                    pm.add(neg);
+                    pm.show(edgeContactBtn, 0, edgeContactBtn.getHeight());
+                }
+            }
+        });
+        ladderToolButtons.add(edgeContactBtn);
+        add(edgeContactBtn);
+
+        JButton branchBtn = createActionBtn(VectorIcons.ladderParallelBranchIcon(), "Add Parallel OR Branch on Selected Rung");
+        branchBtn.addActionListener(e -> listener.onLadderAddParallelBranch());
+        ladderToolButtons.add(branchBtn);
+        add(branchBtn);
+
+        JButton normalCoilBtn = createActionBtn(VectorIcons.ladderCoilIcon(""), "Insert Normal Output Coil (--( )--)");
+        normalCoilBtn.addActionListener(e -> listener.onLadderInsertCoil(LadderElement.Kind.NORMAL_COIL));
+        ladderToolButtons.add(normalCoilBtn);
+        add(normalCoilBtn);
+
+        JButton setResetCoilBtn = createActionBtn(VectorIcons.ladderCoilIcon("S"), "Insert Set/Reset/Negated Coil (Click for --(S)--, Right-Click for Submenu)");
+        setResetCoilBtn.addActionListener(e -> listener.onLadderInsertCoil(LadderElement.Kind.SET_COIL));
+        setResetCoilBtn.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (SwingUtilities.isRightMouseButton(e)) {
+                    JPopupMenu pm = new JPopupMenu();
+                    for (LadderElement.Kind k : new LadderElement.Kind[]{
+                            LadderElement.Kind.SET_COIL,
+                            LadderElement.Kind.RESET_COIL,
+                            LadderElement.Kind.NEGATED_COIL,
+                            LadderElement.Kind.POS_EDGE_COIL,
+                            LadderElement.Kind.NEG_EDGE_COIL
+                    }) {
+                        JMenuItem item = new JMenuItem(k.getDisplayName() + " (" + k.getSymbolText() + ")");
+                        item.addActionListener(ev -> listener.onLadderInsertCoil(k));
+                        pm.add(item);
+                    }
+                    pm.show(setResetCoilBtn, 0, setResetCoilBtn.getHeight());
+                }
+            }
+        });
+        ladderToolButtons.add(setResetCoilBtn);
+        add(setResetCoilBtn);
+
+        JButton analogCoilBtn = createActionBtn(VectorIcons.ladderAnalogCoilIcon(), "Insert Analog Output / Move Coil (--[AO :=]--, transfers AI/Register/Block output to AO/PWM/Register)");
+        analogCoilBtn.addActionListener(e -> listener.onLadderInsertCoil(LadderElement.Kind.ANALOG_COIL));
+        ladderToolButtons.add(analogCoilBtn);
+        add(analogCoilBtn);
+
+        for (JComponent c : ladderToolButtons) {
+            c.setVisible(false);
+        }
 
         addToolbarSplitter();
 
@@ -275,7 +368,7 @@ public class EditorToolbar extends JToolBar {
         threadCombo = new JComboBox<>(PlcThread.values());
         threadCombo.setSelectedItem(PlcThread.THREAD_2);
         threadCombo.setMaximumSize(new Dimension(115, 22));
-        threadCombo.setToolTipText("Default ThreadId assigned to newly placed blocks");
+        threadCombo.setToolTipText("Default ThreadId assigned to newly placed blocks/rungs");
         threadCombo.addActionListener(e -> {
             PlcThread sel = (PlcThread) threadCombo.getSelectedItem();
             if (sel != null) {
@@ -283,6 +376,21 @@ public class EditorToolbar extends JToolBar {
             }
         });
         add(threadCombo);
+
+        // Push everything strictly to the left
+        add(Box.createHorizontalGlue());
+    }
+
+    public void setActivePageLanguage(IecLanguage language) {
+        boolean isLd = (language == IecLanguage.LD);
+        for (JComponent c : fbdToolButtons) {
+            c.setVisible(!isLd);
+        }
+        for (JComponent c : ladderToolButtons) {
+            c.setVisible(isLd);
+        }
+        revalidate();
+        repaint();
     }
 
     private void installPhotoshopFlyout(JToggleButton btn, GraphicElement.Kind[] kinds, boolean isPolygonGroup) {
@@ -342,9 +450,6 @@ public class EditorToolbar extends JToolBar {
         popup.show(btn, 0, btn.getHeight());
     }
 
-    /**
-     * Shows an Illustrator-style multi-step Undo/Redo popup menu where hovering row k highlights rows 1..k.
-     */
     private void showHistoryDropdown(JButton anchorBtn, List<HistoryEntry> entries, String verb, IntConsumer stepCallback) {
         if (entries.isEmpty()) return;
         JPopupMenu popup = new JPopupMenu();

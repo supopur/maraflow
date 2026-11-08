@@ -1358,16 +1358,22 @@ public class FbdCanvas extends JPanel {
         int startGy = Math.max(1, clip.y / g);
         int endGy = (clip.y + clip.height) / g + 1;
 
-        Color minorDot = new Color(0xD2, 0xD2, 0xD2);
-        Color majorDot = new Color(0xA6, 0xA6, 0xA6);
+        // Balanced contrast: clearly visible without being overly bright/distracting
+        Color minorDot = new Color(0xBB, 0xC3, 0xCD);
+        Color majorDot = new Color(0x7F, 0x8C, 0x9B);
 
         for (int gx = startGx; gx <= endGx; gx++) {
             int px = gx * g;
             boolean majorX = (gx % 10 == 0);
             for (int gy = startGy; gy <= endGy; gy++) {
                 int py = gy * g;
-                g2.setColor((majorX && (gy % 10 == 0)) ? majorDot : minorDot);
-                g2.fillRect(px, py, 1, 1);
+                if (majorX && (gy % 10 == 0)) {
+                    g2.setColor(majorDot);
+                    g2.fillRect(px - 1, py - 1, 2, 2);
+                } else {
+                    g2.setColor(minorDot);
+                    g2.fillRect(px, py, 1, 1);
+                }
             }
         }
     }

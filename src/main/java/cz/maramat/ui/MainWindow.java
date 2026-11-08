@@ -6,6 +6,8 @@ import cz.maramat.io.MflProjectSerializer;
 import cz.maramat.model.BlockCatalog;
 import cz.maramat.model.BlockInstance;
 import cz.maramat.model.GraphicElement;
+import cz.maramat.model.IecLanguage;
+import cz.maramat.model.LadderElement;
 import cz.maramat.model.Page;
 import cz.maramat.model.Project;
 import cz.maramat.settings.AppSettings;
@@ -13,12 +15,15 @@ import cz.maramat.sim.BlockSorter;
 import cz.maramat.sim.BlockSorter.OrderSortMode;
 import cz.maramat.sim.SimulationEngine;
 import cz.maramat.ui.canvas.FbdCanvas;
+import cz.maramat.ui.canvas.LadderCanvas;
 import cz.maramat.ui.canvas.PageTabBar;
 import cz.maramat.ui.dialogs.CommunicationDialog;
 import cz.maramat.ui.dialogs.CompilationResultsDialog;
+import cz.maramat.ui.dialogs.NewProjectWizardDialog;
 import cz.maramat.ui.dialogs.PlcConfigDialog;
 import cz.maramat.ui.dialogs.SettingsDialog;
 import cz.maramat.ui.panels.DockableSectionPanel;
+import cz.maramat.ui.panels.HomeScreenPanel;
 import cz.maramat.ui.panels.LibraryTreePanel;
 import cz.maramat.ui.panels.PlcLogPanel;
 import cz.maramat.ui.panels.ScopePanel;
@@ -44,6 +49,7 @@ import javax.swing.JSplitPane;
 import javax.swing.KeyStroke;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
@@ -57,9 +63,19 @@ import java.util.List;
 
 public class MainWindow extends JFrame {
 
+    private static final String CARD_HOME = "HOME";
+    private static final String CARD_IDE = "IDE";
+    private static final String EDITOR_CARD_FBD = "FBD";
+    private static final String EDITOR_CARD_LD = "LD";
+
     private Project project;
+    private boolean projectOpen = false;
     private final UndoManager50 undoManager = new UndoManager50();
     private final SimulationEngine simEngine;
+
+    private final CardLayout rootCardLayout = new CardLayout();
+    private final JPanel rootCardPanel = new JPanel(rootCardLayout);
+    private final HomeScreenPanel homeScreenPanel;
 
     private final LibraryTreePanel libraryTreePanel;
     private final DockableSectionPanel libraryDock;
@@ -75,7 +91,10 @@ public class MainWindow extends JFrame {
 
     private final EditorToolbar editorToolbar;
     private final PageTabBar pageTabBar;
+    private final CardLayout canvasCardLayout = new CardLayout();
+    private final JPanel canvasCardPanel = new JPanel(canvasCardLayout);
     private final FbdCanvas fbdCanvas;
+    private final LadderCanvas ladderCanvas;
 
     private JCheckBoxMenuItem windowLibraryItem;
     private JCheckBoxMenuItem windowPlcLogItem;
@@ -95,6 +114,40 @@ public class MainWindow extends JFrame {
         setSize(1360, 840);
         setLayout(new BorderLayout());
 
+        // 0. Build Homescreen Panel
+        homeScreenPanel = new HomeScreenPanel(new HomeScreenPanel.HomeScreenListener() {
+            @Override
+            public void onNewProjectWizard(IecLanguage preselectedLanguage) {
+                actionNewProjectWizard(preselectedLanguage);
+            }
+
+            @Override
+            public void onOpenProjectDialog() {
+                actionOpenProject();
+            }
+
+            @Override
+            public void onOpenRecentFile(File file) {
+                openProjectFromFile(file);
+            }
+
+            @Override
+            public void onClearRecentFiles() {
+                recentFiles.clear();
+                homeScreenPanel.setRecentFiles(recentFiles);
+                rebuildRecentProjectsMenu();
+            }
+
+            @Override
+            public void onLoadSampleProject(IecLanguage language) {
+                Project sample = (language == IecLanguage.LD)
+                        ? Project.createDefaultLadderSampleProject()
+                        : Project.createDefaultSampleProject();
+                loadProjectIntoWorkspace(sample);
+                plcLogPanel.appendLog("Loaded sample " + language.getShortCode() + " project: " + sample.getProjectName());
+            }
+        });
+
         // 1. Build Library Dock (Left — Pop-Outable / Undockable)
         libraryTreePanel = new LibraryTreePanel();
         libraryDock = new DockableSectionPanel(
@@ -113,13 +166,29 @@ public class MainWindow extends JFrame {
         );
         libraryDock.setPreferredSize(new Dimension(215, 0));
 
-        // 2. Build Main FBD Editor Section (Center)
+        // 2. Build Main FBD + Ladder (LD) Editor Section (Center)
         editorToolbar = new EditorToolbar(undoManager, createToolbarListener());
-        fbdCanvas = new FbdCanvas(project, simEngine, createCanvasEditListener());
+        FbdCanvas.CanvasEditListener editListener = createCanvasEditListener();
+        fbdCanvas = new FbdCanvas(project, simEngine, editListener);
+        ladderCanvas = new LadderCanvas(project, simEngine, editListener);
+
+        JScrollPane fbdScroll = new JScrollPane(fbdCanvas);
+        fbdScroll.setBorder(null);
+        fbdScroll.getVerticalScrollBar().setUnitIncrement(16);
+        fbdScroll.getHorizontalScrollBar().setUnitIncrement(16);
+
+        JScrollPane ldScroll = new JScrollPane(ladderCanvas);
+        ldScroll.setBorder(null);
+        ldScroll.getVerticalScrollBar().setUnitIncrement(16);
+        ldScroll.getHorizontalScrollBar().setUnitIncrement(16);
+
+        canvasCardPanel.add(fbdScroll, EDITOR_CARD_FBD);
+        canvasCardPanel.add(ldScroll, EDITOR_CARD_LD);
+
         pageTabBar = new PageTabBar(project, new PageTabBar.PageTabListener() {
             @Override
             public void onActivePageChanged(int pageIndex) {
-                fbdCanvas.setProjectAndPage(project, pageIndex);
+                syncActivePageToCanvases(pageIndex);
             }
 
             @Override
@@ -133,14 +202,9 @@ public class MainWindow extends JFrame {
         topEditorChrome.add(editorToolbar, BorderLayout.NORTH);
         topEditorChrome.add(pageTabBar, BorderLayout.SOUTH);
 
-        JScrollPane canvasScroll = new JScrollPane(fbdCanvas);
-        canvasScroll.setBorder(null);
-        canvasScroll.getVerticalScrollBar().setUnitIncrement(16);
-        canvasScroll.getHorizontalScrollBar().setUnitIncrement(16);
-
         JPanel editorBody = new JPanel(new BorderLayout());
         editorBody.add(topEditorChrome, BorderLayout.NORTH);
-        editorBody.add(canvasScroll, BorderLayout.CENTER);
+        editorBody.add(canvasCardPanel, BorderLayout.CENTER);
 
         editorDock = new DockableSectionPanel(project.formatEditorPanelTitle(), editorBody, null);
 
@@ -194,20 +258,71 @@ public class MainWindow extends JFrame {
         horizontalSplit.setDividerSize(4);
         horizontalSplit.setDividerLocation(215);
 
-        add(horizontalSplit, BorderLayout.CENTER);
+        rootCardPanel.add(homeScreenPanel, CARD_HOME);
+        rootCardPanel.add(horizontalSplit, CARD_IDE);
+        add(rootCardPanel, BorderLayout.CENTER);
 
         // 5. Top Menu Bar & Keybindings
         setJMenuBar(buildMenuBar());
         installGlobalCanvasKeybindings();
         updateBottomDockLayout();
 
-        refreshTitles();
+        // Show Homescreen on initial startup
+        showHomeScreen();
         setLocationRelativeTo(null);
+    }
+
+    private void showHomeScreen() {
+        simEngine.stopSimulation(project);
+        projectOpen = false;
+        homeScreenPanel.setRecentFiles(recentFiles);
+        rootCardLayout.show(rootCardPanel, CARD_HOME);
+        setTitle("Maraflow V" + Project.VERSION + " - PLC Programming Environment");
+    }
+
+    private void loadProjectIntoWorkspace(Project newProj) {
+        simEngine.stopSimulation(project);
+        this.project = newProj;
+        this.projectOpen = true;
+        undoManager.clear();
+        BlockCatalog.syncMacrosFromProject(project);
+        libraryTreePanel.rebuildTree();
+        pageTabBar.setProject(project);
+        editorToolbar.setDefaultThreadSelection(project.getDefaultThreadId());
+        syncActivePageToCanvases(0);
+        rootCardLayout.show(rootCardPanel, CARD_IDE);
+        refreshTitles();
+    }
+
+    private void syncActivePageToCanvases(int pageIndex) {
+        if (project == null || project.getPages().isEmpty()) return;
+        int idx = Math.clamp(pageIndex, 0, project.getPages().size() - 1);
+        Page activePage = project.getPages().get(idx);
+        fbdCanvas.setProjectAndPage(project, idx);
+        ladderCanvas.setProjectAndPage(project, idx);
+        editorToolbar.setActivePageLanguage(activePage.getLanguage());
+        if (activePage.getLanguage() == IecLanguage.LD) {
+            canvasCardLayout.show(canvasCardPanel, EDITOR_CARD_LD);
+            ladderCanvas.requestFocusInWindow();
+        } else {
+            canvasCardLayout.show(canvasCardPanel, EDITOR_CARD_FBD);
+            fbdCanvas.requestFocusInWindow();
+        }
+        refreshTitles();
+    }
+
+    private boolean isActivePageLadder() {
+        if (project == null || project.getPages().isEmpty()) return false;
+        int idx = Math.clamp(pageTabBar.getActivePageIndex(), 0, project.getPages().size() - 1);
+        return project.getPages().get(idx).getLanguage() == IecLanguage.LD;
     }
 
     private void onSimulationTickUiUpdate() {
         if (fbdCanvas != null) {
             fbdCanvas.repaint();
+        }
+        if (ladderCanvas != null) {
+            ladderCanvas.repaint();
         }
         if (editorToolbar != null) {
             editorToolbar.updateSimState(simEngine.getState());
@@ -215,6 +330,10 @@ public class MainWindow extends JFrame {
     }
 
     private void refreshTitles() {
+        if (!projectOpen) {
+            setTitle("Maraflow V" + Project.VERSION + " - PLC Programming Environment");
+            return;
+        }
         setTitle(project.formatWindowTitle());
         editorDock.setTitleText(project.formatEditorPanelTitle());
     }
@@ -230,9 +349,9 @@ public class MainWindow extends JFrame {
 
         // 1. File
         JMenu fileMenu = new JMenu("File");
-        JMenuItem newItem = new JMenuItem("New Project");
+        JMenuItem newItem = new JMenuItem("New Project...");
         newItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_N, menuMask));
-        newItem.addActionListener(e -> actionNewProject());
+        newItem.addActionListener(e -> actionNewProjectWizard(IecLanguage.FBD));
         fileMenu.add(newItem);
 
         JMenuItem openItem = new JMenuItem("Open Project...");
@@ -268,8 +387,8 @@ public class MainWindow extends JFrame {
 
         fileMenu.addSeparator();
 
-        JMenuItem closeProjItem = new JMenuItem("Close Project");
-        closeProjItem.addActionListener(e -> actionNewProject());
+        JMenuItem closeProjItem = new JMenuItem("Close Project (Return to Homescreen)");
+        closeProjItem.addActionListener(e -> showHomeScreen());
         fileMenu.add(closeProjItem);
 
         JMenuItem exitItem = new JMenuItem("Exit");
@@ -293,34 +412,54 @@ public class MainWindow extends JFrame {
 
         JMenuItem cutItem = new JMenuItem("Cut");
         cutItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_X, menuMask));
-        cutItem.addActionListener(e -> fbdCanvas.cutSelection());
+        cutItem.addActionListener(e -> {
+            if (!isActivePageLadder()) fbdCanvas.cutSelection();
+        });
         editMenu.add(cutItem);
 
         JMenuItem copyItem = new JMenuItem("Copy");
         copyItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_C, menuMask));
-        copyItem.addActionListener(e -> fbdCanvas.copySelection());
+        copyItem.addActionListener(e -> {
+            if (!isActivePageLadder()) fbdCanvas.copySelection();
+        });
         editMenu.add(copyItem);
 
         JMenuItem pasteItem = new JMenuItem("Paste");
         pasteItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_V, menuMask));
-        pasteItem.addActionListener(e -> fbdCanvas.pasteClipboard());
+        pasteItem.addActionListener(e -> {
+            if (!isActivePageLadder()) fbdCanvas.pasteClipboard();
+        });
         editMenu.add(pasteItem);
 
         JMenuItem dupItem = new JMenuItem("Duplicate");
         dupItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_D, menuMask));
-        dupItem.addActionListener(e -> fbdCanvas.duplicateSelection());
+        dupItem.addActionListener(e -> {
+            if (isActivePageLadder()) {
+                ladderCanvas.duplicateSelectedRung();
+            } else {
+                fbdCanvas.duplicateSelection();
+            }
+        });
         editMenu.add(dupItem);
 
         JMenuItem delItem = new JMenuItem("Delete");
         delItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_BACK_SPACE, 0));
-        delItem.addActionListener(e -> fbdCanvas.deleteSelection());
+        delItem.addActionListener(e -> {
+            if (isActivePageLadder()) {
+                ladderCanvas.deleteSelection();
+            } else {
+                fbdCanvas.deleteSelection();
+            }
+        });
         editMenu.add(delItem);
 
         editMenu.addSeparator();
 
         JMenuItem selAllItem = new JMenuItem("Select All");
         selAllItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_A, menuMask));
-        selAllItem.addActionListener(e -> fbdCanvas.selectAll());
+        selAllItem.addActionListener(e -> {
+            if (!isActivePageLadder()) fbdCanvas.selectAll();
+        });
         editMenu.add(selAllItem);
 
         JMenuItem findItem = new JMenuItem("Find Block...");
@@ -332,29 +471,47 @@ public class MainWindow extends JFrame {
         // 3. View
         JMenu viewMenu = new JMenu("View");
         JMenuItem zoomInItem = new JMenuItem("Zoom In");
-        zoomInItem.addActionListener(e -> fbdCanvas.zoomIn());
+        zoomInItem.addActionListener(e -> {
+            if (isActivePageLadder()) ladderCanvas.zoomIn();
+            else fbdCanvas.zoomIn();
+        });
         viewMenu.add(zoomInItem);
 
         JMenuItem zoomOutItem = new JMenuItem("Zoom Out");
-        zoomOutItem.addActionListener(e -> fbdCanvas.zoomOut());
+        zoomOutItem.addActionListener(e -> {
+            if (isActivePageLadder()) ladderCanvas.zoomOut();
+            else fbdCanvas.zoomOut();
+        });
         viewMenu.add(zoomOutItem);
 
         JMenuItem zoom100Item = new JMenuItem("Zoom 100%");
-        zoom100Item.addActionListener(e -> fbdCanvas.zoom100());
+        zoom100Item.addActionListener(e -> {
+            if (isActivePageLadder()) ladderCanvas.zoom100();
+            else fbdCanvas.zoom100();
+        });
         viewMenu.add(zoom100Item);
 
         JMenuItem fitItem = new JMenuItem("Fit to Screen");
-        fitItem.addActionListener(e -> fbdCanvas.fitToScreen());
+        fitItem.addActionListener(e -> {
+            if (isActivePageLadder()) ladderCanvas.fitToScreen();
+            else fbdCanvas.fitToScreen();
+        });
         viewMenu.add(fitItem);
 
         viewMenu.addSeparator();
 
         JCheckBoxMenuItem gridToggle = new JCheckBoxMenuItem("Show Placement Grid", true);
-        gridToggle.addActionListener(e -> fbdCanvas.setShowGrid(gridToggle.isSelected()));
+        gridToggle.addActionListener(e -> {
+            fbdCanvas.setShowGrid(gridToggle.isSelected());
+            ladderCanvas.setShowGrid(gridToggle.isSelected());
+        });
         viewMenu.add(gridToggle);
 
         JCheckBoxMenuItem execInfoToggle = new JCheckBoxMenuItem("Show Thread & Execution Order (T:/O:)", true);
-        execInfoToggle.addActionListener(e -> fbdCanvas.setShowExecutionInfo(execInfoToggle.isSelected()));
+        execInfoToggle.addActionListener(e -> {
+            fbdCanvas.setShowExecutionInfo(execInfoToggle.isSelected());
+            ladderCanvas.setShowExecutionInfo(execInfoToggle.isSelected());
+        });
         viewMenu.add(execInfoToggle);
         bar.add(viewMenu);
 
@@ -377,9 +534,13 @@ public class MainWindow extends JFrame {
 
         projectMenu.addSeparator();
 
-        JMenuItem addPageItem = new JMenuItem("Add Page...");
-        addPageItem.addActionListener(e -> pageTabBar.addNewPage(false));
-        projectMenu.add(addPageItem);
+        JMenuItem addFbdPageItem = new JMenuItem("Add FBD Page...");
+        addFbdPageItem.addActionListener(e -> pageTabBar.addNewPageWithLanguage(false, IecLanguage.FBD));
+        projectMenu.add(addFbdPageItem);
+
+        JMenuItem addLdPageItem = new JMenuItem("Add Ladder (LD) Page...");
+        addLdPageItem.addActionListener(e -> pageTabBar.addNewPageWithLanguage(false, IecLanguage.LD));
+        projectMenu.add(addLdPageItem);
 
         JMenuItem addMacroItem = new JMenuItem("Add Macro...");
         addMacroItem.addActionListener(e -> pageTabBar.addNewPage(true));
@@ -442,7 +603,7 @@ public class MainWindow extends JFrame {
         optionsMenu.add(settingsItem);
         bar.add(optionsMenu);
 
-        // 7. Window (Library, Scope [Docked by default], PLC Log, Reset Layout)
+        // 7. Window (Library, Scope [Docked by default], PLC Log, Homescreen, Reset Layout)
         JMenu windowMenu = new JMenu("Window");
         windowLibraryItem = new JCheckBoxMenuItem("Library", true);
         windowLibraryItem.addActionListener(e -> {
@@ -476,6 +637,10 @@ public class MainWindow extends JFrame {
 
         windowMenu.addSeparator();
 
+        JMenuItem showHomeItem = new JMenuItem("Homescreen");
+        showHomeItem.addActionListener(e -> showHomeScreen());
+        windowMenu.add(showHomeItem);
+
         JMenuItem resetLayoutItem = new JMenuItem("Reset Window Layout");
         resetLayoutItem.addActionListener(e -> {
             if (libraryDock.isFloating()) libraryDock.redockToMainWindow();
@@ -495,7 +660,7 @@ public class MainWindow extends JFrame {
         JMenuItem aboutItem = new JMenuItem("About Maraflow");
         aboutItem.addActionListener(e -> JOptionPane.showMessageDialog(
                 this,
-                "Maraflow V" + Project.VERSION + "\nFunctional FBD PLC Programming IDE\nTarget: STM32F407 + FreeRTOS Bytecode VM",
+                "Maraflow V" + Project.VERSION + "\nFunctional IEC 61131-3 FBD & Ladder (LD) PLC Programming IDE\nTarget: STM32F407 + FreeRTOS Bytecode VM",
                 "About Maraflow",
                 JOptionPane.INFORMATION_MESSAGE
         ));
@@ -513,6 +678,8 @@ public class MainWindow extends JFrame {
             public void actionPerformed(ActionEvent e) {
                 if (fbdCanvas.hasFocus()) {
                     fbdCanvas.deleteSelection();
+                } else if (ladderCanvas.hasFocus()) {
+                    ladderCanvas.deleteSelection();
                 }
             }
         });
@@ -642,6 +809,26 @@ public class MainWindow extends JFrame {
             public void onDefaultThreadChanged(int threadId) {
                 project.setDefaultThreadId(threadId);
             }
+
+            @Override
+            public void onLadderAddRung() {
+                ladderCanvas.addNewRungBelowSelected();
+            }
+
+            @Override
+            public void onLadderInsertContact(LadderElement.Kind contactKind) {
+                ladderCanvas.insertContactOnSelectedRung(contactKind);
+            }
+
+            @Override
+            public void onLadderInsertCoil(LadderElement.Kind coilKind) {
+                ladderCanvas.insertCoilOnSelectedRung(coilKind);
+            }
+
+            @Override
+            public void onLadderAddParallelBranch() {
+                ladderCanvas.addParallelBranchOnSelectedRung();
+            }
         };
     }
 
@@ -696,7 +883,7 @@ public class MainWindow extends JFrame {
             BlockCatalog.syncMacrosFromProject(project);
             libraryTreePanel.rebuildTree();
             pageTabBar.setActivePageIndex(last.pageIndex());
-            fbdCanvas.setProjectAndPage(project, last.pageIndex());
+            syncActivePageToCanvases(last.pageIndex());
             refreshTitles();
         }
     }
@@ -710,26 +897,27 @@ public class MainWindow extends JFrame {
             BlockCatalog.syncMacrosFromProject(project);
             libraryTreePanel.rebuildTree();
             pageTabBar.setActivePageIndex(last.pageIndex());
-            fbdCanvas.setProjectAndPage(project, last.pageIndex());
+            syncActivePageToCanvases(last.pageIndex());
             refreshTitles();
         }
     }
 
     // =========================================================================
-    // Project, Sorting, Compilation, Upload, Watch, & Settings Actions
+    // Project, Wizard, Sorting, Compilation, Upload, Watch, & Settings Actions
     // =========================================================================
 
-    private void actionNewProject() {
-        simEngine.stopSimulation(project);
-        project = new Project();
-        project.setProjectName("Untitled");
-        project.setDirty(true);
-        undoManager.clear();
-        BlockCatalog.syncMacrosFromProject(project);
-        libraryTreePanel.rebuildTree();
-        pageTabBar.setProject(project);
-        fbdCanvas.setProjectAndPage(project, 0);
-        refreshTitles();
+    private void actionNewProjectWizard(IecLanguage preselectedLanguage) {
+        NewProjectWizardDialog wiz = new NewProjectWizardDialog(this, preselectedLanguage);
+        wiz.setVisible(true);
+        Project created = wiz.getCreatedProject();
+        if (created != null) {
+            if (created.getProjectFile() != null) {
+                addRecentFile(created.getProjectFile());
+            }
+            loadProjectIntoWorkspace(created);
+            plcLogPanel.appendLog("Created new project '" + created.getProjectName()
+                    + "' (" + created.getPrimaryLanguage().getShortCode() + ", " + created.getTargetPlatform() + ").");
+        }
     }
 
     private void actionOpenProject() {
@@ -742,15 +930,9 @@ public class MainWindow extends JFrame {
 
     private void openProjectFromFile(File file) {
         try {
-            simEngine.stopSimulation(project);
-            project = MflProjectSerializer.loadProject(file);
-            undoManager.clear();
-            libraryTreePanel.rebuildTree();
-            pageTabBar.setProject(project);
-            fbdCanvas.setProjectAndPage(project, 0);
-            editorToolbar.setDefaultThreadSelection(project.getDefaultThreadId());
+            Project loaded = MflProjectSerializer.loadProject(file);
             addRecentFile(file);
-            refreshTitles();
+            loadProjectIntoWorkspace(loaded);
             plcLogPanel.appendLog("Loaded project: " + file.getAbsolutePath());
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(this, "Failed to open project:\n" + ex.getMessage(), "Open Error", JOptionPane.ERROR_MESSAGE);
@@ -758,6 +940,7 @@ public class MainWindow extends JFrame {
     }
 
     private void actionSaveProject(boolean saveAs) {
+        if (!projectOpen) return;
         File target = project.getProjectFile();
         if (saveAs || target == null) {
             JFileChooser fc = new JFileChooser();
@@ -783,6 +966,7 @@ public class MainWindow extends JFrame {
     }
 
     private void actionImportPageOrMacro() {
+        if (!projectOpen) return;
         JFileChooser fc = new JFileChooser();
         fc.setDialogTitle("Select .mfl Project to Import Page/Macro From");
         fc.setFileFilter(new FileNameExtensionFilter("Maraflow Project (*.mfl)", "mfl"));
@@ -823,15 +1007,20 @@ public class MainWindow extends JFrame {
     }
 
     private void actionExportPage() {
+        if (!projectOpen) return;
+        JComponent activeCanvas = isActivePageLadder() ? ladderCanvas : fbdCanvas;
+        Page activePage = isActivePageLadder() ? ladderCanvas.getActivePage() : fbdCanvas.getActivePage();
+        if (activePage == null) return;
+
         JFileChooser fc = new JFileChooser();
         fc.setDialogTitle("Export Active Page");
-        fc.setSelectedFile(new File(project.getProjectName() + "_" + fbdCanvas.getActivePage().getName().replace('*', '_') + ".png"));
+        fc.setSelectedFile(new File(project.getProjectName() + "_" + activePage.getName().replace('*', '_') + ".png"));
         if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
             try {
                 File out = fc.getSelectedFile();
-                BufferedImage img = new BufferedImage(fbdCanvas.getWidth(), fbdCanvas.getHeight(), BufferedImage.TYPE_INT_RGB);
+                BufferedImage img = new BufferedImage(activeCanvas.getWidth(), activeCanvas.getHeight(), BufferedImage.TYPE_INT_RGB);
                 Graphics2D g2 = img.createGraphics();
-                fbdCanvas.paint(g2);
+                activeCanvas.paint(g2);
                 g2.dispose();
                 ImageIO.write(img, "png", out);
                 plcLogPanel.appendLog("Exported page snapshot to " + out.getAbsolutePath());
@@ -842,27 +1031,33 @@ public class MainWindow extends JFrame {
     }
 
     private void actionFindBlock() {
+        if (!projectOpen) return;
         Page page = fbdCanvas.getActivePage();
-        if (page == null || page.getBlocks().isEmpty()) return;
+        if (page == null || page.getAllBlockInstances().isEmpty()) return;
         String q = JOptionPane.showInputDialog(this, "Enter Block Name to locate:", "");
         if (q == null || q.isBlank()) return;
         BlockInstance found = page.findBlockByName(q.trim());
         if (found != null) {
-            fbdCanvas.clearSelection();
-            int g = fbdCanvas.getGridUnitPx();
-            fbdCanvas.scrollRectToVisible(new java.awt.Rectangle(
-                    found.getGridX() * g - 50,
-                    found.getGridY() * g - 50,
-                    found.getGridWidth() * g + 100,
-                    found.getGridHeight() * g + 100
-            ));
-            fbdCanvas.repaint();
+            if (!isActivePageLadder()) {
+                fbdCanvas.clearSelection();
+                int g = fbdCanvas.getGridUnitPx();
+                fbdCanvas.scrollRectToVisible(new java.awt.Rectangle(
+                        found.getGridX() * g - 50,
+                        found.getGridY() * g - 50,
+                        found.getGridWidth() * g + 100,
+                        found.getGridHeight() * g + 100
+                ));
+                fbdCanvas.repaint();
+            } else {
+                ladderCanvas.repaint();
+            }
         } else {
             JOptionPane.showMessageDialog(this, "Block '" + q.trim() + "' not found on active page.", "Find Block", JOptionPane.INFORMATION_MESSAGE);
         }
     }
 
     private void actionSortGraphically() {
+        if (!projectOpen || isActivePageLadder()) return;
         Page page = fbdCanvas.getActivePage();
         if (page == null || page.getBlocks().isEmpty()) return;
         simEngine.stopSimulation(project);
@@ -876,6 +1071,11 @@ public class MainWindow extends JFrame {
     }
 
     private void actionSortExecutionOrder(OrderSortMode mode) {
+        if (!projectOpen) return;
+        if (isActivePageLadder()) {
+            ladderCanvas.repaint();
+            return;
+        }
         Page page = fbdCanvas.getActivePage();
         if (page == null || page.getBlocks().isEmpty()) return;
         simEngine.stopSimulation(project);
@@ -888,6 +1088,7 @@ public class MainWindow extends JFrame {
     }
 
     private void actionCompile() {
+        if (!projectOpen) return;
         CompilationReport report = BytecodeCompiler.compile(project);
         for (String line : report.logLines()) {
             plcLogPanel.appendLog(line);
@@ -903,6 +1104,7 @@ public class MainWindow extends JFrame {
     }
 
     private void actionUpload() {
+        if (!projectOpen) return;
         CommunicationDialog commDlg = new CommunicationDialog(this, project, CommunicationDialog.Mode.UPLOAD);
         commDlg.setVisible(true);
         if (commDlg.isConnectionSucceeded()) {
@@ -911,6 +1113,7 @@ public class MainWindow extends JFrame {
     }
 
     private void actionUploadAndWatch() {
+        if (!projectOpen) return;
         CommunicationDialog commDlg = new CommunicationDialog(this, project, CommunicationDialog.Mode.WATCH);
         commDlg.setVisible(true);
         if (commDlg.isConnectionSucceeded()) {
@@ -921,6 +1124,7 @@ public class MainWindow extends JFrame {
     }
 
     private void actionToggleWatchMode() {
+        if (!projectOpen) return;
         if (simEngine.getState() == SimulationEngine.State.WATCH_MODE) {
             simEngine.stopSimulation(project);
             plcLogPanel.appendLog("Exited PLC Watch Mode.");
@@ -937,6 +1141,7 @@ public class MainWindow extends JFrame {
     }
 
     private void actionOpenPlcConfig() {
+        if (!projectOpen) return;
         PlcConfigDialog dlg = new PlcConfigDialog(this, project);
         dlg.setVisible(true);
         refreshTitles();
@@ -946,11 +1151,14 @@ public class MainWindow extends JFrame {
         SettingsDialog dlg = new SettingsDialog(this, () -> {
             fbdCanvas.setShowGrid(AppSettings.get().isShowGridByDefault());
             fbdCanvas.setShowExecutionInfo(AppSettings.get().isShowExecInfoByDefault());
+            ladderCanvas.setShowGrid(AppSettings.get().isShowGridByDefault());
+            ladderCanvas.setShowExecutionInfo(AppSettings.get().isShowExecInfoByDefault());
             editorToolbar.setDefaultThreadSelection(AppSettings.get().getDefaultThreadId());
             project.setDefaultThreadId(AppSettings.get().getDefaultThreadId());
             updateLibraryDockLayout();
             updateBottomDockLayout();
             fbdCanvas.repaint();
+            ladderCanvas.repaint();
         });
         dlg.setVisible(true);
     }
@@ -961,6 +1169,7 @@ public class MainWindow extends JFrame {
         while (recentFiles.size() > 10) {
             recentFiles.removeLast();
         }
+        homeScreenPanel.setRecentFiles(recentFiles);
         rebuildRecentProjectsMenu();
     }
 

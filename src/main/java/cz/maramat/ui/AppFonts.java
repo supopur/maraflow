@@ -58,4 +58,8 @@ public final class AppFonts {
     public static Font mono(int style, float size) {
         return new Font(MONO_FONT_FAMILY, style, Math.round(size));
     }
+
+    public static int scaled(int basePx) {
+        return cz.maramat.settings.AppSettings.get().scale(basePx);
+    }
 }

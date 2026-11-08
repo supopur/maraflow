@@ -3,6 +3,10 @@ package cz.maramat.sim;
 import cz.maramat.model.BlockInstance;
 import cz.maramat.model.DataType;
 import cz.maramat.model.GraphicElement;
+import cz.maramat.model.IecLanguage;
+import cz.maramat.model.LadderBranch;
+import cz.maramat.model.LadderElement;
+import cz.maramat.model.LadderRung;
 import cz.maramat.model.Page;
 import cz.maramat.model.PinInstance;
 import cz.maramat.model.PlcThread;
@@ -64,6 +68,62 @@ public class SimulationEngine {
         this.speedMultiplier = Math.max(0.001, speedMultiplier);
     }
 
+    public double getOperandValue(Project project, String operand) {
+        if (operand == null || operand.isBlank()) return 0.0;
+        String key = operand.trim();
+
+        // Check if operand is a BlockName.PinName reference
+        int dot = key.indexOf('.');
+        if (dot > 0 && project != null) {
+            String blockName = key.substring(0, dot);
+            String pinName = key.substring(dot + 1);
+            for (Page page : project.getPages()) {
+                BlockInstance b = page.findBlockByName(blockName);
+                if (b != null) {
+                    for (PinInstance out : b.getOutputs()) {
+                        if (out.getShortName().equalsIgnoreCase(pinName)) {
+                            return out.getRuntimeValue();
+                        }
+                    }
+                    for (PinInstance in : b.getInputs()) {
+                        if (in.getShortName().equalsIgnoreCase(pinName)) {
+                            return in.getRuntimeValue();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check virtual registers / hardware I/O / memory bits
+        Double regVal = virtualRegisters.get(key.toUpperCase());
+        if (regVal != null) return regVal;
+        regVal = virtualRegisters.get(key);
+        if (regVal != null) return regVal;
+
+        // Otherwise try numeric literal
+        try {
+            if ("TRUE".equalsIgnoreCase(key)) return 1.0;
+            if ("FALSE".equalsIgnoreCase(key)) return 0.0;
+            return Double.parseDouble(key);
+        } catch (NumberFormatException ignored) {
+            return 0.0;
+        }
+    }
+
+    public void setOperandValue(String operand, double value) {
+        if (operand == null || operand.isBlank()) return;
+        String key = operand.trim();
+        virtualRegisters.put(key, value);
+        virtualRegisters.put(key.toUpperCase(), value);
+        requestUiRepaint();
+    }
+
+    public void toggleBooleanOperand(Project project, String operand) {
+        if (operand == null || operand.isBlank()) return;
+        double cur = getOperandValue(project, operand);
+        setOperandValue(operand, (cur != 0.0) ? 0.0 : 1.0);
+    }
+
     public void startSimulation(Project project) {
         if (state == State.RUNNING) return;
         if (state == State.STOPPED || state == State.WATCH_MODE) {
@@ -108,6 +168,9 @@ public class SimulationEngine {
         for (Page page : project.getPages()) {
             for (BlockInstance b : page.getBlocks()) {
                 b.resetRuntimeState();
+            }
+            for (LadderRung r : page.getRungs()) {
+                r.resetRuntimeState();
             }
         }
     }
@@ -163,7 +226,12 @@ public class SimulationEngine {
         for (Page page : project.getPages()) {
             if (page.isMacro()) continue;
 
-            // Apply any active Visual Buttons on this page
+            if (page.getLanguage() == IecLanguage.LD) {
+                executeLadderPageScan(project, page, threadId, dtMs, simTimeSeconds);
+                continue;
+            }
+
+            // Apply any active Visual Buttons on this FBD page
             for (GraphicElement ge : page.getGraphics()) {
                 if (ge.getKind() == GraphicElement.Kind.VISUAL_BUTTON && !ge.getBoundTargetPin().isBlank()) {
                     String[] parts = ge.getBoundTargetPin().split("\\.");
@@ -187,46 +255,233 @@ public class SimulationEngine {
                     threadBlocks.add(b);
                 }
             }
-            // Sort strictly by ascending Order (O:) so backward wires act as z^-1 one-cycle delay
             threadBlocks.sort(Comparator.comparingInt(BlockInstance::getOrder));
 
             for (BlockInstance b : threadBlocks) {
-                evaluateBlock(page, b, dtMs, simTimeSeconds);
+                evaluateBlock(project, page, b, dtMs, simTimeSeconds, true);
             }
         }
     }
 
-    private void evaluateBlock(Page page, BlockInstance b, double dtMs, double simTimeSeconds) {
-        // 1. Propagate inputs from wires or constants
-        List<PinInstance> ins = b.getInputs();
-        for (int i = 0; i < ins.size(); i++) {
-            PinInstance inPin = ins.get(i);
-            Wire w = page.findWireToInputPin(b.getId(), i);
-            if (w != null) {
-                BlockInstance srcBlock = page.findBlockById(w.getSourceBlockId());
-                if (srcBlock != null && w.getSourcePinIndex() < srcBlock.getOutputs().size()) {
-                    PinInstance outPin = srcBlock.getOutputs().get(w.getSourcePinIndex());
-                    double converted = DataType.convertValue(outPin.getRuntimeValue(), outPin.getDataType(), inPin.getDataType());
-                    inPin.setRuntimeValue(converted);
-                }
-            } else {
-                // Only reset to constant if not driven by a Visual Button
-                boolean drivenByVisualButton = false;
-                String targetRef = b.getName() + "." + inPin.getShortName();
-                for (GraphicElement ge : page.getGraphics()) {
-                    if (ge.getKind() == GraphicElement.Kind.VISUAL_BUTTON
-                            && ge.getBoundTargetPin().equalsIgnoreCase(targetRef)) {
-                        drivenByVisualButton = true;
-                        break;
+    private void executeLadderPageScan(Project project, Page page, int threadId, double dtMs, double simTimeSeconds) {
+        List<LadderRung> threadRungs = new ArrayList<>();
+        for (LadderRung rung : page.getRungs()) {
+            if (rung.getThreadId() == threadId) {
+                threadRungs.add(rung);
+            }
+        }
+        threadRungs.sort(Comparator.comparingInt(LadderRung::getOrder));
+
+        for (LadderRung rung : threadRungs) {
+            List<LadderElement> mainEls = rung.getMainElements();
+            int n = mainEls.size();
+            // nodePower[col] represents power state before mainElements[col]; nodePower[n] is after all main elements
+            boolean[] nodePower = new boolean[n + 1];
+            nodePower[0] = true; // Left power rail is always energized
+
+            for (int col = 0; col < n; col++) {
+                // First check if any parallel branch starts at an earlier column and ends at col - 1
+                for (LadderBranch br : rung.getParallelBranches()) {
+                    if (br.getEndColumn() == col - 1 && br.getStartColumn() <= col - 1) {
+                        nodePower[col] |= br.isBranchEnergizedOut();
                     }
                 }
-                if (!drivenByVisualButton) {
-                    inPin.setRuntimeValue(inPin.getDataType().toNumericValue(inPin.getConstantValue()));
+
+                // Evaluate any parallel branch starting at col
+                for (LadderBranch br : rung.getParallelBranches()) {
+                    if (br.getStartColumn() == col) {
+                        boolean brPower = nodePower[col];
+                        br.setBranchEnergizedIn(brPower);
+                        for (LadderElement bel : br.getElements()) {
+                            brPower = evaluateLadderSeriesElement(project, page, bel, brPower, dtMs, simTimeSeconds);
+                        }
+                        br.setBranchEnergizedOut(brPower);
+                    }
+                }
+
+                // Evaluate main series element at col
+                LadderElement mainEl = mainEls.get(col);
+                nodePower[col + 1] = evaluateLadderSeriesElement(project, page, mainEl, nodePower[col], dtMs, simTimeSeconds);
+            }
+
+            // Rejoin any parallel branches that end at the last column (>= n - 1)
+            boolean finalPower = nodePower[n];
+            for (LadderBranch br : rung.getParallelBranches()) {
+                if (br.getEndColumn() >= n - 1) {
+                    if (n == 0) {
+                        boolean brPower = true;
+                        br.setBranchEnergizedIn(true);
+                        for (LadderElement bel : br.getElements()) {
+                            brPower = evaluateLadderSeriesElement(project, page, bel, brPower, dtMs, simTimeSeconds);
+                        }
+                        br.setBranchEnergizedOut(brPower);
+                    }
+                    finalPower |= br.isBranchEnergizedOut();
+                }
+            }
+
+            rung.setRungOutputEnergized(finalPower);
+
+            // Evaluate all output coils on the right of the rung
+            for (LadderElement coil : rung.getCoils()) {
+                evaluateLadderCoil(project, coil, finalPower);
+            }
+        }
+    }
+
+    private boolean evaluateLadderSeriesElement(Project project, Page page, LadderElement el, boolean powerIn, double dtMs, double simTimeSeconds) {
+        el.setEnergizedIn(powerIn);
+        LadderElement.Kind kind = el.getKind();
+
+        if (kind.isContact()) {
+            boolean rawVal = getOperandValue(project, el.getOperand()) != 0.0;
+            el.setOperandState(rawVal);
+            boolean prev = el.isPrevEdgeInput();
+            el.setPrevEdgeInput(rawVal);
+
+            boolean conducts = switch (kind) {
+                case NO_CONTACT -> rawVal;
+                case NC_CONTACT -> !rawVal;
+                case POS_EDGE_CONTACT -> rawVal && !prev;
+                case NEG_EDGE_CONTACT -> !rawVal && prev;
+                default -> false;
+            };
+            boolean out = powerIn && conducts;
+            el.setEnergizedOut(out);
+            return out;
+        }
+
+        if (kind == LadderElement.Kind.FUNCTION_BLOCK && el.getBlockInstance() != null) {
+            BlockInstance b = el.getBlockInstance();
+            List<PinInstance> ins = b.getInputs();
+            if (!ins.isEmpty() && ins.getFirst().getShortName().equalsIgnoreCase("En")) {
+                ins.getFirst().setRuntimeValue(powerIn ? 1.0 : 0.0);
+                ins.getFirst().setConstantValue(powerIn ? "1" : "0");
+            }
+            // Populate other input pins from their operand/constant strings
+            for (int i = 0; i < ins.size(); i++) {
+                PinInstance pin = ins.get(i);
+                if (i == 0 && pin.getShortName().equalsIgnoreCase("En")) continue;
+                double val = getOperandValue(project, pin.getConstantValue());
+                pin.setRuntimeValue(val);
+            }
+            evaluateBlock(project, page, b, dtMs, simTimeSeconds, false);
+
+            // Write any bound output pin operands (e.g., AO0, PWM0, REG_0)
+            for (PinInstance outPin : b.getOutputs()) {
+                String targetOp = outPin.getConstantValue();
+                if (targetOp != null && !targetOp.isBlank() && !targetOp.equals("0")) {
+                    setOperandValue(targetOp, outPin.getRuntimeValue());
+                }
+            }
+
+            // Determine outgoing power flow: if primary output is BOOL (e.g., Timer Q, Comparator Y, Bool gate), use it when En is high; otherwise pass powerIn (ENO)
+            boolean outPower = powerIn;
+            if (!b.getOutputs().isEmpty()) {
+                PinInstance firstOut = b.getOutputs().getFirst();
+                if (firstOut.getDataType() == DataType.BOOL) {
+                    outPower = powerIn && (firstOut.getRuntimeValue() != 0.0);
+                }
+            }
+            el.setOperandState(outPower);
+            el.setEnergizedOut(outPower);
+            return outPower;
+        }
+
+        el.setEnergizedOut(powerIn);
+        return powerIn;
+    }
+
+    private void evaluateLadderCoil(Project project, LadderElement coil, boolean rungPower) {
+        coil.setEnergizedIn(rungPower);
+        boolean prev = coil.isPrevEdgeInput();
+        coil.setPrevEdgeInput(rungPower);
+
+        String op = coil.getOperand();
+        switch (coil.getKind()) {
+            case NORMAL_COIL -> {
+                setOperandValue(op, rungPower ? 1.0 : 0.0);
+                coil.setOperandState(rungPower);
+                coil.setEnergizedOut(rungPower);
+            }
+            case NEGATED_COIL -> {
+                boolean v = !rungPower;
+                setOperandValue(op, v ? 1.0 : 0.0);
+                coil.setOperandState(v);
+                coil.setEnergizedOut(v);
+            }
+            case SET_COIL -> {
+                if (rungPower) {
+                    setOperandValue(op, 1.0);
+                }
+                boolean cur = getOperandValue(project, op) != 0.0;
+                coil.setOperandState(cur);
+                coil.setEnergizedOut(rungPower);
+            }
+            case RESET_COIL -> {
+                if (rungPower) {
+                    setOperandValue(op, 0.0);
+                }
+                boolean cur = getOperandValue(project, op) != 0.0;
+                coil.setOperandState(cur);
+                coil.setEnergizedOut(rungPower);
+            }
+            case POS_EDGE_COIL -> {
+                boolean pulse = rungPower && !prev;
+                setOperandValue(op, pulse ? 1.0 : 0.0);
+                coil.setOperandState(pulse);
+                coil.setEnergizedOut(pulse);
+            }
+            case NEG_EDGE_COIL -> {
+                boolean pulse = !rungPower && prev;
+                setOperandValue(op, pulse ? 1.0 : 0.0);
+                coil.setOperandState(pulse);
+                coil.setEnergizedOut(pulse);
+            }
+            case ANALOG_COIL -> {
+                double srcVal = getOperandValue(project, coil.getSourceOperand());
+                if (rungPower) {
+                    setOperandValue(op, srcVal);
+                }
+                double curOut = getOperandValue(project, op);
+                coil.setNumericRuntimeValue(curOut);
+                coil.setOperandState(rungPower);
+                coil.setEnergizedOut(rungPower);
+            }
+            default -> {}
+        }
+    }
+
+    private void evaluateBlock(Project project, Page page, BlockInstance b, double dtMs, double simTimeSeconds, boolean propagateFbdWires) {
+        List<PinInstance> ins = b.getInputs();
+        if (propagateFbdWires) {
+            for (int i = 0; i < ins.size(); i++) {
+                PinInstance inPin = ins.get(i);
+                Wire w = page.findWireToInputPin(b.getId(), i);
+                if (w != null) {
+                    BlockInstance srcBlock = page.findBlockById(w.getSourceBlockId());
+                    if (srcBlock != null && w.getSourcePinIndex() < srcBlock.getOutputs().size()) {
+                        PinInstance outPin = srcBlock.getOutputs().get(w.getSourcePinIndex());
+                        double converted = DataType.convertValue(outPin.getRuntimeValue(), outPin.getDataType(), inPin.getDataType());
+                        inPin.setRuntimeValue(converted);
+                    }
+                } else {
+                    boolean drivenByVisualButton = false;
+                    String targetRef = b.getName() + "." + inPin.getShortName();
+                    for (GraphicElement ge : page.getGraphics()) {
+                        if (ge.getKind() == GraphicElement.Kind.VISUAL_BUTTON
+                                && ge.getBoundTargetPin().equalsIgnoreCase(targetRef)) {
+                            drivenByVisualButton = true;
+                            break;
+                        }
+                    }
+                    if (!drivenByVisualButton) {
+                        inPin.setRuntimeValue(inPin.getDataType().toNumericValue(inPin.getConstantValue()));
+                    }
                 }
             }
         }
 
-        // 2. Check En pin
         boolean hasEn = !ins.isEmpty() && ins.getFirst().getShortName().equals("En");
         boolean enHigh = !hasEn || (ins.getFirst().getRuntimeValue() != 0.0);
         boolean enRisingEdge = enHigh && !b.isPrevEnState();
@@ -234,36 +489,84 @@ public class SimulationEngine {
 
         String defId = b.getDefinitionId();
 
-        // Edge-triggered Register blocks
         if (defId.equals("Main.Execution.WriteReg")) {
             String regName = b.getCustomProperties().getOrDefault("RegisterName", "REG_0");
             if (enRisingEdge && ins.size() > 1) {
                 double val = ins.get(1).getRuntimeValue();
-                virtualRegisters.put(regName, val);
+                setOperandValue(regName, val);
                 if (!b.getOutputs().isEmpty()) {
                     b.getOutputs().getFirst().setRuntimeValue(val);
                 }
             } else if (!b.getOutputs().isEmpty()) {
-                b.getOutputs().getFirst().setRuntimeValue(virtualRegisters.getOrDefault(regName, 0.0));
+                b.getOutputs().getFirst().setRuntimeValue(getOperandValue(project, regName));
             }
             return;
         }
         if (defId.equals("Main.Execution.ReadReg")) {
             String regName = b.getCustomProperties().getOrDefault("RegisterName", "REG_0");
             if (enRisingEdge && !b.getOutputs().isEmpty()) {
-                b.getOutputs().getFirst().setRuntimeValue(virtualRegisters.getOrDefault(regName, 0.0));
+                b.getOutputs().getFirst().setRuntimeValue(getOperandValue(project, regName));
             }
             return;
         }
 
-        // Standard execution gating
         if (!enHigh) {
             return;
         }
 
-        // 3. Evaluate block logic by definition
         List<PinInstance> outs = b.getOutputs();
         switch (defId) {
+            case "IO.DI" -> {
+                String ch = b.getCustomProperties().getOrDefault("Channel", "DI0");
+                if (!outs.isEmpty()) {
+                    outs.getFirst().setRuntimeValue(getOperandValue(project, ch) != 0.0 ? 1.0 : 0.0);
+                }
+            }
+            case "IO.DO" -> {
+                String ch = b.getCustomProperties().getOrDefault("Channel", "DO0");
+                double v = (ins.size() > 1 && ins.get(1).getRuntimeValue() != 0.0) ? 1.0 : 0.0;
+                setOperandValue(ch, v);
+                if (!outs.isEmpty()) {
+                    outs.getFirst().setRuntimeValue(v);
+                }
+            }
+            case "IO.AI" -> {
+                String ch = b.getCustomProperties().getOrDefault("Channel", "AI0");
+                if (!outs.isEmpty()) {
+                    outs.getFirst().setRuntimeValue(getOperandValue(project, ch));
+                }
+            }
+            case "IO.AO" -> {
+                String ch = b.getCustomProperties().getOrDefault("Channel", "AO0");
+                double v = ins.size() > 1 ? ins.get(1).getRuntimeValue() : 0.0;
+                setOperandValue(ch, v);
+                if (!outs.isEmpty()) {
+                    outs.getFirst().setRuntimeValue(1.0);
+                }
+            }
+            case "IO.PWM" -> {
+                String ch = b.getCustomProperties().getOrDefault("Channel", "PWM0");
+                double duty = ins.size() > 2 ? ins.get(2).getRuntimeValue() : 0.0;
+                setOperandValue(ch, duty);
+                if (!outs.isEmpty()) {
+                    outs.getFirst().setRuntimeValue(duty > 0.0 ? 1.0 : 0.0);
+                }
+            }
+            case "IO.8xDI" -> {
+                for (int i = 0; i < outs.size(); i++) {
+                    String diName = "DI" + i;
+                    Double ov = virtualRegisters.get(diName);
+                    if (ov != null) {
+                        outs.get(i).setRuntimeValue(ov);
+                    }
+                }
+            }
+            case "IO.8xDO" -> {
+                for (int i = 1; i < ins.size(); i++) {
+                    String doName = "DO" + (i - 1);
+                    setOperandValue(doName, ins.get(i).getRuntimeValue());
+                }
+            }
             case "Bool.And", "Bool.Nand" -> {
                 boolean res = true;
                 for (int i = 1; i < ins.size(); i++) {
@@ -370,6 +673,16 @@ public class SimulationEngine {
                 double hi = ins.get(3).getRuntimeValue();
                 outs.getFirst().setRuntimeValue(Math.clamp(v, Math.min(lo, hi), Math.max(lo, hi)));
             }
+            case "Math.Scale" -> {
+                double inVal = ins.get(1).getRuntimeValue();
+                double iLo = ins.get(2).getRuntimeValue();
+                double iHi = ins.get(3).getRuntimeValue();
+                double oLo = ins.get(4).getRuntimeValue();
+                double oHi = ins.get(5).getRuntimeValue();
+                double span = iHi - iLo;
+                double scaled = (Math.abs(span) < 1e-12) ? oLo : (oLo + ((inVal - iLo) / span) * (oHi - oLo));
+                outs.getFirst().setRuntimeValue(DataType.convertValue(scaled, DataType.FLOAT, outs.getFirst().getDataType()));
+            }
             case "Main.Comparators.EQ" -> outs.getFirst().setRuntimeValue(Math.abs(ins.get(1).getRuntimeValue() - ins.get(2).getRuntimeValue()) < 1e-6 ? 1.0 : 0.0);
             case "Main.Comparators.NE" -> outs.getFirst().setRuntimeValue(Math.abs(ins.get(1).getRuntimeValue() - ins.get(2).getRuntimeValue()) >= 1e-6 ? 1.0 : 0.0);
             case "Main.Comparators.GT" -> outs.getFirst().setRuntimeValue(ins.get(1).getRuntimeValue() > ins.get(2).getRuntimeValue() ? 1.0 : 0.0);
@@ -421,7 +734,6 @@ public class SimulationEngine {
             case "Main.Timers.DecodeDate" -> {
                 long ts = (long) (ins.size() > 1 ? ins.get(1).getRuntimeValue() : 0.0);
                 ZonedDateTime dt = Instant.ofEpochSecond(ts).atZone(ZoneOffset.UTC);
-                // outputs: Yr, Mon, Day, Hr, Min, Sec
                 if (outs.size() > 0) outs.get(0).setRuntimeValue(dt.getYear());
                 if (outs.size() > 1) outs.get(1).setRuntimeValue(dt.getMonthValue());
                 if (outs.size() > 2) outs.get(2).setRuntimeValue(dt.getDayOfMonth());
@@ -431,7 +743,6 @@ public class SimulationEngine {
             }
             case "Main.Conversion.PackBits" -> {
                 long packed = 0;
-                // ins[0] is En; bits are ins[1]..ins[size-1]
                 for (int i = 1; i < ins.size(); i++) {
                     if (ins.get(i).getRuntimeValue() != 0.0) {
                         packed |= (1L << (i - 1));
@@ -452,7 +763,6 @@ public class SimulationEngine {
                 out.setRuntimeValue(v);
             }
             default -> {
-                // Default pass-through or keep current state
             }
         }
     }
