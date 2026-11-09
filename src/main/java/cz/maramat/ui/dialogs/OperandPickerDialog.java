@@ -120,6 +120,14 @@ public class OperandPickerDialog extends JDialog {
         for (int i = 0; i < 16; i++) {
             allEntries.add(new OperandEntry("REG_" + i, "Virtual Registers", DataType.FLOAT, "Virtual Memory Register REG_" + i));
         }
+        if (project != null) {
+            for (String regName : project.getAllKnownRegisterAndTagNames()) {
+                boolean alreadyAdded = allEntries.stream().anyMatch(e -> e.operand().equalsIgnoreCase(regName));
+                if (!alreadyAdded) {
+                    allEntries.add(new OperandEntry(regName, "Virtual Registers", DataType.FLOAT, "Shared Project Register / Variable " + regName));
+                }
+            }
+        }
 
         // 7. Block Output Pin References across Project
         if (project != null) {

@@ -1,11 +1,14 @@
 package cz.maramat.ui.canvas;
 
 import cz.maramat.model.BlockCatalog;
+import cz.maramat.model.BlockDefinition;
+import cz.maramat.model.BlockInstance;
 import cz.maramat.model.IecLanguage;
 import cz.maramat.model.LadderElement;
 import cz.maramat.model.LadderRung;
 import cz.maramat.model.Page;
 import cz.maramat.model.Project;
+import cz.maramat.settings.AppSettings;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -133,12 +136,9 @@ public class PageTabBar extends JPanel {
                     m.add(nfbd);
                     m.add(nld);
                     m.addSeparator();
-                    JMenuItem mfbd = new JMenuItem("New FBD Macro (*MacroName)...");
+                    JMenuItem mfbd = new JMenuItem("New Macro (*MacroName)...");
                     mfbd.addActionListener(ev -> addNewPageWithLanguage(true, IecLanguage.FBD));
-                    JMenuItem mld = new JMenuItem("New Ladder (LD) Macro (*MacroName)...");
-                    mld.addActionListener(ev -> addNewPageWithLanguage(true, IecLanguage.LD));
                     m.add(mfbd);
-                    m.add(mld);
                     m.show(addBtn, e.getX(), e.getY());
                 }
             }
@@ -150,7 +150,7 @@ public class PageTabBar extends JPanel {
     }
 
     public void addNewPage(boolean macro) {
-        IecLanguage defaultLang = (project != null) ? project.getPrimaryLanguage() : IecLanguage.FBD;
+        IecLanguage defaultLang = macro ? IecLanguage.FBD : ((project != null) ? project.getPrimaryLanguage() : IecLanguage.FBD);
         addNewPageWithLanguage(macro, defaultLang);
     }
 
@@ -159,15 +159,17 @@ public class PageTabBar extends JPanel {
         int num = project.getPages().size() + 1;
         String defaultName = macro ? ("*Macro" + num) : ("Page " + num);
 
-        JPanel panel = new JPanel(new GridLayout(2, 2, 6, 6));
+        JPanel panel = new JPanel(new GridLayout(macro ? 1 : 2, 2, 6, 6));
         JTextField nameField = new JTextField(defaultName, 18);
         JComboBox<IecLanguage> langCombo = new JComboBox<>(IecLanguage.values());
         langCombo.setSelectedItem(initialLanguage != null ? initialLanguage : IecLanguage.FBD);
 
         panel.add(new JLabel(macro ? "Macro Name ('*' prefix):" : "Page Name:"));
         panel.add(nameField);
-        panel.add(new JLabel("IEC 61131-3 Language:"));
-        panel.add(langCombo);
+        if (!macro) {
+            panel.add(new JLabel("IEC 61131-3 Language:"));
+            panel.add(langCombo);
+        }
 
         int res = JOptionPane.showConfirmDialog(
                 this,
@@ -184,11 +186,14 @@ public class PageTabBar extends JPanel {
         if (macro && !finalName.startsWith("*")) {
             finalName = "*" + finalName;
         }
-        IecLanguage chosenLang = (IecLanguage) langCombo.getSelectedItem();
+        boolean isMacroPage = finalName.startsWith("*");
+        IecLanguage chosenLang = isMacroPage ? IecLanguage.FBD : (IecLanguage) langCombo.getSelectedItem();
         if (chosenLang == null) chosenLang = IecLanguage.FBD;
 
         Page p = new Page(finalName, chosenLang);
-        if (chosenLang == IecLanguage.LD) {
+        if (isMacroPage) {
+            populateDefaultMacroBoundaryBlocks(p);
+        } else if (chosenLang == IecLanguage.LD) {
             LadderRung r1 = new LadderRung(project.getDefaultThreadId(), 10, "Rung 1");
             r1.getMainElements().add(new LadderElement(LadderElement.Kind.NO_CONTACT, "DI0"));
             r1.getCoils().add(new LadderElement(LadderElement.Kind.NORMAL_COIL, "DO0"));
@@ -203,20 +208,54 @@ public class PageTabBar extends JPanel {
         listener.onActivePageChanged(activePageIndex);
     }
 
+    private void populateDefaultMacroBoundaryBlocks(Page macroPage) {
+        int tid = project != null ? project.getDefaultThreadId() : 2;
+        boolean hasIn = macroPage.getBlocks().stream().anyMatch(b -> "Macro.MacroIn".equals(b.getDefinitionId()));
+        boolean hasOut = macroPage.getBlocks().stream().anyMatch(b -> "Macro.MacroOut".equals(b.getDefinitionId()));
+
+        if (!hasIn) {
+            BlockDefinition inDef = BlockCatalog.getById("Macro.MacroIn");
+            if (inDef != null) {
+                BlockInstance bIn = new BlockInstance(inDef, "MacroIn", 12, 14, tid, 10);
+                bIn.setHeaderColor(AppSettings.get().getDefaultHeaderColor());
+                macroPage.getBlocks().add(bIn);
+            }
+        }
+        if (!hasOut) {
+            BlockDefinition outDef = BlockCatalog.getById("Macro.MacroOut");
+            if (outDef != null) {
+                BlockInstance bOut = new BlockInstance(outDef, "MacroOut", 44, 14, tid, 90);
+                bOut.setHeaderColor(AppSettings.get().getDefaultHeaderColor());
+                macroPage.getBlocks().add(bOut);
+            }
+        }
+    }
+
     public void promptRenamePage(int idx) {
         if (idx < 0 || idx >= project.getPages().size()) return;
         Page page = project.getPages().get(idx);
+        String oldName = page.getName();
+        boolean wasMacro = page.isMacro();
         String input = JOptionPane.showInputDialog(
                 this,
                 "Rename Page / Macro (prefix with '*' for Macro):",
-                page.getName()
+                oldName
         );
         if (input != null && !input.isBlank()) {
-            page.setName(input.trim());
+            String newName = input.trim();
+            page.setName(newName);
+            if (page.isMacro()) {
+                page.setLanguage(IecLanguage.FBD);
+                populateDefaultMacroBoundaryBlocks(page);
+                if (wasMacro) {
+                    project.renameMacroReferences(oldName, newName);
+                }
+            }
             project.setDirty(true);
             BlockCatalog.syncMacrosFromProject(project);
             rebuildTabs();
             listener.onPagesStructureChanged();
+            listener.onActivePageChanged(activePageIndex);
         }
     }
 

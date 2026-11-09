@@ -2,6 +2,8 @@ package cz.maramat.ui.panels;
 
 import cz.maramat.model.BlockCatalog;
 import cz.maramat.model.BlockDefinition;
+import cz.maramat.model.IecLanguage;
+import cz.maramat.model.Page;
 
 import javax.swing.BorderFactory;
 import javax.swing.JComponent;
@@ -24,6 +26,7 @@ public class LibraryTreePanel extends JPanel {
     private final JTree tree;
     private final DefaultMutableTreeNode rootNode;
     private final DefaultTreeModel treeModel;
+    private Page activePage = null;
 
     public LibraryTreePanel() {
         super(new BorderLayout());
@@ -72,13 +75,40 @@ public class LibraryTreePanel extends JPanel {
         add(scroll, BorderLayout.CENTER);
     }
 
+    public void setActivePage(Page activePage) {
+        this.activePage = activePage;
+        rebuildTree();
+    }
+
     public void rebuildTree() {
         rootNode.removeAllChildren();
         Map<String, DefaultMutableTreeNode> folderNodes = new LinkedHashMap<>();
 
-        // Pre-create top-level categories in exact specification order
+        boolean isLd = (activePage != null && activePage.getLanguage() == IecLanguage.LD);
+        boolean isMacroPage = (activePage != null && activePage.isMacro());
+        String currentMacroCleanName = isMacroPage && activePage.getName().length() > 1
+                ? activePage.getName().substring(1).trim()
+                : "";
+
+        if (isLd) {
+            DefaultMutableTreeNode ldRoot = new DefaultMutableTreeNode("Ladder (LD)");
+            folderNodes.put("Ladder (LD)", ldRoot);
+            rootNode.add(ldRoot);
+
+            for (BlockDefinition def : BlockCatalog.getAllDefinitions().values()) {
+                if (!def.getId().startsWith("Ladder.")) continue;
+                addDefToTree(def, folderNodes);
+            }
+
+            treeModel.reload();
+            for (int i = 0; i < tree.getRowCount(); i++) {
+                tree.expandRow(i);
+            }
+            return;
+        }
+
+        // FBD Top-Level or Macro Page: show only FBD categories
         String[] topCategories = {
-                "Ladder (LD)",
                 "Bool",
                 "Math",
                 "I/O",
@@ -94,33 +124,44 @@ public class LibraryTreePanel extends JPanel {
         }
 
         for (BlockDefinition def : BlockCatalog.getAllDefinitions().values()) {
-            String path = def.getCategoryPath();
-            String[] parts = path.equals("I/O") ? new String[]{"I/O"} : path.split("/");
-            DefaultMutableTreeNode parent = rootNode;
-            String accum = "";
-            for (String part : parts) {
-                accum = accum.isEmpty() ? part : (accum + "/" + part);
-                DefaultMutableTreeNode folder = folderNodes.get(accum);
-                if (folder == null) {
-                    folder = new DefaultMutableTreeNode(part);
-                    folderNodes.put(accum, folder);
-                    parent.add(folder);
-                }
-                parent = folder;
+            String id = def.getId();
+            if (id.startsWith("Ladder.")) continue;
+            if ((id.equals("Macro.MacroIn") || id.equals("Macro.MacroOut")) && !isMacroPage) {
+                continue;
             }
-            parent.add(new DefaultMutableTreeNode(def));
+            if (isMacroPage && id.startsWith("Macro.User.") && def.getTypeName().equalsIgnoreCase(currentMacroCleanName)) {
+                continue;
+            }
+            addDefToTree(def, folderNodes);
         }
 
         treeModel.reload();
-        // Expand Bool and Visual by default like in the reference screenshot
         for (int i = 0; i < tree.getRowCount(); i++) {
             TreePath tp = tree.getPathForRow(i);
             if (tp != null) {
                 String seg = tp.getLastPathComponent().toString();
-                if (seg.equals("Bool") || seg.equals("Visual")) {
+                if (seg.equals("Bool") || seg.equals("Visual") || seg.equals("Macro")) {
                     tree.expandRow(i);
                 }
             }
         }
+    }
+
+    private void addDefToTree(BlockDefinition def, Map<String, DefaultMutableTreeNode> folderNodes) {
+        String path = def.getCategoryPath();
+        String[] parts = path.equals("I/O") ? new String[]{"I/O"} : path.split("/");
+        DefaultMutableTreeNode parent = rootNode;
+        String accum = "";
+        for (String part : parts) {
+            accum = accum.isEmpty() ? part : (accum + "/" + part);
+            DefaultMutableTreeNode folder = folderNodes.get(accum);
+            if (folder == null) {
+                folder = new DefaultMutableTreeNode(part);
+                folderNodes.put(accum, folder);
+                parent.add(folder);
+            }
+            parent = folder;
+        }
+        parent.add(new DefaultMutableTreeNode(def));
     }
 }

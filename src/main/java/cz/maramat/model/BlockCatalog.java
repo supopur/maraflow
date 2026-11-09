@@ -330,13 +330,13 @@ public final class BlockCatalog {
         // Execution (Virtual Registers)
         reg(new BlockDefinition(
                 "Main.Execution.ReadReg", "Main/Execution", "ReadReg", "RdReg",
-                List.of(pin("En", "Rising Edge Triggers Register Read", DataType.BOOL, "1")),
+                List.of(enPin()),
                 List.of(pin("Out", "Register Value", DataType.INT, "0")),
                 3, 2, false, true, 0.15
         ));
         reg(new BlockDefinition(
                 "Main.Execution.WriteReg", "Main/Execution", "WriteReg", "WrReg",
-                List.of(pin("En", "Rising Edge Triggers Register Write", DataType.BOOL, "0"), pin("In", "Value To Store", DataType.INT, "0")),
+                List.of(enPin(), pin("In", "Value To Store", DataType.INT, "0")),
                 List.of(pin("Out", "Stored Register Value", DataType.INT, "0")),
                 3, 2, false, true, 0.18
         ));
@@ -445,16 +445,16 @@ public final class BlockCatalog {
 
         // 6. Macro Boundary Blocks
         reg(new BlockDefinition(
-                "Macro.MacroIn", "Macro", "MacroIn", "InPin",
+                "Macro.MacroIn", "Macro", "MacroIn", "MacroIn",
                 List.of(),
-                List.of(pin("Out", "Macro Input Signal", DataType.INT, "0")),
-                3, 2, false, true, 0.02
+                List.of(pin("X1", "Macro Input 1", DataType.INT, "0")),
+                3, 2, false, false, 0.02
         ));
         reg(new BlockDefinition(
-                "Macro.MacroOut", "Macro", "MacroOut", "OutPin",
-                List.of(pin("In", "Macro Output Signal", DataType.INT, "0")),
+                "Macro.MacroOut", "Macro", "MacroOut", "MacroOut",
+                List.of(pin("Y1", "Macro Output 1", DataType.INT, "0")),
                 List.of(),
-                3, 2, false, true, 0.02
+                3, 2, false, false, 0.02
         ));
 
         // 7. Visual
@@ -550,7 +550,12 @@ public final class BlockCatalog {
                 3, 2, false, false, 0.06
         ));
         reg(new BlockDefinition(
-                "Ladder.Coil.ANALOG", "Ladder (LD)/Analog & Move", "Analog Output / Move (--[AO :=]--)", "AOCoil",
+                "Ladder.Coil.WRITE_REG", "Ladder (LD)/Registers & Analog", "Write Register (--[REG :=]--)", "RegCoil",
+                List.of(enPin(), pin("In", "Register Value", DataType.INT, "1")), List.of(),
+                4, 2, false, true, 0.12
+        ));
+        reg(new BlockDefinition(
+                "Ladder.Coil.ANALOG", "Ladder (LD)/Registers & Analog", "Analog Output / Move (--[AO :=]--)", "AOCoil",
                 List.of(enPin(), pin("In", "Analog Source", DataType.INT, "AI0")), List.of(),
                 4, 2, false, true, 0.12
         ));
@@ -576,11 +581,13 @@ public final class BlockCatalog {
         ins.add(enPin());
         for (BlockInstance b : macroPage.getBlocks()) {
             if ("Macro.MacroIn".equals(b.getDefinitionId())) {
-                DataType dt = b.getOutputs().isEmpty() ? DataType.INT : b.getOutputs().getFirst().getDataType();
-                ins.add(pin(b.getName(), b.getName(), dt, dt.getDefaultConstant()));
+                for (PinInstance outPin : b.getOutputs()) {
+                    ins.add(pin(outPin.getShortName(), outPin.getFullName(), outPin.getDataType(), outPin.getConstantValue()));
+                }
             } else if ("Macro.MacroOut".equals(b.getDefinitionId())) {
-                DataType dt = b.getInputs().isEmpty() ? DataType.INT : b.getInputs().getFirst().getDataType();
-                outs.add(pin(b.getName(), b.getName(), dt, dt.getDefaultConstant()));
+                for (PinInstance inPin : b.getInputs()) {
+                    outs.add(pin(inPin.getShortName(), inPin.getFullName(), inPin.getDataType(), inPin.getConstantValue()));
+                }
             }
         }
         String id = "Macro.User." + cleanName;
@@ -599,5 +606,6 @@ public final class BlockCatalog {
                 registerMacroDefinition(p);
             }
         }
+        project.syncMacroInstances();
     }
 }

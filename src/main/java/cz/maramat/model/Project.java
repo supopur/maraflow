@@ -114,55 +114,92 @@ public class Project {
         r1.getCoils().add(new LadderElement(LadderElement.Kind.NORMAL_COIL, "DO0"));
         page1.getRungs().add(r1);
 
-        // Rung 2: On-Delay Timer Function Block inside Ladder Rung driving DO1 Cooling Fan
-        LadderRung r2 = new LadderRung(2, 20, "Cooling Fan Delay Timer (Starts 2000ms after MotorRun M0)");
+        // Rung 2: Write Register when Motor M0 is running
+        LadderRung r2 = new LadderRung(2, 20, "Write Status / Analog Value to REG_0 when Motor M0 is active");
         r2.getMainElements().add(new LadderElement(LadderElement.Kind.NO_CONTACT, "M0"));
-
-        BlockDefinition tonDef = BlockCatalog.getById("Main.Timers.Timer");
-        if (tonDef != null) {
-            BlockInstance tonBlock = new BlockInstance(tonDef, "TON_Fan1", 0, 0, 2, 25);
-            tonBlock.getInputs().get(1).setConstantValue("M0");
-            tonBlock.getInputs().get(2).setConstantValue("2000");
-            r2.getMainElements().add(new LadderElement(tonBlock));
-        }
-        r2.getCoils().add(new LadderElement(LadderElement.Kind.NORMAL_COIL, "DO1"));
+        r2.getCoils().add(new LadderElement(LadderElement.Kind.ANALOG_COIL, "100", "REG_0"));
         page1.getRungs().add(r2);
 
-        // Rung 3: Analog Comparator Function Block in Ladder Rung for Overtemp Alarm
-        LadderRung r3 = new LadderRung(2, 30, "Over-Temperature Fault Latch (AI0 > 500 sets HighTempAlarm / DO2, DI2 resets)");
-        BlockDefinition gtDef = BlockCatalog.getById("Main.Comparators.GT");
-        if (gtDef != null) {
-            BlockInstance gtBlock = new BlockInstance(gtDef, "GT_Temp1", 0, 0, 2, 35);
-            gtBlock.getInputs().get(1).setConstantValue("AI0");
-            gtBlock.getInputs().get(2).setConstantValue("500");
-            r3.getMainElements().add(new LadderElement(gtBlock));
-        }
-        r3.getCoils().add(new LadderElement(LadderElement.Kind.SET_COIL, "DO2"));
+        // Rung 3: Alarm Reset Rung
+        LadderRung r3 = new LadderRung(2, 30, "Fault Reset Button (DI2 Rising Edge unlatches DO2)");
+        r3.getMainElements().add(new LadderElement(LadderElement.Kind.POS_EDGE_CONTACT, "DI2"));
+        r3.getCoils().add(new LadderElement(LadderElement.Kind.RESET_COIL, "DO2"));
         page1.getRungs().add(r3);
 
-        // Rung 4: Analog Input Scaling & Analog Output Drive (AI0 -> Scale -> AO0 when Motor M0 is running)
-        LadderRung r4 = new LadderRung(2, 40, "Analog Speed Reference: Scales AI0 (0..4095) -> AO0 (0..1000) when MotorRun M0 is active");
-        r4.getMainElements().add(new LadderElement(LadderElement.Kind.NO_CONTACT, "M0"));
-        BlockDefinition scaleDef = BlockCatalog.getById("Math.Scale");
-        if (scaleDef != null) {
-            BlockInstance scaleBlock = new BlockInstance(scaleDef, "Scale_AI0", 0, 0, 2, 45);
-            scaleBlock.getInputs().get(1).setConstantValue("AI0");
-            scaleBlock.getInputs().get(2).setConstantValue("0");
-            scaleBlock.getInputs().get(3).setConstantValue("4095");
-            scaleBlock.getInputs().get(4).setConstantValue("0");
-            scaleBlock.getInputs().get(5).setConstantValue("1000");
-            r4.getMainElements().add(new LadderElement(scaleBlock));
-        }
-        r4.getCoils().add(new LadderElement(LadderElement.Kind.ANALOG_COIL, "Scale_AI0.Y", "AO0"));
-        page1.getRungs().add(r4);
-
-        // Rung 5: Alarm Reset Rung
-        LadderRung r5 = new LadderRung(2, 50, "Fault Reset Button (DI2 Rising Edge unlatches DO2)");
-        r5.getMainElements().add(new LadderElement(LadderElement.Kind.POS_EDGE_CONTACT, "DI2"));
-        r5.getCoils().add(new LadderElement(LadderElement.Kind.RESET_COIL, "DO2"));
-        page1.getRungs().add(r5);
-
         return p;
+    }
+
+    /**
+     * Synchronizes all placed Macro BlockInstances across all pages with their latest Macro Page definitions.
+     */
+    public void syncMacroInstances() {
+        for (Page page : pages) {
+            for (BlockInstance b : page.getBlocks()) {
+                if (b.getDefinitionId().startsWith("Macro.User.")) {
+                    BlockDefinition def = BlockCatalog.getById(b.getDefinitionId());
+                    if (def != null) {
+                        b.setTypeName(def.getTypeName());
+                        b.syncPinsWithDefinition(def);
+                        page.getWires().removeIf(w ->
+                                (w.getSourceBlockId().equals(b.getId()) && w.getSourcePinIndex() >= b.getOutputs().size())
+                                || (w.getTargetBlockId().equals(b.getId()) && w.getTargetPinIndex() >= b.getInputs().size())
+                        );
+                        page.updateWiresForBlock(b);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Updates placed Macro instances when a Macro page is renamed.
+     */
+    public void renameMacroReferences(String oldMacroName, String newMacroName) {
+        if (oldMacroName == null || newMacroName == null) return;
+        String oldClean = oldMacroName.startsWith("*") ? oldMacroName.substring(1).trim() : oldMacroName.trim();
+        String newClean = newMacroName.startsWith("*") ? newMacroName.substring(1).trim() : newMacroName.trim();
+        if (oldClean.isEmpty() || newClean.isEmpty() || oldClean.equalsIgnoreCase(newClean)) return;
+
+        String oldDefId = "Macro.User." + oldClean;
+        String newDefId = "Macro.User." + newClean;
+        for (Page page : pages) {
+            for (BlockInstance b : page.getBlocks()) {
+                if (b.getDefinitionId().equalsIgnoreCase(oldDefId)) {
+                    b.setDefinitionId(newDefId);
+                    b.setTypeName(newClean);
+                }
+            }
+        }
+    }
+
+    /**
+     * Collects all virtual registers, memory bits, and symbolic tags known across all FBD and LD pages.
+     */
+    public List<String> getAllKnownRegisterAndTagNames() {
+        java.util.Set<String> set = new java.util.LinkedHashSet<>();
+        for (int i = 0; i < 16; i++) {
+            set.add("REG_" + i);
+        }
+        for (Page page : pages) {
+            for (BlockInstance b : page.getBlocks()) {
+                String reg = b.getCustomProperties().get("RegisterName");
+                if (reg != null && !reg.isBlank()) {
+                    set.add(reg.trim());
+                }
+            }
+            for (LadderRung r : page.getRungs()) {
+                for (LadderElement c : r.getCoils()) {
+                    if (c.getOperand() != null && !c.getOperand().isBlank()) {
+                        set.add(c.getOperand().trim());
+                    }
+                }
+            }
+        }
+        set.addAll(symbolicTags.keySet());
+        for (int i = 0; i < 16; i++) {
+            set.add("M" + i);
+        }
+        return new ArrayList<>(set);
     }
 
     public String formatWindowTitle() {

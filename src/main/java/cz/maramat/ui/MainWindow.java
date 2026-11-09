@@ -137,15 +137,6 @@ public class MainWindow extends JFrame {
                 homeScreenPanel.setRecentFiles(recentFiles);
                 rebuildRecentProjectsMenu();
             }
-
-            @Override
-            public void onLoadSampleProject(IecLanguage language) {
-                Project sample = (language == IecLanguage.LD)
-                        ? Project.createDefaultLadderSampleProject()
-                        : Project.createDefaultSampleProject();
-                loadProjectIntoWorkspace(sample);
-                plcLogPanel.appendLog("Loaded sample " + language.getShortCode() + " project: " + sample.getProjectName());
-            }
         });
 
         // 1. Build Library Dock (Left — Pop-Outable / Undockable)
@@ -298,6 +289,7 @@ public class MainWindow extends JFrame {
         if (project == null || project.getPages().isEmpty()) return;
         int idx = Math.clamp(pageIndex, 0, project.getPages().size() - 1);
         Page activePage = project.getPages().get(idx);
+        libraryTreePanel.setActivePage(activePage);
         fbdCanvas.setProjectAndPage(project, idx);
         ladderCanvas.setProjectAndPage(project, idx);
         editorToolbar.setActivePageLanguage(activePage.getLanguage());

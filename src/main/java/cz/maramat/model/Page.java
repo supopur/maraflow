@@ -55,6 +55,11 @@ public class Page {
         return name != null && name.startsWith("*");
     }
 
+    public String getCleanName() {
+        if (name == null) return "";
+        return name.startsWith("*") ? name.substring(1).trim() : name.trim();
+    }
+
     public List<BlockInstance> getBlocks() {
         return blocks;
     }

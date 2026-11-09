@@ -392,6 +392,10 @@ public class FbdCanvas extends JPanel {
             selectedGraphicIds.clear();
         }
 
+        if (page.isMacro()) {
+            BlockCatalog.syncMacrosFromProject(project);
+        }
+
         editListener.onAfterPageEdit("Delete Selection", before, page);
         updateCanvasPreferredSize();
         repaint();
@@ -412,11 +416,35 @@ public class FbdCanvas extends JPanel {
                     }
                     dtde.acceptDrop(DnDConstants.ACTION_COPY);
                     String defId = (String) dtde.getTransferable().getTransferData(DataFlavor.stringFlavor);
+                    if (defId == null || defId.startsWith("Ladder.")) {
+                        dtde.dropComplete(false);
+                        return;
+                    }
                     BlockDefinition def = BlockCatalog.getById(defId);
                     Page page = getActivePage();
                     if (def == null || page == null) {
                         dtde.dropComplete(false);
                         return;
+                    }
+                    if (!page.isMacro() && (defId.equals("Macro.MacroIn") || defId.equals("Macro.MacroOut"))) {
+                        dtde.dropComplete(false);
+                        return;
+                    }
+                    if (page.isMacro() && defId.equals("Macro.User." + page.getCleanName())) {
+                        dtde.dropComplete(false);
+                        return;
+                    }
+                    if (page.isMacro() && (defId.equals("Macro.MacroIn") || defId.equals("Macro.MacroOut"))) {
+                        boolean alreadyExists = page.getBlocks().stream()
+                                .anyMatch(b -> b.getDefinitionId().equals(defId));
+                        if (alreadyExists) {
+                            JOptionPane.showMessageDialog(FbdCanvas.this,
+                                    "Only one " + def.getTypeName() + " block is allowed per Macro.\n"
+                                            + "Double-click the existing " + def.getTypeName() + " block to add or edit pins.",
+                                    "Macro Boundary Block", JOptionPane.INFORMATION_MESSAGE);
+                            dtde.dropComplete(false);
+                            return;
+                        }
                     }
 
                     exitSimOrWatchBeforeStructuralEdit();
@@ -983,10 +1011,10 @@ public class FbdCanvas extends JPanel {
         }
         exitSimOrWatchBeforeStructuralEdit();
         Page before = page.copy();
-        ModulePropertiesDialog dlg = new ModulePropertiesDialog(owner, page, block);
+        ModulePropertiesDialog dlg = new ModulePropertiesDialog(owner, project, page, block);
         dlg.setVisible(true);
         if (dlg.isConfirmed()) {
-            if (page.isMacro() && (block.getDefinitionId().equals("Macro.MacroIn") || block.getDefinitionId().equals("Macro.MacroOut"))) {
+            if (page.isMacro()) {
                 BlockCatalog.syncMacrosFromProject(project);
             }
             editListener.onAfterPageEdit("Edit Properties " + block.getName(), before, page);
@@ -1877,17 +1905,32 @@ public class FbdCanvas extends JPanel {
                 paintValueCourtyard(g2, b, courtyardX, bodyY, courtyardW + pinW, bodyH, g, showLiveOutputs);
             } else if (b.getDefinitionId().startsWith("Visual.Vars.")) {
                 paintXVarCourtyard(g2, b, bx, bodyY, bw - pinW, bodyH, g);
-            } else if (showExecutionInfo) {
-                g2.setFont(metaFont);
-                FontMetrics metaFm = g2.getFontMetrics();
-                g2.setColor(Color.BLACK);
-                String tStr = "T:" + b.getThreadId();
-                String oStr = "O:" + b.getOrder();
-                int tx = courtyardX + (courtyardW - metaFm.stringWidth(tStr)) / 2;
-                int ox = courtyardX + (courtyardW - metaFm.stringWidth(oStr)) / 2;
-                int bottomY = by + bh - 2;
-                g2.drawString(tStr, tx, bottomY - g);
-                g2.drawString(oStr, ox, bottomY);
+            } else {
+                String badge = null;
+                if (b.getDefinitionId().startsWith("Main.Execution.")) {
+                    badge = b.getCustomProperties().get("RegisterName");
+                } else if (b.getDefinitionId().startsWith("IO.") && !b.getDefinitionId().startsWith("IO.8x")) {
+                    badge = b.getCustomProperties().get("Channel");
+                }
+                if (badge != null && !badge.isBlank()) {
+                    g2.setFont(metaFont);
+                    FontMetrics metaFm = g2.getFontMetrics();
+                    g2.setColor(new Color(0x00, 0x33, 0x66));
+                    int bxText = courtyardX + (courtyardW - metaFm.stringWidth(badge)) / 2;
+                    g2.drawString(badge, bxText, bodyY + g - 1);
+                }
+                if (showExecutionInfo) {
+                    g2.setFont(metaFont);
+                    FontMetrics metaFm = g2.getFontMetrics();
+                    g2.setColor(Color.BLACK);
+                    String tStr = "T:" + b.getThreadId();
+                    String oStr = "O:" + b.getOrder();
+                    int tx = courtyardX + (courtyardW - metaFm.stringWidth(tStr)) / 2;
+                    int ox = courtyardX + (courtyardW - metaFm.stringWidth(oStr)) / 2;
+                    int bottomY = by + bh - 2;
+                    g2.drawString(tStr, tx, bottomY - g);
+                    g2.drawString(oStr, ox, bottomY);
+                }
             }
 
             // 6. Header Text — Always Crisp WHITE for High Contrast!

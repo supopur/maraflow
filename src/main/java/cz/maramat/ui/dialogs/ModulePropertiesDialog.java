@@ -6,7 +6,9 @@ import cz.maramat.model.BlockInstance;
 import cz.maramat.model.DataType;
 import cz.maramat.model.HeaderColor;
 import cz.maramat.model.Page;
+import cz.maramat.model.PinInstance;
 import cz.maramat.model.PlcThread;
+import cz.maramat.model.Project;
 import cz.maramat.ui.icons.VectorIcons;
 
 import javax.swing.BorderFactory;
@@ -34,11 +36,14 @@ import java.awt.Frame;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 public class ModulePropertiesDialog extends JDialog {
     private boolean confirmed = false;
+    private final Project project;
     private final BlockInstance block;
     private final Page page;
 
@@ -50,6 +55,8 @@ public class ModulePropertiesDialog extends JDialog {
 
     private final Map<String, JComponent> specificControls = new LinkedHashMap<>();
     private JTable propTable;
+    private JTable macroPinTable;
+    private MacroPinsTableModel macroPinsModel;
 
     private static final String[] STM32_PIN_IDS = {
             "PA0", "PA1", "PA2", "PA3", "PA4", "PA5", "PA6", "PA7",
@@ -59,7 +66,12 @@ public class ModulePropertiesDialog extends JDialog {
     };
 
     public ModulePropertiesDialog(Frame owner, Page page, BlockInstance block) {
+        this(owner, null, page, block);
+    }
+
+    public ModulePropertiesDialog(Frame owner, Project project, Page page, BlockInstance block) {
         super(owner, "Module properties", true);
+        this.project = project;
         this.page = page;
         this.block = block;
 
@@ -71,7 +83,7 @@ public class ModulePropertiesDialog extends JDialog {
 
         buildUi();
         pack();
-        setMinimumSize(new Dimension(560, 360));
+        setMinimumSize(new Dimension(620, 380));
         setLocationRelativeTo(owner);
     }
 
@@ -133,6 +145,11 @@ public class ModulePropertiesDialog extends JDialog {
     }
 
     private JPanel buildBlockSpecificsPanel() {
+        String defId = block.getDefinitionId();
+        if ("Macro.MacroIn".equals(defId) || "Macro.MacroOut".equals(defId)) {
+            return buildMacroBoundaryPanel("Macro.MacroIn".equals(defId));
+        }
+
         JPanel p = new JPanel(new GridBagLayout());
         p.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
         GridBagConstraints gbc = new GridBagConstraints();
@@ -140,7 +157,7 @@ public class ModulePropertiesDialog extends JDialog {
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.anchor = GridBagConstraints.NORTHWEST;
 
-        BlockDefinition def = BlockCatalog.getById(block.getDefinitionId());
+        BlockDefinition def = BlockCatalog.getById(defId);
         int row = 0;
 
         if (def != null && def.isVariableInputCount()) {
@@ -158,7 +175,6 @@ public class ModulePropertiesDialog extends JDialog {
             specificControls.put("DataType", dtBox);
         }
 
-        String defId = block.getDefinitionId();
         if (defId.equals("IO.8xDI") || defId.equals("IO.8xDO")) {
             String pinLabelPrefix = defId.endsWith("DI") ? "DI" : "DO";
             for (int i = 0; i < 8; i++) {
@@ -196,6 +212,30 @@ public class ModulePropertiesDialog extends JDialog {
                     chBox.setSelectedItem(v);
                     addRow(p, gbc, row++, "Hardware Pin:", chBox);
                     specificControls.put(k, chBox);
+                } else if (k.equals("RegisterName")) {
+                    List<String> regNames = project != null
+                            ? project.getAllKnownRegisterAndTagNames()
+                            : List.of("REG_0", "REG_1", "REG_2", "REG_3", "REG_4", "REG_5", "REG_6", "REG_7");
+                    JComboBox<String> regBox = new JComboBox<>(regNames.toArray(new String[0]));
+                    regBox.setEditable(true);
+                    regBox.setSelectedItem(v);
+                    addRow(p, gbc, row++, "Register / Tag:", regBox);
+                    specificControls.put(k, regBox);
+                } else if (k.equals("TriggerMode")) {
+                    JComboBox<String> trigBox = new JComboBox<>(new String[]{
+                            "Continuous (While En=1)",
+                            "Rising Edge (0 -> 1)"
+                    });
+                    trigBox.setSelectedItem(v);
+                    addRow(p, gbc, row++, "Trigger Mode:", trigBox);
+                    specificControls.put(k, trigBox);
+                } else if (k.equals("Channel") && defId.startsWith("IO.")) {
+                    String[] channels = buildChannelOptionsForBlock(defId);
+                    JComboBox<String> chBox = new JComboBox<>(channels);
+                    chBox.setEditable(true);
+                    chBox.setSelectedItem(v);
+                    addRow(p, gbc, row++, "I/O Channel:", chBox);
+                    specificControls.put(k, chBox);
                 } else {
                     JTextField tf = new JTextField(v, 12);
                     addRow(p, gbc, row++, k + ":", tf);
@@ -222,6 +262,103 @@ public class ModulePropertiesDialog extends JDialog {
         return p;
     }
 
+    private String[] buildChannelOptionsForBlock(String defId) {
+        return switch (defId) {
+            case "IO.DI" -> new String[]{
+                    "DI0", "DI1", "DI2", "DI3", "DI4", "DI5", "DI6", "DI7",
+                    "DI8", "DI9", "DI10", "DI11", "DI12", "DI13", "DI14", "DI15"
+            };
+            case "IO.DO" -> new String[]{
+                    "DO0", "DO1", "DO2", "DO3", "DO4", "DO5", "DO6", "DO7",
+                    "DO8", "DO9", "DO10", "DO11", "DO12", "DO13", "DO14", "DO15"
+            };
+            case "IO.AI" -> new String[]{"AI0", "AI1", "AI2", "AI3", "AI4", "AI5", "AI6", "AI7"};
+            case "IO.AO" -> new String[]{"AO0", "AO1", "AO2", "AO3"};
+            case "IO.PWM" -> new String[]{"PWM0", "PWM1", "PWM2", "PWM3"};
+            default -> STM32_PIN_IDS;
+        };
+    }
+
+    private JPanel buildMacroBoundaryPanel(boolean isMacroIn) {
+        JPanel panel = new JPanel(new BorderLayout(4, 4));
+        panel.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+
+        JLabel title = new JLabel(isMacroIn
+                ? "Macro Input Pins (exposed on left of Macro):"
+                : "Macro Output Pins (exposed on right of Macro):");
+        title.setFont(new Font("SansSerif", Font.BOLD, 11));
+        panel.add(title, BorderLayout.NORTH);
+
+        List<PinInstance> existingPins = isMacroIn ? block.getOutputs() : block.getInputs();
+        macroPinsModel = new MacroPinsTableModel(existingPins, isMacroIn);
+        JComboBox<DataType> dtCombo = new JComboBox<>(DataType.values());
+
+        macroPinTable = new JTable(macroPinsModel) {
+            @Override
+            public TableCellEditor getCellEditor(int row, int column) {
+                if (column == 1) {
+                    return new DefaultCellEditor(dtCombo);
+                }
+                return super.getCellEditor(row, column);
+            }
+        };
+        macroPinTable.setRowHeight(22);
+        macroPinTable.setShowGrid(true);
+        macroPinTable.setGridColor(new Color(0xDC, 0xDC, 0xDC));
+        macroPinTable.getTableHeader().setReorderingAllowed(false);
+        macroPinTable.putClientProperty("terminateEditOnFocusLost", Boolean.TRUE);
+
+        JScrollPane scroll = new JScrollPane(macroPinTable);
+        scroll.setPreferredSize(new Dimension(280, 150));
+        panel.add(scroll, BorderLayout.CENTER);
+
+        JPanel btnBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
+        JButton addBtn = new JButton("+ Pin");
+        JButton remBtn = new JButton("- Pin");
+        JButton upBtn = new JButton("Up");
+        JButton downBtn = new JButton("Down");
+
+        for (JButton b : new JButton[]{addBtn, remBtn, upBtn, downBtn}) {
+            b.setMargin(new Insets(2, 6, 2, 6));
+            b.setFont(new Font("SansSerif", Font.PLAIN, 11));
+            btnBar.add(b);
+        }
+
+        addBtn.addActionListener(e -> {
+            if (macroPinTable.isEditing()) macroPinTable.getCellEditor().stopCellEditing();
+            macroPinsModel.addPin();
+            int last = macroPinsModel.getRowCount() - 1;
+            if (last >= 0) macroPinTable.setRowSelectionInterval(last, last);
+        });
+        remBtn.addActionListener(e -> {
+            if (macroPinTable.isEditing()) macroPinTable.getCellEditor().stopCellEditing();
+            int sel = macroPinTable.getSelectedRow();
+            macroPinsModel.removePin(sel);
+            int rows = macroPinsModel.getRowCount();
+            if (rows > 0) {
+                int nextSel = Math.min(sel, rows - 1);
+                if (nextSel >= 0) macroPinTable.setRowSelectionInterval(nextSel, nextSel);
+            }
+        });
+        upBtn.addActionListener(e -> {
+            if (macroPinTable.isEditing()) macroPinTable.getCellEditor().stopCellEditing();
+            int sel = macroPinTable.getSelectedRow();
+            if (macroPinsModel.movePin(sel, -1)) {
+                macroPinTable.setRowSelectionInterval(sel - 1, sel - 1);
+            }
+        });
+        downBtn.addActionListener(e -> {
+            if (macroPinTable.isEditing()) macroPinTable.getCellEditor().stopCellEditing();
+            int sel = macroPinTable.getSelectedRow();
+            if (macroPinsModel.movePin(sel, 1)) {
+                macroPinTable.setRowSelectionInterval(sel + 1, sel + 1);
+            }
+        });
+
+        panel.add(btnBar, BorderLayout.SOUTH);
+        return panel;
+    }
+
     private void addRow(JPanel panel, GridBagConstraints gbc, int row, String labelText, JComponent comp) {
         gbc.gridx = 0;
         gbc.gridy = row;
@@ -236,6 +373,9 @@ public class ModulePropertiesDialog extends JDialog {
     private void onConfirm() {
         if (propTable.isEditing()) {
             propTable.getCellEditor().stopCellEditing();
+        }
+        if (macroPinTable != null && macroPinTable.isEditing()) {
+            macroPinTable.getCellEditor().stopCellEditing();
         }
         String trimmedName = editedName == null ? "" : editedName.trim();
         if (trimmedName.isEmpty()) {
@@ -253,11 +393,50 @@ public class ModulePropertiesDialog extends JDialog {
             return;
         }
 
+        if (macroPinsModel != null) {
+            String err = macroPinsModel.validatePins();
+            if (err != null) {
+                JOptionPane.showMessageDialog(this, err, "Macro Pin Validation Error", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+        }
+
         block.setName(trimmedName);
         block.setThreadId(editedThread.getId());
         block.setOrder(editedOrder);
         block.setHeaderColor(editedColor);
         block.setDescription(editedDescription);
+
+        // Apply macro pins if editing MacroIn or MacroOut
+        if (macroPinsModel != null) {
+            boolean isMacroIn = "Macro.MacroIn".equals(block.getDefinitionId());
+            List<PinInstance> targetList = isMacroIn ? block.getOutputs() : block.getInputs();
+
+            List<PinInstance> updatedPins = new ArrayList<>();
+            List<MacroPinRow> rows = macroPinsModel.getRows();
+            for (int i = 0; i < rows.size(); i++) {
+                MacroPinRow r = rows.get(i);
+                String name = r.name.trim();
+                String shortName = name.length() > 3 ? name.substring(0, 3) : name;
+                String defVal = r.defaultVal == null || r.defaultVal.isBlank() ? "0" : r.defaultVal.trim();
+                try {
+                    defVal = r.dataType.validateAndNormalizeConstant(defVal);
+                } catch (IllegalArgumentException ex) {
+                    defVal = "0";
+                }
+                PinInstance p = new PinInstance(shortName, name, r.dataType, !isMacroIn, defVal);
+                updatedPins.add(p);
+            }
+            targetList.clear();
+            targetList.addAll(updatedPins);
+
+            int maxPinCount = updatedPins.size();
+            if (isMacroIn) {
+                page.getWires().removeIf(w -> w.getSourceBlockId().equals(block.getId()) && w.getSourcePinIndex() >= maxPinCount);
+            } else {
+                page.getWires().removeIf(w -> w.getTargetBlockId().equals(block.getId()) && w.getTargetPinIndex() >= maxPinCount);
+            }
+        }
 
         // Apply specific controls
         for (Map.Entry<String, JComponent> entry : specificControls.entrySet()) {
@@ -272,9 +451,9 @@ public class ModulePropertiesDialog extends JDialog {
                     block.setPrimaryDataType(dt);
                 }
             } else if (comp instanceof JComboBox<?> cb) {
-                Object sel = cb.getSelectedItem();
+                Object sel = cb.isEditable() ? cb.getEditor().getItem() : cb.getSelectedItem();
                 if (sel != null) {
-                    block.getCustomProperties().put(key, sel.toString());
+                    block.getCustomProperties().put(key, sel.toString().trim());
                 }
             } else if (comp instanceof JTextField tf) {
                 block.getCustomProperties().put(key, tf.getText().trim());
@@ -282,6 +461,9 @@ public class ModulePropertiesDialog extends JDialog {
         }
 
         page.updateWiresForBlock(block);
+        if (project != null && page.isMacro()) {
+            BlockCatalog.syncMacrosFromProject(project);
+        }
         confirmed = true;
         dispose();
     }
@@ -352,6 +534,150 @@ public class ModulePropertiesDialog extends JDialog {
                     if (aValue instanceof HeaderColor hc) editedColor = hc;
                 }
                 case 4 -> editedDescription = aValue.toString();
+            }
+            fireTableCellUpdated(rowIndex, columnIndex);
+        }
+    }
+
+    private static class MacroPinRow {
+        String name;
+        DataType dataType;
+        String defaultVal;
+
+        MacroPinRow(String name, DataType dataType, String defaultVal) {
+            this.name = name;
+            this.dataType = dataType;
+            this.defaultVal = defaultVal;
+        }
+    }
+
+    private class MacroPinsTableModel extends AbstractTableModel {
+        private final String[] cols = {"Pin Name", "Data Type", "Default"};
+        private final List<MacroPinRow> rows = new ArrayList<>();
+        private final boolean isMacroIn;
+
+        MacroPinsTableModel(List<PinInstance> existingPins, boolean isMacroIn) {
+            this.isMacroIn = isMacroIn;
+            for (PinInstance p : existingPins) {
+                String n = (p.getFullName() != null && !p.getFullName().isBlank()) ? p.getFullName() : p.getShortName();
+                rows.add(new MacroPinRow(n, p.getDataType(), p.getConstantValue()));
+            }
+            if (rows.isEmpty()) {
+                rows.add(new MacroPinRow(isMacroIn ? "X1" : "Y1", DataType.INT, "0"));
+            }
+        }
+
+        List<MacroPinRow> getRows() {
+            return rows;
+        }
+
+        void addPin() {
+            String prefix = isMacroIn ? "X" : "Y";
+            int idx = rows.size() + 1;
+            String candidate = prefix + idx;
+            while (containsName(candidate)) {
+                idx++;
+                candidate = prefix + idx;
+            }
+            rows.add(new MacroPinRow(candidate, DataType.INT, "0"));
+            fireTableRowsInserted(rows.size() - 1, rows.size() - 1);
+        }
+
+        private boolean containsName(String name) {
+            for (MacroPinRow r : rows) {
+                if (r.name != null && r.name.equalsIgnoreCase(name)) return true;
+            }
+            return false;
+        }
+
+        void removePin(int idx) {
+            if (rows.size() <= 1) {
+                JOptionPane.showMessageDialog(ModulePropertiesDialog.this,
+                        "A Macro boundary block must have at least 1 pin.",
+                        "Cannot Remove Pin", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            if (idx >= 0 && idx < rows.size()) {
+                rows.remove(idx);
+                fireTableRowsDeleted(idx, idx);
+            }
+        }
+
+        boolean movePin(int idx, int delta) {
+            int target = idx + delta;
+            if (idx < 0 || idx >= rows.size() || target < 0 || target >= rows.size()) {
+                return false;
+            }
+            MacroPinRow tmp = rows.get(idx);
+            rows.set(idx, rows.get(target));
+            rows.set(target, tmp);
+            fireTableRowsUpdated(Math.min(idx, target), Math.max(idx, target));
+            return true;
+        }
+
+        String validatePins() {
+            if (rows.isEmpty()) {
+                return "At least one pin is required.";
+            }
+            for (int i = 0; i < rows.size(); i++) {
+                MacroPinRow r = rows.get(i);
+                String n = r.name == null ? "" : r.name.trim();
+                if (n.isEmpty()) {
+                    return "Pin name on row " + (i + 1) + " cannot be empty.";
+                }
+                if (n.equalsIgnoreCase("En")) {
+                    return "Pin name 'En' is reserved for the Macro execution enable input.";
+                }
+                for (int j = i + 1; j < rows.size(); j++) {
+                    if (n.equalsIgnoreCase(rows.get(j).name.trim())) {
+                        return "Duplicate pin name '" + n + "'.";
+                    }
+                }
+            }
+            return null;
+        }
+
+        @Override
+        public int getRowCount() {
+            return rows.size();
+        }
+
+        @Override
+        public int getColumnCount() {
+            return cols.length;
+        }
+
+        @Override
+        public String getColumnName(int column) {
+            return cols[column];
+        }
+
+        @Override
+        public boolean isCellEditable(int rowIndex, int columnIndex) {
+            return true;
+        }
+
+        @Override
+        public Object getValueAt(int rowIndex, int columnIndex) {
+            MacroPinRow r = rows.get(rowIndex);
+            return switch (columnIndex) {
+                case 0 -> r.name;
+                case 1 -> r.dataType;
+                case 2 -> r.defaultVal;
+                default -> "";
+            };
+        }
+
+        @Override
+        public void setValueAt(Object aValue, int rowIndex, int columnIndex) {
+            if (aValue == null || rowIndex < 0 || rowIndex >= rows.size()) return;
+            MacroPinRow r = rows.get(rowIndex);
+            switch (columnIndex) {
+                case 0 -> r.name = aValue.toString().trim();
+                case 1 -> {
+                    if (aValue instanceof DataType dt) r.dataType = dt;
+                }
+                case 2 -> r.defaultVal = aValue.toString().trim();
             }
             fireTableCellUpdated(rowIndex, columnIndex);
         }

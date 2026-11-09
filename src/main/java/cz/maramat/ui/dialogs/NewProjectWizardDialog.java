@@ -76,7 +76,6 @@ public class NewProjectWizardDialog extends JDialog {
     private JRadioButton ldRadio;
     private JTextField initialPageNameField;
     private JComboBox<PlcThread> defaultThreadCombo;
-    private JComboBox<String> templateCombo;
 
     // Navigation buttons
     private JButton backBtn;
@@ -356,19 +355,10 @@ public class NewProjectWizardDialog extends JDialog {
         gbc.gridx = 1; gbc.weightx = 1.0;
         p.add(defaultThreadCombo, gbc);
 
-        gbc.gridx = 0; gbc.gridy = 3; gbc.weightx = 0;
-        p.add(new JLabel("Starter Page Content:"), gbc);
-        templateCombo = new JComboBox<>(new String[]{
-                "Minimal Starter (1 Rung / Empty Canvas)",
-                "Sample Industrial Control Template (Pre-built logic & I/O)"
-        });
-        gbc.gridx = 1; gbc.weightx = 1.0;
-        p.add(templateCombo, gbc);
-
-        JLabel noteLbl = new JLabel("Note: You can mix FBD and Ladder (LD) pages and macros freely within the same project.");
+        JLabel noteLbl = new JLabel("Note: You can add both FBD and Ladder (LD) pages and FBD macros within the same project.");
         noteLbl.setFont(AppFonts.ui(Font.ITALIC, 11));
         noteLbl.setForeground(new Color(0x44, 0x55, 0x66));
-        gbc.gridx = 0; gbc.gridy = 4; gbc.gridwidth = 2;
+        gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 2;
         p.add(noteLbl, gbc);
 
         return p;
@@ -404,20 +394,8 @@ public class NewProjectWizardDialog extends JDialog {
         IecLanguage lang = ldRadio.isSelected() ? IecLanguage.LD : IecLanguage.FBD;
         PlcThread defThread = (PlcThread) defaultThreadCombo.getSelectedItem();
         int tid = defThread != null ? defThread.getId() : 2;
-        boolean useSampleTemplate = (templateCombo.getSelectedIndex() == 1);
 
-        Project proj;
-        if (useSampleTemplate) {
-            proj = (lang == IecLanguage.LD)
-                    ? Project.createDefaultLadderSampleProject()
-                    : Project.createDefaultSampleProject();
-            proj.setProjectName(projName);
-            proj.setTargetPlatform(platform);
-            proj.setDefaultThreadId(tid);
-            proj.setPrimaryLanguage(lang);
-        } else {
-            proj = new Project(projName, platform, lang, tid);
-        }
+        Project proj = new Project(projName, platform, lang, tid);
 
         String pageName = initialPageNameField.getText().trim();
         if (!pageName.isEmpty() && !proj.getPages().isEmpty()) {

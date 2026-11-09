@@ -21,6 +21,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
@@ -350,9 +351,14 @@ public final class MflProjectSerializer {
 
     private static BlockInstance loadBlockInstance(Properties props, String bp, int indexHint) {
         String defId = props.getProperty(bp + "defId", "Bool.And");
+        String savedTypeName = props.getProperty(bp + "typeName", "Block");
         BlockDefinition def = BlockCatalog.getById(defId);
         if (def == null) {
-            def = BlockCatalog.getById("Bool.And");
+            if (defId.startsWith("Macro.User.")) {
+                def = new BlockDefinition(defId, "Macro", savedTypeName, savedTypeName, List.of(), List.of(), 4, 2, false, false, 15.0);
+            } else {
+                def = BlockCatalog.getById("Bool.And");
+            }
         }
         String name = props.getProperty(bp + "name", "Block" + (indexHint + 1));
         int gx = Integer.parseInt(props.getProperty(bp + "gridX", "10"));
@@ -362,6 +368,7 @@ public final class MflProjectSerializer {
 
         BlockInstance b = new BlockInstance(def, name, gx, gy, tid, ord);
         b.setId(props.getProperty(bp + "id", b.getId()));
+        b.setDefinitionId(defId);
         b.setTypeName(props.getProperty(bp + "typeName", def.getTypeName()));
         b.setHeaderColor(HeaderColor.fromLabel(props.getProperty(bp + "color", "clDefault")));
         b.setDescription(props.getProperty(bp + "description", ""));

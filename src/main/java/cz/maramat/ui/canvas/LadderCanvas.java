@@ -5,6 +5,7 @@ import cz.maramat.model.BlockDefinition;
 import cz.maramat.model.BlockInstance;
 import cz.maramat.model.DataType;
 import cz.maramat.model.HeaderColor;
+import cz.maramat.model.IecLanguage;
 import cz.maramat.model.LadderBranch;
 import cz.maramat.model.LadderElement;
 import cz.maramat.model.LadderRung;
@@ -129,7 +130,7 @@ public class LadderCanvas extends JPanel {
         this.project = project;
         this.activePageIndex = pageIndex;
         Page page = getActivePage();
-        if (page != null && page.getRungs().isEmpty()) {
+        if (page != null && page.getLanguage() == IecLanguage.LD && page.getRungs().isEmpty()) {
             LadderRung r1 = new LadderRung(project.getDefaultThreadId(), 10, "Rung 1");
             page.getRungs().add(r1);
         }
@@ -242,7 +243,11 @@ public class LadderCanvas extends JPanel {
         Page page = getActivePage();
         if (page == null) return;
 
-        // Check if user dropped a special Ladder element from Library
+        // Only Ladder elements are permitted in LD pages (no FBD or Macro blocks)
+        if (!def.getId().startsWith("Ladder.")) {
+            return;
+        }
+
         if (def.getId().startsWith("Ladder.Contact.")) {
             switch (def.getId()) {
                 case "Ladder.Contact.NO" -> insertContactOnSelectedRung(LadderElement.Kind.NO_CONTACT);
@@ -261,36 +266,17 @@ public class LadderCanvas extends JPanel {
                 case "Ladder.Coil.POS" -> insertCoilOnSelectedRung(LadderElement.Kind.POS_EDGE_COIL);
                 case "Ladder.Coil.NEG" -> insertCoilOnSelectedRung(LadderElement.Kind.NEG_EDGE_COIL);
                 case "Ladder.Coil.ANALOG" -> insertCoilOnSelectedRung(LadderElement.Kind.ANALOG_COIL);
+                case "Ladder.Coil.WRITE_REG" -> {
+                    ensureAtLeastOneRung(page);
+                    Page before = page.copy();
+                    LadderRung rung = page.getRungs().get(getSelectedRungIndex());
+                    LadderElement coil = new LadderElement(LadderElement.Kind.ANALOG_COIL, "1", "REG_0");
+                    rung.getCoils().add(coil);
+                    selectedElement = coil;
+                    commitEdit("Insert Write Register Coil", before);
+                }
             }
-            return;
         }
-
-        ensureAtLeastOneRung(page);
-        Page before = page.copy();
-
-        LadderRung rung = page.getRungs().get(getSelectedRungIndex());
-        String uniqueName = page.nextUniqueBlockName(def.getTypeName());
-        int order = page.nextOrderForThread(rung.getThreadId());
-        BlockInstance b = new BlockInstance(def, uniqueName, 0, 0, rung.getThreadId(), order);
-        HeaderColor defColor = AppSettings.get().getDefaultHeaderColor();
-        if (defColor != null && defColor != HeaderColor.CL_DEFAULT) {
-            b.setHeaderColor(defColor);
-        }
-
-        // Set helpful default analog operands when placing IO.AI / IO.AO / IO.PWM / Scale on a Ladder rung
-        if ("IO.AI".equals(def.getId())) {
-            b.getCustomProperties().put("Channel", "AI0");
-        } else if ("IO.AO".equals(def.getId())) {
-            b.getCustomProperties().put("Channel", "AO0");
-            if (b.getInputs().size() > 1) b.getInputs().get(1).setConstantValue("AI0");
-        } else if ("IO.PWM".equals(def.getId())) {
-            b.getCustomProperties().put("Channel", "PWM0");
-        }
-
-        LadderElement fbEl = new LadderElement(b);
-        rung.getMainElements().add(fbEl);
-        selectedElement = fbEl;
-        commitEdit("Insert Function Block " + def.getTypeName() + " on Rung", before);
     }
 
     public void deleteSelection() {
@@ -1396,12 +1382,13 @@ public class LadderCanvas extends JPanel {
         g2.drawRect(boxX, boxY, boxW, boxH);
         g2.setStroke(old);
 
-        // Top mini header inside box: ANALOG / MOVE
+        // Top mini header inside box: WRITE REG or ANALOG OUT
         g2.setColor(energized ? COLOR_POWER_ON : new Color(0x1F, 0x61, 0x8D));
         g2.fillRect(boxX, boxY, boxW, 11);
         g2.setColor(Color.WHITE);
         g2.setFont(AppFonts.ui(Font.BOLD, 8));
-        String hdr = "ANALOG OUT [:=" + "]";
+        String targetOp = coil.getOperand() == null ? "" : coil.getOperand().toUpperCase();
+        String hdr = (targetOp.startsWith("AO") || targetOp.startsWith("PWM")) ? "ANALOG OUT [:=]" : "WRITE REG [:=]";
         FontMetrics hfm = g2.getFontMetrics();
         g2.drawString(hdr, boxX + (boxW - hfm.stringWidth(hdr)) / 2, boxY + 9);
 

@@ -37,6 +37,7 @@ public class SimulationEngine {
     private final AtomicBoolean workerRunning = new AtomicBoolean(false);
     private Thread virtualSimThread;
     private final Map<String, Double> virtualRegisters = new ConcurrentHashMap<>();
+    private final Map<String, Page> macroRuntimePages = new ConcurrentHashMap<>();
     private final Runnable uiRepaintCallback;
     private final List<ScopeSampleListener> scopeListeners = new ArrayList<>();
 
@@ -164,6 +165,7 @@ public class SimulationEngine {
 
     private void resetAllBlocks(Project project) {
         virtualRegisters.clear();
+        macroRuntimePages.clear();
         if (project == null) return;
         for (Page page : project.getPages()) {
             for (BlockInstance b : page.getBlocks()) {
@@ -223,13 +225,17 @@ public class SimulationEngine {
     }
 
     private void executeThreadScan(Project project, int threadId, double dtMs, double simTimeSeconds) {
+        // 1. Execute top-level LD pages first so any registers/coils written in LD are immediately visible to FBD
         for (Page page : project.getPages()) {
             if (page.isMacro()) continue;
-
             if (page.getLanguage() == IecLanguage.LD) {
                 executeLadderPageScan(project, page, threadId, dtMs, simTimeSeconds);
-                continue;
             }
+        }
+
+        // 2. Execute top-level FBD pages
+        for (Page page : project.getPages()) {
+            if (page.isMacro() || page.getLanguage() == IecLanguage.LD) continue;
 
             // Apply any active Visual Buttons on this FBD page
             for (GraphicElement ge : page.getGraphics()) {
@@ -258,7 +264,7 @@ public class SimulationEngine {
             threadBlocks.sort(Comparator.comparingInt(BlockInstance::getOrder));
 
             for (BlockInstance b : threadBlocks) {
-                evaluateBlock(project, page, b, dtMs, simTimeSeconds, true);
+                evaluateBlock(project, page, b, dtMs, simTimeSeconds, true, 0);
             }
         }
     }
@@ -365,7 +371,7 @@ public class SimulationEngine {
                 double val = getOperandValue(project, pin.getConstantValue());
                 pin.setRuntimeValue(val);
             }
-            evaluateBlock(project, page, b, dtMs, simTimeSeconds, false);
+            evaluateBlock(project, page, b, dtMs, simTimeSeconds, false, 0);
 
             // Write any bound output pin operands (e.g., AO0, PWM0, REG_0)
             for (PinInstance outPin : b.getOutputs()) {
@@ -452,7 +458,8 @@ public class SimulationEngine {
         }
     }
 
-    private void evaluateBlock(Project project, Page page, BlockInstance b, double dtMs, double simTimeSeconds, boolean propagateFbdWires) {
+    private void evaluateBlock(Project project, Page page, BlockInstance b, double dtMs, double simTimeSeconds, boolean propagateFbdWires, int depth) {
+        if (depth > 8) return;
         List<PinInstance> ins = b.getInputs();
         if (propagateFbdWires) {
             for (int i = 0; i < ins.size(); i++) {
@@ -491,26 +498,40 @@ public class SimulationEngine {
 
         if (defId.equals("Main.Execution.WriteReg")) {
             String regName = b.getCustomProperties().getOrDefault("RegisterName", "REG_0");
-            if (enRisingEdge && ins.size() > 1) {
+            String trigMode = b.getCustomProperties().getOrDefault("TriggerMode", "Continuous (While En=1)");
+            boolean shouldWrite = trigMode.startsWith("Rising") ? enRisingEdge : enHigh;
+            if (shouldWrite && ins.size() > 1) {
                 double val = ins.get(1).getRuntimeValue();
                 setOperandValue(regName, val);
                 if (!b.getOutputs().isEmpty()) {
-                    b.getOutputs().getFirst().setRuntimeValue(val);
+                    PinInstance outPin = b.getOutputs().getFirst();
+                    outPin.setRuntimeValue(DataType.convertValue(val, ins.get(1).getDataType(), outPin.getDataType()));
                 }
             } else if (!b.getOutputs().isEmpty()) {
-                b.getOutputs().getFirst().setRuntimeValue(getOperandValue(project, regName));
+                PinInstance outPin = b.getOutputs().getFirst();
+                double cur = getOperandValue(project, regName);
+                outPin.setRuntimeValue(DataType.convertValue(cur, DataType.FLOAT, outPin.getDataType()));
             }
             return;
         }
         if (defId.equals("Main.Execution.ReadReg")) {
             String regName = b.getCustomProperties().getOrDefault("RegisterName", "REG_0");
-            if (enRisingEdge && !b.getOutputs().isEmpty()) {
-                b.getOutputs().getFirst().setRuntimeValue(getOperandValue(project, regName));
+            String trigMode = b.getCustomProperties().getOrDefault("TriggerMode", "Continuous (While En=1)");
+            boolean shouldRead = trigMode.startsWith("Rising") ? enRisingEdge : enHigh;
+            if (shouldRead && !b.getOutputs().isEmpty()) {
+                PinInstance outPin = b.getOutputs().getFirst();
+                double raw = getOperandValue(project, regName);
+                outPin.setRuntimeValue(DataType.convertValue(raw, DataType.FLOAT, outPin.getDataType()));
             }
             return;
         }
 
         if (!enHigh) {
+            return;
+        }
+
+        if (defId.startsWith("Macro.User.")) {
+            evaluateMacroBlock(project, b, dtMs, simTimeSeconds, depth);
             return;
         }
 
@@ -763,6 +784,102 @@ public class SimulationEngine {
                 out.setRuntimeValue(v);
             }
             default -> {
+            }
+        }
+    }
+
+    private void evaluateMacroBlock(Project project, BlockInstance macroBlock, double dtMs, double simTimeSeconds, int depth) {
+        if (project == null) return;
+        String macroCleanName = macroBlock.getDefinitionId().substring("Macro.User.".length());
+        Page macroDefPage = null;
+        for (Page p : project.getPages()) {
+            if (p.isMacro() && p.getCleanName().equalsIgnoreCase(macroCleanName)) {
+                macroDefPage = p;
+                break;
+            }
+        }
+        if (macroDefPage == null) return;
+
+        final Page defRef = macroDefPage;
+        Page rtPage = macroRuntimePages.compute(macroBlock.getId(), (k, existing) -> {
+            if (existing == null || existing.getBlocks().size() != defRef.getBlocks().size()) {
+                return defRef.copy();
+            }
+            return existing;
+        });
+
+        // 1. Copy macro instance input pins (after En at index 0) into MacroIn block outputs on rtPage
+        List<BlockInstance> macroInBlocks = new ArrayList<>();
+        List<BlockInstance> macroOutBlocks = new ArrayList<>();
+        List<BlockInstance> innerExecBlocks = new ArrayList<>();
+
+        for (BlockInstance ib : rtPage.getBlocks()) {
+            if ("Macro.MacroIn".equals(ib.getDefinitionId())) {
+                macroInBlocks.add(ib);
+            } else if ("Macro.MacroOut".equals(ib.getDefinitionId())) {
+                macroOutBlocks.add(ib);
+            } else {
+                innerExecBlocks.add(ib);
+            }
+        }
+        macroInBlocks.sort(Comparator.comparingInt(BlockInstance::getOrder).thenComparingInt(BlockInstance::getGridY));
+        macroOutBlocks.sort(Comparator.comparingInt(BlockInstance::getOrder).thenComparingInt(BlockInstance::getGridY));
+        innerExecBlocks.sort(Comparator.comparingInt(BlockInstance::getOrder));
+
+        int macroInputPinIdx = 1; // index 0 is En
+        for (BlockInstance inBlock : macroInBlocks) {
+            for (PinInstance outPin : inBlock.getOutputs()) {
+                if (macroInputPinIdx < macroBlock.getInputs().size()) {
+                    PinInstance srcIn = macroBlock.getInputs().get(macroInputPinIdx++);
+                    double converted = DataType.convertValue(srcIn.getRuntimeValue(), srcIn.getDataType(), outPin.getDataType());
+                    outPin.setRuntimeValue(converted);
+                }
+            }
+        }
+
+        // 2. Evaluate all inner blocks in execution order
+        for (BlockInstance inner : innerExecBlocks) {
+            evaluateBlock(project, rtPage, inner, dtMs, simTimeSeconds, true, depth + 1);
+        }
+
+        // 3. Propagate wires into MacroOut blocks and copy their input values to the macro instance's output pins
+        int macroOutputPinIdx = 0;
+        for (BlockInstance outBlock : macroOutBlocks) {
+            List<PinInstance> mIns = outBlock.getInputs();
+            for (int i = 0; i < mIns.size(); i++) {
+                PinInstance inPin = mIns.get(i);
+                Wire w = rtPage.findWireToInputPin(outBlock.getId(), i);
+                if (w != null) {
+                    BlockInstance srcBlock = rtPage.findBlockById(w.getSourceBlockId());
+                    if (srcBlock != null && w.getSourcePinIndex() < srcBlock.getOutputs().size()) {
+                        PinInstance srcOut = srcBlock.getOutputs().get(w.getSourcePinIndex());
+                        double converted = DataType.convertValue(srcOut.getRuntimeValue(), srcOut.getDataType(), inPin.getDataType());
+                        inPin.setRuntimeValue(converted);
+                    }
+                } else {
+                    inPin.setRuntimeValue(inPin.getDataType().toNumericValue(inPin.getConstantValue()));
+                }
+
+                if (macroOutputPinIdx < macroBlock.getOutputs().size()) {
+                    PinInstance dstOut = macroBlock.getOutputs().get(macroOutputPinIdx++);
+                    double converted = DataType.convertValue(inPin.getRuntimeValue(), inPin.getDataType(), dstOut.getDataType());
+                    dstOut.setRuntimeValue(converted);
+                }
+            }
+        }
+
+        // 4. Mirror runtime pin states onto macroDefPage so live inspection of the *Macro tab displays live values
+        List<BlockInstance> defBlocks = macroDefPage.getBlocks();
+        List<BlockInstance> rtBlocks = rtPage.getBlocks();
+        int count = Math.min(defBlocks.size(), rtBlocks.size());
+        for (int i = 0; i < count; i++) {
+            BlockInstance db = defBlocks.get(i);
+            BlockInstance rb = rtBlocks.get(i);
+            for (int p = 0; p < Math.min(db.getInputs().size(), rb.getInputs().size()); p++) {
+                db.getInputs().get(p).setRuntimeValue(rb.getInputs().get(p).getRuntimeValue());
+            }
+            for (int p = 0; p < Math.min(db.getOutputs().size(), rb.getOutputs().size()); p++) {
+                db.getOutputs().get(p).setRuntimeValue(rb.getOutputs().get(p).getRuntimeValue());
             }
         }
     }

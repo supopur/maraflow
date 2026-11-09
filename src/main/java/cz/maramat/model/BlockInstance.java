@@ -77,6 +77,16 @@ public class BlockInstance {
             for (int i = 0; i < 8; i++) {
                 customProperties.put("Pin" + i, prefix + i);
             }
+        } else if (definitionId.equals("IO.DI")) {
+            customProperties.put("Channel", "DI0");
+        } else if (definitionId.equals("IO.DO")) {
+            customProperties.put("Channel", "DO0");
+        } else if (definitionId.equals("IO.AI")) {
+            customProperties.put("Channel", "AI0");
+        } else if (definitionId.equals("IO.AO")) {
+            customProperties.put("Channel", "AO0");
+        } else if (definitionId.equals("IO.PWM")) {
+            customProperties.put("Channel", "PWM0");
         } else if (definitionId.startsWith("IO.")) {
             customProperties.put("HardwareChannel", "CH0 (PA0)");
         } else if (definitionId.startsWith("Comm.Modbus")) {
@@ -103,6 +113,7 @@ public class BlockInstance {
             customProperties.put("BitWidth", "8");
         } else if (definitionId.startsWith("Main.Execution.")) {
             customProperties.put("RegisterName", "REG_0");
+            customProperties.put("TriggerMode", "Continuous (While En=1)");
             customProperties.put("RetentiveEeprom", "false");
         } else if (definitionId.equals("Main.Timers.Timer")) {
             customProperties.put("TimerMode", "TON (On-Delay)");
@@ -221,6 +232,36 @@ public class BlockInstance {
 
     public String getDefinitionId() {
         return definitionId;
+    }
+
+    public void setDefinitionId(String definitionId) {
+        this.definitionId = definitionId;
+    }
+
+    public void syncPinsWithDefinition(BlockDefinition def) {
+        if (def == null) return;
+        this.courtyardGridWidth = def.getCourtyardGridWidth();
+        this.minBodyGridHeight = def.getMinBodyGridHeight();
+
+        List<PinInstance> oldInputs = new ArrayList<>(this.inputs);
+        this.inputs.clear();
+        List<PinSpec> defIns = def.getDefaultInputs();
+        for (int i = 0; i < defIns.size(); i++) {
+            PinSpec ps = defIns.get(i);
+            PinInstance np = new PinInstance(ps.shortName(), ps.fullName(), ps.dataType(), true, ps.defaultConstant());
+            if (i < oldInputs.size()) {
+                try {
+                    np.setConstantValue(oldInputs.get(i).getConstantValue());
+                } catch (Exception ignored) {
+                }
+            }
+            this.inputs.add(np);
+        }
+
+        this.outputs.clear();
+        for (PinSpec ps : def.getDefaultOutputs()) {
+            this.outputs.add(new PinInstance(ps.shortName(), ps.fullName(), ps.dataType(), false, ps.defaultConstant()));
+        }
     }
 
     public String getTypeName() {
