@@ -7,11 +7,17 @@ import java.util.List;
 public class Page {
     private String name;
     private IecLanguage language = IecLanguage.FBD;
+    private boolean eStopPage = false;
+    private int stThreadId = 2;
+    private int stOrder = 10;
+    private String stCode = "";
+
     private final List<BlockInstance> blocks = new ArrayList<>();
     private final List<Wire> wires = new ArrayList<>();
     private final List<Bus> busses = new ArrayList<>();
     private final List<GraphicElement> graphics = new ArrayList<>();
     private final List<LadderRung> rungs = new ArrayList<>();
+    private final List<StVariable> stVariables = new ArrayList<>();
 
     public Page(String name) {
         this(name, IecLanguage.FBD);
@@ -20,15 +26,21 @@ public class Page {
     public Page(String name, IecLanguage language) {
         this.name = name;
         this.language = (language == null) ? IecLanguage.FBD : language;
+        this.eStopPage = (name != null && name.startsWith("!"));
     }
 
     public Page copy() {
         Page p = new Page(name, language);
+        p.eStopPage = this.eStopPage;
+        p.stThreadId = this.stThreadId;
+        p.stOrder = this.stOrder;
+        p.stCode = this.stCode;
         for (BlockInstance b : blocks) p.blocks.add(b.copy());
         for (Wire w : wires) p.wires.add(w.copy());
         for (Bus b : busses) p.busses.add(b.copy());
         for (GraphicElement g : graphics) p.graphics.add(g.copy());
         for (LadderRung r : rungs) p.rungs.add(r.copy());
+        for (StVariable v : stVariables) p.stVariables.add(v.copy());
         return p;
     }
 
@@ -38,6 +50,9 @@ public class Page {
 
     public void setName(String name) {
         this.name = (name == null || name.isBlank()) ? "Page" : name.trim();
+        if (this.name.startsWith("!")) {
+            this.eStopPage = true;
+        }
     }
 
     public IecLanguage getLanguage() {
@@ -57,7 +72,49 @@ public class Page {
 
     public String getCleanName() {
         if (name == null) return "";
-        return name.startsWith("*") ? name.substring(1).trim() : name.trim();
+        if (name.startsWith("*") || name.startsWith("!")) {
+            return name.substring(1).trim();
+        }
+        return name.trim();
+    }
+
+    /**
+     * A page is a dedicated E-Stop Handler Page if marked or if its name begins with '!'.
+     */
+    public boolean isEStopPage() {
+        return eStopPage || (name != null && name.startsWith("!"));
+    }
+
+    public void setEStopPage(boolean eStopPage) {
+        this.eStopPage = eStopPage;
+    }
+
+    public int getStThreadId() {
+        return stThreadId;
+    }
+
+    public void setStThreadId(int stThreadId) {
+        this.stThreadId = Math.clamp(stThreadId, 1, 5);
+    }
+
+    public int getStOrder() {
+        return stOrder;
+    }
+
+    public void setStOrder(int stOrder) {
+        this.stOrder = Math.max(0, stOrder);
+    }
+
+    public String getStCode() {
+        return stCode;
+    }
+
+    public void setStCode(String stCode) {
+        this.stCode = stCode == null ? "" : stCode;
+    }
+
+    public List<StVariable> getStVariables() {
+        return stVariables;
     }
 
     public List<BlockInstance> getBlocks() {

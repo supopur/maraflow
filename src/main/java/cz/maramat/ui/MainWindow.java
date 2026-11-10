@@ -17,6 +17,7 @@ import cz.maramat.sim.SimulationEngine;
 import cz.maramat.ui.canvas.FbdCanvas;
 import cz.maramat.ui.canvas.LadderCanvas;
 import cz.maramat.ui.canvas.PageTabBar;
+import cz.maramat.ui.canvas.StEditorPanel;
 import cz.maramat.ui.dialogs.CommunicationDialog;
 import cz.maramat.ui.dialogs.CompilationResultsDialog;
 import cz.maramat.ui.dialogs.NewProjectWizardDialog;
@@ -67,6 +68,7 @@ public class MainWindow extends JFrame {
     private static final String CARD_IDE = "IDE";
     private static final String EDITOR_CARD_FBD = "FBD";
     private static final String EDITOR_CARD_LD = "LD";
+    private static final String EDITOR_CARD_ST = "ST";
 
     private Project project;
     private boolean projectOpen = false;
@@ -95,6 +97,7 @@ public class MainWindow extends JFrame {
     private final JPanel canvasCardPanel = new JPanel(canvasCardLayout);
     private final FbdCanvas fbdCanvas;
     private final LadderCanvas ladderCanvas;
+    private final StEditorPanel stEditorPanel;
 
     private JCheckBoxMenuItem windowLibraryItem;
     private JCheckBoxMenuItem windowPlcLogItem;
@@ -157,11 +160,15 @@ public class MainWindow extends JFrame {
         );
         libraryDock.setPreferredSize(new Dimension(215, 0));
 
-        // 2. Build Main FBD + Ladder (LD) Editor Section (Center)
+        // 2. Build Main FBD + Ladder (LD) + Structured Text (ST) Editor Section (Center)
         editorToolbar = new EditorToolbar(undoManager, createToolbarListener());
         FbdCanvas.CanvasEditListener editListener = createCanvasEditListener();
         fbdCanvas = new FbdCanvas(project, simEngine, editListener);
         ladderCanvas = new LadderCanvas(project, simEngine, editListener);
+        stEditorPanel = new StEditorPanel(project, project.getPages().getFirst(), () -> {
+            libraryTreePanel.rebuildTree();
+            refreshTitles();
+        });
 
         JScrollPane fbdScroll = new JScrollPane(fbdCanvas);
         fbdScroll.setBorder(null);
@@ -175,6 +182,7 @@ public class MainWindow extends JFrame {
 
         canvasCardPanel.add(fbdScroll, EDITOR_CARD_FBD);
         canvasCardPanel.add(ldScroll, EDITOR_CARD_LD);
+        canvasCardPanel.add(stEditorPanel, EDITOR_CARD_ST);
 
         pageTabBar = new PageTabBar(project, new PageTabBar.PageTabListener() {
             @Override
@@ -292,10 +300,14 @@ public class MainWindow extends JFrame {
         libraryTreePanel.setActivePage(activePage);
         fbdCanvas.setProjectAndPage(project, idx);
         ladderCanvas.setProjectAndPage(project, idx);
+        stEditorPanel.setPage(project, activePage);
         editorToolbar.setActivePageLanguage(activePage.getLanguage());
         if (activePage.getLanguage() == IecLanguage.LD) {
             canvasCardLayout.show(canvasCardPanel, EDITOR_CARD_LD);
             ladderCanvas.requestFocusInWindow();
+        } else if (activePage.getLanguage() == IecLanguage.ST) {
+            canvasCardLayout.show(canvasCardPanel, EDITOR_CARD_ST);
+            stEditorPanel.requestFocusInWindow();
         } else {
             canvasCardLayout.show(canvasCardPanel, EDITOR_CARD_FBD);
             fbdCanvas.requestFocusInWindow();
@@ -316,8 +328,12 @@ public class MainWindow extends JFrame {
         if (ladderCanvas != null) {
             ladderCanvas.repaint();
         }
+        if (stEditorPanel != null) {
+            stEditorPanel.refreshRuntimeValues();
+        }
         if (editorToolbar != null) {
             editorToolbar.updateSimState(simEngine.getState());
+            editorToolbar.updateEStopButtonVisual(simEngine.isEStopActive());
         }
     }
 
@@ -534,13 +550,21 @@ public class MainWindow extends JFrame {
         addLdPageItem.addActionListener(e -> pageTabBar.addNewPageWithLanguage(false, IecLanguage.LD));
         projectMenu.add(addLdPageItem);
 
+        JMenuItem addStPageItem = new JMenuItem("Add Structured Text (ST) Page...");
+        addStPageItem.addActionListener(e -> pageTabBar.addNewPageWithLanguage(false, IecLanguage.ST));
+        projectMenu.add(addStPageItem);
+
         JMenuItem addMacroItem = new JMenuItem("Add Macro...");
         addMacroItem.addActionListener(e -> pageTabBar.addNewPage(true));
         projectMenu.add(addMacroItem);
 
+        JMenuItem addEStopItem = new JMenuItem("Add Dedicated E-Stop Safety Page (!EStop)...");
+        addEStopItem.addActionListener(e -> pageTabBar.addDedicatedEStopPage());
+        projectMenu.add(addEStopItem);
+
         projectMenu.addSeparator();
 
-        JMenuItem plcCfgItem = new JMenuItem("Unit / PLC Configuration...");
+        JMenuItem plcCfgItem = new JMenuItem("Unit / PLC & Safety E-Stop Configuration...");
         plcCfgItem.addActionListener(e -> actionOpenPlcConfig());
         projectMenu.add(plcCfgItem);
         bar.add(projectMenu);
@@ -820,6 +844,29 @@ public class MainWindow extends JFrame {
             @Override
             public void onLadderAddParallelBranch() {
                 ladderCanvas.addParallelBranchOnSelectedRung();
+            }
+
+            @Override
+            public void onEStopToggled(boolean mushroomPressed) {
+                simEngine.setManualEStopButtonPressed(mushroomPressed);
+                if (mushroomPressed) {
+                    plcLogPanel.appendLog("SAFETY TRIP: Emergency Stop (E-Stop) mushroom button activated! Mode: "
+                            + project.getEStopConfig().getMode().getDisplayName());
+                } else {
+                    plcLogPanel.appendLog("Emergency Stop mushroom button released.");
+                }
+            }
+
+            @Override
+            public void onEStopManualReset() {
+                simEngine.manualResetEStop();
+                plcLogPanel.appendLog("Safety E-Stop latch manually reset.");
+            }
+
+            @Override
+            public void onFireInterruptPulse() {
+                simEngine.fireSimulatedInterruptPulse();
+                plcLogPanel.appendLog("Fired simulated hardware Interrupt pulse to all Main.Execution.Interrupt blocks.");
             }
         };
     }
@@ -1134,8 +1181,15 @@ public class MainWindow extends JFrame {
 
     private void actionOpenPlcConfig() {
         if (!projectOpen) return;
-        PlcConfigDialog dlg = new PlcConfigDialog(this, project);
+        PlcConfigDialog dlg = new PlcConfigDialog(this, project, page -> {
+            pageTabBar.rebuildTabs();
+            int idx = project.getPages().indexOf(page);
+            if (idx >= 0) {
+                pageTabBar.setActivePageIndex(idx);
+            }
+        });
         dlg.setVisible(true);
+        pageTabBar.rebuildTabs();
         refreshTitles();
     }
 

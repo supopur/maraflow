@@ -111,6 +111,12 @@ public class BlockInstance {
         } else if (definitionId.startsWith("Comm.SPI")) {
             customProperties.put("CsPin", "PB12");
             customProperties.put("BitWidth", "8");
+        } else if (definitionId.equals("Main.Execution.Interrupt")) {
+            customProperties.put("InterruptSource", "TIM_IC1 (Ultrasonic Echo)");
+            customProperties.put("TriggerEdge", "RISING");
+            customProperties.put("CaptureMode", "PULSE_WIDTH_US");
+            customProperties.put("LatchPolicy", "HOLD_FIRST_UNTIL_RST");
+            customProperties.put("SimPulseValue", "1160");
         } else if (definitionId.startsWith("Main.Execution.")) {
             customProperties.put("RegisterName", "REG_0");
             customProperties.put("TriggerMode", "Continuous (While En=1)");
@@ -216,7 +222,7 @@ public class BlockInstance {
         for (PinInstance p : outputs) {
             String sn = p.getShortName();
             if (!sn.equals("Ok") && !sn.equals("Err") && !sn.equals("Oob") && !sn.equals("Rdy") && !sn.equals("Sts")
-                    && !definitionId.startsWith("Main.Comparators.")) {
+                    && !sn.equals("Flg") && !definitionId.startsWith("Main.Comparators.")) {
                 p.setDataType(newType);
             }
         }

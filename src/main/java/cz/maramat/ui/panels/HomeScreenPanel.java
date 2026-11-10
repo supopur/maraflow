@@ -59,10 +59,18 @@ public class HomeScreenPanel extends JPanel {
         JButton newProjBtn = createCompactButton("New Project... (Ctrl+N)");
         newProjBtn.addActionListener(e -> listener.onNewProjectWizard(IecLanguage.FBD));
 
+        JButton newLdBtn = createCompactButton("New Ladder (LD) Project...");
+        newLdBtn.addActionListener(e -> listener.onNewProjectWizard(IecLanguage.LD));
+
+        JButton newStBtn = createCompactButton("New Structured Text (ST)...");
+        newStBtn.addActionListener(e -> listener.onNewProjectWizard(IecLanguage.ST));
+
         JButton openBtn = createCompactButton("Open Project... (Ctrl+O)");
         openBtn.addActionListener(e -> listener.onOpenProjectDialog());
 
         topBar.add(newProjBtn);
+        topBar.add(newLdBtn);
+        topBar.add(newStBtn);
         topBar.add(openBtn);
         add(topBar, BorderLayout.NORTH);
 

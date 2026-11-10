@@ -69,6 +69,11 @@ public class EditorToolbar extends JToolBar {
         default void onLadderInsertContact(LadderElement.Kind contactKind) {}
         default void onLadderInsertCoil(LadderElement.Kind coilKind) {}
         default void onLadderAddParallelBranch() {}
+
+        // Safety E-Stop & Hardware Interrupt simulation controls
+        default void onEStopToggled(boolean mushroomPressed) {}
+        default void onEStopManualReset() {}
+        default void onFireInterruptPulse() {}
     }
 
     private final ToolbarListener listener;
@@ -98,6 +103,7 @@ public class EditorToolbar extends JToolBar {
     private JButton playBtn;
     private JButton pauseBtn;
     private JButton stopBtn;
+    private JToggleButton eStopBtn;
     private JButton watchBtn;
     private JComboBox<PlcThread> threadCombo;
 
@@ -293,6 +299,42 @@ public class EditorToolbar extends JToolBar {
         stopBtn.addActionListener(e -> listener.onSimStop());
         add(stopBtn);
 
+        add(Box.createHorizontalStrut(3));
+        eStopBtn = new JToggleButton("E-STOP", VectorIcons.eStopIcon());
+        eStopBtn.setFocusable(false);
+        eStopBtn.setFont(new Font("SansSerif", Font.BOLD, 10));
+        eStopBtn.setMargin(new Insets(2, 5, 2, 5));
+        eStopBtn.setToolTipText("Emergency Stop Mushroom Button (Click to Trip/Release E-Stop, Right-Click to Manual Reset or Configure)");
+        eStopBtn.addActionListener(e -> {
+            updateEStopButtonVisual(eStopBtn.isSelected());
+            listener.onEStopToggled(eStopBtn.isSelected());
+        });
+        eStopBtn.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (SwingUtilities.isRightMouseButton(e)) {
+                    JPopupMenu pm = new JPopupMenu();
+                    JMenuItem rstItem = new JMenuItem("Manual Reset E-Stop Latch");
+                    rstItem.addActionListener(ev -> {
+                        eStopBtn.setSelected(false);
+                        updateEStopButtonVisual(false);
+                        listener.onEStopManualReset();
+                    });
+                    JMenuItem cfgItem = new JMenuItem("Configure E-Stop Inputs & Mode...");
+                    cfgItem.addActionListener(ev -> listener.onPlcConfig());
+                    pm.add(rstItem);
+                    pm.addSeparator();
+                    pm.add(cfgItem);
+                    pm.show(eStopBtn, 0, eStopBtn.getHeight());
+                }
+            }
+        });
+        add(eStopBtn);
+
+        JButton intPulseBtn = createActionBtn(VectorIcons.interruptPulseIcon(), "Fire Simulated Hardware Interrupt Pulse (Triggers Main.Execution.Interrupt blocks)");
+        intPulseBtn.addActionListener(e -> listener.onFireInterruptPulse());
+        add(intPulseBtn);
+
         add(Box.createHorizontalStrut(4));
         String[] speedLabels = {
                 "0.01x", "0.1x", "0.25x", "0.5x", "1x (Real-time)",
@@ -382,15 +424,23 @@ public class EditorToolbar extends JToolBar {
     }
 
     public void setActivePageLanguage(IecLanguage language) {
+        boolean isFbd = (language == null || language == IecLanguage.FBD);
         boolean isLd = (language == IecLanguage.LD);
         for (JComponent c : fbdToolButtons) {
-            c.setVisible(!isLd);
+            c.setVisible(isFbd);
         }
         for (JComponent c : ladderToolButtons) {
             c.setVisible(isLd);
         }
         revalidate();
         repaint();
+    }
+
+    public void updateEStopButtonVisual(boolean tripped) {
+        if (eStopBtn == null) return;
+        eStopBtn.setBackground(tripped ? new Color(0xD3, 0x2F, 0x2F) : null);
+        eStopBtn.setForeground(tripped ? Color.WHITE : new Color(0x88, 0x11, 0x11));
+        eStopBtn.setText(tripped ? "E-STOP TRIPPED!" : "E-STOP");
     }
 
     private void installPhotoshopFlyout(JToggleButton btn, GraphicElement.Kind[] kinds, boolean isPolygonGroup) {

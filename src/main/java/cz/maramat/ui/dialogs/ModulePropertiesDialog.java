@@ -229,6 +229,41 @@ public class ModulePropertiesDialog extends JDialog {
                     trigBox.setSelectedItem(v);
                     addRow(p, gbc, row++, "Trigger Mode:", trigBox);
                     specificControls.put(k, trigBox);
+                } else if (k.equals("InterruptSource")) {
+                    JComboBox<String> srcBox = new JComboBox<>(new String[]{
+                            "TIM_IC1 (Ultrasonic Echo)",
+                            "TIM_IC2 (Pulse Capture)",
+                            "EXTI_DI0", "EXTI_DI1", "EXTI_DI2", "EXTI_DI3",
+                            "EXTI_DI4", "EXTI_DI5", "EXTI_DI6", "EXTI_DI7",
+                            "UART_RX_IDLE", "ADC_WATCHDOG"
+                    });
+                    srcBox.setEditable(true);
+                    srcBox.setSelectedItem(v);
+                    addRow(p, gbc, row++, "Interrupt Source:", srcBox);
+                    specificControls.put(k, srcBox);
+                } else if (k.equals("TriggerEdge")) {
+                    JComboBox<String> edgeBox = new JComboBox<>(new String[]{"RISING", "FALLING", "BOTH"});
+                    edgeBox.setSelectedItem(v);
+                    addRow(p, gbc, row++, "Trigger Edge:", edgeBox);
+                    specificControls.put(k, edgeBox);
+                } else if (k.equals("CaptureMode")) {
+                    JComboBox<String> capBox = new JComboBox<>(new String[]{
+                            "GPIO_STATE (0/1)",
+                            "PULSE_WIDTH_US",
+                            "PERIOD_US",
+                            "EDGE_COUNT"
+                    });
+                    capBox.setSelectedItem(v);
+                    addRow(p, gbc, row++, "Capture Mode:", capBox);
+                    specificControls.put(k, capBox);
+                } else if (k.equals("LatchPolicy")) {
+                    JComboBox<String> latchBox = new JComboBox<>(new String[]{
+                            "HOLD_FIRST_UNTIL_RST",
+                            "OVERWRITE_LATEST"
+                    });
+                    latchBox.setSelectedItem(v);
+                    addRow(p, gbc, row++, "Latch Policy:", latchBox);
+                    specificControls.put(k, latchBox);
                 } else if (k.equals("Channel") && defId.startsWith("IO.")) {
                     String[] channels = buildChannelOptionsForBlock(defId);
                     JComboBox<String> chBox = new JComboBox<>(channels);

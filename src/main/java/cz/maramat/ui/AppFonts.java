@@ -55,8 +55,28 @@ public final class AppFonts {
         return new Font(UI_FONT_FAMILY, style, Math.round(size));
     }
 
+    public static Font uiPlain() {
+        return ui(Font.PLAIN, scaled(11));
+    }
+
+    public static Font uiBold() {
+        return ui(Font.BOLD, scaled(11));
+    }
+
+    public static Font uiSmall() {
+        return ui(Font.PLAIN, scaled(10));
+    }
+
     public static Font mono(int style, float size) {
         return new Font(MONO_FONT_FAMILY, style, Math.round(size));
+    }
+
+    public static Font canvasMono(float baseSize) {
+        return mono(Font.PLAIN, scaled(Math.round(baseSize)));
+    }
+
+    public static Font canvasMonoBold(float baseSize) {
+        return mono(Font.BOLD, scaled(Math.round(baseSize)));
     }
 
     public static int scaled(int basePx) {

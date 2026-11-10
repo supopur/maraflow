@@ -465,4 +465,44 @@ public final class VectorIcons {
             }
         };
     }
+
+    public static Icon eStopIcon() {
+        return new ScaledIcon(16, 16) {
+            @Override
+            protected void paintLogical(Component c, Graphics2D g2) {
+                // Yellow safety collar + Red mushroom head
+                g2.setColor(new Color(0xF1, 0xC4, 0x0F));
+                g2.fillRect(2, 11, 12, 4);
+                g2.setColor(new Color(0x7D, 0x66, 0x08));
+                g2.drawRect(2, 11, 12, 4);
+
+                g2.setColor(new Color(0x55, 0x55, 0x55));
+                g2.fillRect(6, 8, 4, 3);
+
+                g2.setColor(new Color(0xD3, 0x2F, 0x2F));
+                g2.fillArc(1, 1, 14, 12, 0, 180);
+                g2.setColor(new Color(0x7F, 0x00, 0x00));
+                g2.drawArc(1, 1, 14, 12, 0, 180);
+                g2.drawLine(1, 7, 15, 7);
+            }
+        };
+    }
+
+    public static Icon interruptPulseIcon() {
+        return new ScaledIcon(16, 16) {
+            @Override
+            protected void paintLogical(Component c, Graphics2D g2) {
+                g2.setColor(new Color(0x8E, 0x24, 0xAA));
+                g2.setStroke(new BasicStroke(1.5f));
+                g2.drawLine(1, 12, 5, 12);
+                g2.drawLine(5, 12, 5, 3);
+                g2.drawLine(5, 3, 11, 3);
+                g2.drawLine(11, 3, 11, 12);
+                g2.drawLine(11, 12, 15, 12);
+                // Rising edge arrow on x=5
+                g2.drawLine(3, 6, 5, 3);
+                g2.drawLine(7, 6, 5, 3);
+            }
+        };
+    }
 }

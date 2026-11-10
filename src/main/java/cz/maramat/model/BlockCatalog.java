@@ -327,7 +327,7 @@ public final class BlockCatalog {
                 ),
                 3, 8, false, false, 0.22
         ));
-        // Execution (Virtual Registers)
+        // Execution (Virtual Registers & Hardware Interrupts)
         reg(new BlockDefinition(
                 "Main.Execution.ReadReg", "Main/Execution", "ReadReg", "RdReg",
                 List.of(enPin()),
@@ -339,6 +339,32 @@ public final class BlockCatalog {
                 List.of(enPin(), pin("In", "Value To Store", DataType.INT, "0")),
                 List.of(pin("Out", "Stored Register Value", DataType.INT, "0")),
                 3, 2, false, true, 0.18
+        ));
+        reg(new BlockDefinition(
+                "Main.Execution.Interrupt", "Main/Execution", "Interrupt", "IntCap",
+                List.of(
+                        enPin(),
+                        pin("Rst", "Reset Latched Flag (End of Scan)", DataType.BOOL, "0")
+                ),
+                List.of(
+                        pin("Val", "Captured Event Value (GPIO / Pulse us / Count)", DataType.INT, "0"),
+                        pin("Flg", "Interrupt Occurred Since Last Rst", DataType.BOOL, "0")
+                ),
+                4, 3, false, true, 0.25
+        ));
+        // Safety PLC / Emergency Stop Block
+        reg(new BlockDefinition(
+                "Main.Safety.EStop", "Main/Safety", "EStop", "EStop",
+                List.of(
+                        enPin(),
+                        pin("Rst", "Manual Safety Reset (Rising Edge)", DataType.BOOL, "0")
+                ),
+                List.of(
+                        pin("Safe", "Safety OK (1=Run, 0=Tripped)", DataType.BOOL, "1"),
+                        pin("Trip", "E-Stop Tripped Active", DataType.BOOL, "0"),
+                        pin("Src", "Tripped Channel Bitmask", DataType.INT, "0")
+                ),
+                4, 3, false, false, 0.20
         ));
         // Filters
         reg(new BlockDefinition(
@@ -579,14 +605,24 @@ public final class BlockCatalog {
         List<PinSpec> ins = new ArrayList<>();
         List<PinSpec> outs = new ArrayList<>();
         ins.add(enPin());
-        for (BlockInstance b : macroPage.getBlocks()) {
-            if ("Macro.MacroIn".equals(b.getDefinitionId())) {
-                for (PinInstance outPin : b.getOutputs()) {
-                    ins.add(pin(outPin.getShortName(), outPin.getFullName(), outPin.getDataType(), outPin.getConstantValue()));
+        if (macroPage.getLanguage() == IecLanguage.ST) {
+            for (StVariable v : macroPage.getStVariables()) {
+                if (v.getScope() == StVariable.Scope.VAR_INPUT) {
+                    ins.add(pin(v.getName(), v.getDescription().isEmpty() ? v.getName() : v.getDescription(), v.getDataType(), v.getInitialValue()));
+                } else if (v.getScope() == StVariable.Scope.VAR_OUTPUT) {
+                    outs.add(pin(v.getName(), v.getDescription().isEmpty() ? v.getName() : v.getDescription(), v.getDataType(), v.getInitialValue()));
                 }
-            } else if ("Macro.MacroOut".equals(b.getDefinitionId())) {
-                for (PinInstance inPin : b.getInputs()) {
-                    outs.add(pin(inPin.getShortName(), inPin.getFullName(), inPin.getDataType(), inPin.getConstantValue()));
+            }
+        } else {
+            for (BlockInstance b : macroPage.getBlocks()) {
+                if ("Macro.MacroIn".equals(b.getDefinitionId())) {
+                    for (PinInstance outPin : b.getOutputs()) {
+                        ins.add(pin(outPin.getShortName(), outPin.getFullName(), outPin.getDataType(), outPin.getConstantValue()));
+                    }
+                } else if ("Macro.MacroOut".equals(b.getDefinitionId())) {
+                    for (PinInstance inPin : b.getInputs()) {
+                        outs.add(pin(inPin.getShortName(), inPin.getFullName(), inPin.getDataType(), inPin.getConstantValue()));
+                    }
                 }
             }
         }

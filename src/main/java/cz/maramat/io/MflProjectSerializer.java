@@ -4,6 +4,7 @@ import cz.maramat.model.BlockCatalog;
 import cz.maramat.model.BlockDefinition;
 import cz.maramat.model.BlockInstance;
 import cz.maramat.model.DataType;
+import cz.maramat.model.EStopConfig;
 import cz.maramat.model.GraphicElement;
 import cz.maramat.model.HeaderColor;
 import cz.maramat.model.IecLanguage;
@@ -13,6 +14,7 @@ import cz.maramat.model.LadderRung;
 import cz.maramat.model.Page;
 import cz.maramat.model.PinInstance;
 import cz.maramat.model.Project;
+import cz.maramat.model.StVariable;
 import cz.maramat.model.Wire;
 
 import java.awt.Color;
@@ -39,6 +41,21 @@ public final class MflProjectSerializer {
         props.setProperty("project.defaultThreadId", Integer.toString(project.getDefaultThreadId()));
         props.setProperty("project.primaryLanguage", project.getPrimaryLanguage().name());
 
+        EStopConfig ecfg = project.getEStopConfig();
+        props.setProperty("project.estop.enabled", Boolean.toString(ecfg.isEnabled()));
+        props.setProperty("project.estop.mode", ecfg.getMode().name());
+        props.setProperty("project.estop.pageName", ecfg.getDedicatedEStopPageName());
+        props.setProperty("project.estop.manualReset", Boolean.toString(ecfg.isRequireManualReset()));
+        props.setProperty("project.estop.ruleCount", Integer.toString(ecfg.getInputRules().size()));
+        for (int ri = 0; ri < ecfg.getInputRules().size(); ri++) {
+            EStopConfig.InputRule r = ecfg.getInputRules().get(ri);
+            String rp = "project.estop.rule." + ri + ".";
+            props.setProperty(rp + "channel", r.getInputChannel());
+            props.setProperty(rp + "activeLow", Boolean.toString(r.isActiveLow()));
+            props.setProperty(rp + "enabled", Boolean.toString(r.isEnabled()));
+            props.setProperty(rp + "desc", r.getDescription());
+        }
+
         int tagIdx = 0;
         for (Map.Entry<String, DataType> tag : project.getSymbolicTags().entrySet()) {
             props.setProperty("project.tag." + tagIdx + ".name", tag.getKey());
@@ -56,6 +73,20 @@ public final class MflProjectSerializer {
             String pfx = "page." + pi + ".";
             props.setProperty(pfx + "name", page.getName());
             props.setProperty(pfx + "language", page.getLanguage().name());
+            props.setProperty(pfx + "eStopPage", Boolean.toString(page.isEStopPage()));
+            props.setProperty(pfx + "stThreadId", Integer.toString(page.getStThreadId()));
+            props.setProperty(pfx + "stOrder", Integer.toString(page.getStOrder()));
+            props.setProperty(pfx + "stCode", page.getStCode());
+            props.setProperty(pfx + "stVarCount", Integer.toString(page.getStVariables().size()));
+            for (int vi = 0; vi < page.getStVariables().size(); vi++) {
+                StVariable sv = page.getStVariables().get(vi);
+                String vp = pfx + "stVar." + vi + ".";
+                props.setProperty(vp + "scope", sv.getScope().name());
+                props.setProperty(vp + "name", sv.getName());
+                props.setProperty(vp + "type", sv.getDataType().name());
+                props.setProperty(vp + "init", sv.getInitialValue());
+                props.setProperty(vp + "desc", sv.getDescription());
+            }
             props.setProperty(pfx + "blockCount", Integer.toString(page.getBlocks().size()));
 
             for (int bi = 0; bi < page.getBlocks().size(); bi++) {
@@ -211,6 +242,28 @@ public final class MflProjectSerializer {
         project.setDefaultThreadId(Integer.parseInt(props.getProperty("project.defaultThreadId", "2")));
         project.setPrimaryLanguage(IecLanguage.fromCode(props.getProperty("project.primaryLanguage", "FBD")));
 
+        EStopConfig ecfg = project.getEStopConfig();
+        ecfg.setEnabled(Boolean.parseBoolean(props.getProperty("project.estop.enabled", "true")));
+        try {
+            ecfg.setMode(EStopConfig.Mode.valueOf(props.getProperty("project.estop.mode", EStopConfig.Mode.DISABLE_OUTPUTS_AND_STOP.name())));
+        } catch (IllegalArgumentException ignored) {}
+        ecfg.setDedicatedEStopPageName(props.getProperty("project.estop.pageName", "!EStop"));
+        ecfg.setRequireManualReset(Boolean.parseBoolean(props.getProperty("project.estop.manualReset", "true")));
+        String ruleCountStr = props.getProperty("project.estop.ruleCount");
+        if (ruleCountStr != null) {
+            int rCount = Integer.parseInt(ruleCountStr);
+            ecfg.getInputRules().clear();
+            for (int ri = 0; ri < rCount; ri++) {
+                String rp = "project.estop.rule." + ri + ".";
+                ecfg.getInputRules().add(new EStopConfig.InputRule(
+                        props.getProperty(rp + "channel", "DI0"),
+                        Boolean.parseBoolean(props.getProperty(rp + "activeLow", "true")),
+                        Boolean.parseBoolean(props.getProperty(rp + "enabled", "true")),
+                        props.getProperty(rp + "desc", "")
+                ));
+            }
+        }
+
         int tagCount = Integer.parseInt(props.getProperty("project.tagCount", "0"));
         if (tagCount > 0) {
             project.getSymbolicTags().clear();
@@ -230,6 +283,29 @@ public final class MflProjectSerializer {
             String pfx = "page." + pi + ".";
             IecLanguage lang = IecLanguage.fromCode(props.getProperty(pfx + "language", "FBD"));
             Page page = new Page(props.getProperty(pfx + "name", "Page " + (pi + 1)), lang);
+            page.setEStopPage(Boolean.parseBoolean(props.getProperty(pfx + "eStopPage", Boolean.toString(page.isEStopPage()))));
+            page.setStThreadId(Integer.parseInt(props.getProperty(pfx + "stThreadId", "2")));
+            page.setStOrder(Integer.parseInt(props.getProperty(pfx + "stOrder", "10")));
+            page.setStCode(props.getProperty(pfx + "stCode", ""));
+            int stVarCount = Integer.parseInt(props.getProperty(pfx + "stVarCount", "0"));
+            for (int vi = 0; vi < stVarCount; vi++) {
+                String vp = pfx + "stVar." + vi + ".";
+                StVariable.Scope scope = StVariable.Scope.VAR;
+                try {
+                    scope = StVariable.Scope.valueOf(props.getProperty(vp + "scope", "VAR"));
+                } catch (IllegalArgumentException ignored) {}
+                DataType dt = DataType.INT;
+                try {
+                    dt = DataType.valueOf(props.getProperty(vp + "type", "INT"));
+                } catch (IllegalArgumentException ignored) {}
+                page.getStVariables().add(new StVariable(
+                        scope,
+                        props.getProperty(vp + "name", "Var" + (vi + 1)),
+                        dt,
+                        props.getProperty(vp + "init", "0"),
+                        props.getProperty(vp + "desc", "")
+                ));
+            }
 
             int blockCount = Integer.parseInt(props.getProperty(pfx + "blockCount", "0"));
             for (int bi = 0; bi < blockCount; bi++) {

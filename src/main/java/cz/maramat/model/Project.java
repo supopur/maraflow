@@ -4,8 +4,10 @@ import java.awt.Point;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class Project {
     public static final String VERSION = "1.0.0";
@@ -18,6 +20,7 @@ public class Project {
     private String targetPlatform = "STM32F407-Maraflow-Std";
     private int defaultThreadId = 2;
     private IecLanguage primaryLanguage = IecLanguage.FBD;
+    private final EStopConfig eStopConfig = new EStopConfig();
     private final List<Page> pages = new ArrayList<>();
     private final Map<String, DataType> symbolicTags = new LinkedHashMap<>();
     private final Map<String, String> symbolicTagDescriptions = new LinkedHashMap<>();
@@ -40,6 +43,25 @@ public class Project {
             r1.getMainElements().add(new LadderElement(LadderElement.Kind.NO_CONTACT, "DI0"));
             r1.getCoils().add(new LadderElement(LadderElement.Kind.NORMAL_COIL, "DO0"));
             p1.getRungs().add(r1);
+        } else if (this.primaryLanguage == IecLanguage.ST) {
+            p1.setStThreadId(this.defaultThreadId);
+            p1.setStOrder(10);
+            p1.getStVariables().add(new StVariable(StVariable.Scope.VAR, "Counter", DataType.INT, "0", "Cycle scan counter"));
+            p1.getStVariables().add(new StVariable(StVariable.Scope.VAR, "DistanceCm", DataType.FLOAT, "0", "Calculated distance (cm)"));
+            p1.setStCode("""
+                    VAR
+                        Counter : INT := 0; // Cycle scan counter
+                        DistanceCm : FLOAT := 0; // Calculated distance (cm)
+                    END_VAR
+
+                    // IEC 61131-3 Structured Text (ST) Page
+                    Counter := Counter + 1;
+                    IF DI0 THEN
+                        DO0 := TRUE;
+                    ELSE
+                        DO0 := FALSE;
+                    END_IF;
+                    """);
         }
         pages.add(p1);
     }
@@ -101,7 +123,6 @@ public class Project {
         page1.setName("Main_LD");
         page1.getRungs().clear();
 
-        // Rung 1: Classic Start/Stop Motor Seal-In Circuit with Parallel Branch
         LadderRung r1 = new LadderRung(2, 10, "Motor Start/Stop Seal-In Latch (DI0=Start, DI1=Stop NC, M0=Seal)");
         r1.getMainElements().add(new LadderElement(LadderElement.Kind.NO_CONTACT, "DI0"));
         r1.getMainElements().add(new LadderElement(LadderElement.Kind.NC_CONTACT, "DI1"));
@@ -114,19 +135,147 @@ public class Project {
         r1.getCoils().add(new LadderElement(LadderElement.Kind.NORMAL_COIL, "DO0"));
         page1.getRungs().add(r1);
 
-        // Rung 2: Write Register when Motor M0 is running
-        LadderRung r2 = new LadderRung(2, 20, "Write Status / Analog Value to REG_0 when Motor M0 is active");
+        LadderRung r2 = new LadderRung(2, 20, "Cooling Fan Delay Timer (Starts 2000ms after MotorRun M0)");
         r2.getMainElements().add(new LadderElement(LadderElement.Kind.NO_CONTACT, "M0"));
-        r2.getCoils().add(new LadderElement(LadderElement.Kind.ANALOG_COIL, "100", "REG_0"));
+
+        BlockDefinition tonDef = BlockCatalog.getById("Main.Timers.Timer");
+        if (tonDef != null) {
+            BlockInstance tonBlock = new BlockInstance(tonDef, "TON_Fan1", 0, 0, 2, 25);
+            tonBlock.getInputs().get(1).setConstantValue("M0");
+            tonBlock.getInputs().get(2).setConstantValue("2000");
+            r2.getMainElements().add(new LadderElement(tonBlock));
+        }
+        r2.getCoils().add(new LadderElement(LadderElement.Kind.NORMAL_COIL, "DO1"));
         page1.getRungs().add(r2);
 
-        // Rung 3: Alarm Reset Rung
-        LadderRung r3 = new LadderRung(2, 30, "Fault Reset Button (DI2 Rising Edge unlatches DO2)");
-        r3.getMainElements().add(new LadderElement(LadderElement.Kind.POS_EDGE_CONTACT, "DI2"));
-        r3.getCoils().add(new LadderElement(LadderElement.Kind.RESET_COIL, "DO2"));
+        LadderRung r3 = new LadderRung(2, 30, "Over-Temperature Fault Latch (AI0 > 500 sets HighTempAlarm / DO2, DI2 resets)");
+        BlockDefinition gtDef = BlockCatalog.getById("Main.Comparators.GT");
+        if (gtDef != null) {
+            BlockInstance gtBlock = new BlockInstance(gtDef, "GT_Temp1", 0, 0, 2, 35);
+            gtBlock.getInputs().get(1).setConstantValue("AI0");
+            gtBlock.getInputs().get(2).setConstantValue("500");
+            r3.getMainElements().add(new LadderElement(gtBlock));
+        }
+        r3.getCoils().add(new LadderElement(LadderElement.Kind.SET_COIL, "DO2"));
         page1.getRungs().add(r3);
 
+        LadderRung r4 = new LadderRung(2, 40, "Fault Reset Button (DI2 Rising Edge unlatches DO2)");
+        r4.getMainElements().add(new LadderElement(LadderElement.Kind.POS_EDGE_CONTACT, "DI2"));
+        r4.getCoils().add(new LadderElement(LadderElement.Kind.RESET_COIL, "DO2"));
+        page1.getRungs().add(r4);
+
+        // Also add a dedicated !EStop page in Ladder so Mode 2 E-Stop can be tested right away
+        Page estopPage = new Page("!EStop", IecLanguage.LD);
+        estopPage.setEStopPage(true);
+        LadderRung er1 = new LadderRung(4, 10, "Dedicated E-Stop Handler: Disable Drive DO0, Turn On Fault Beacon DO7");
+        er1.getMainElements().add(new LadderElement(LadderElement.Kind.NO_CONTACT, "TRUE"));
+        er1.getCoils().add(new LadderElement(LadderElement.Kind.RESET_COIL, "DO0"));
+        er1.getCoils().add(new LadderElement(LadderElement.Kind.RESET_COIL, "M0"));
+        er1.getCoils().add(new LadderElement(LadderElement.Kind.NORMAL_COIL, "DO7"));
+        estopPage.getRungs().add(er1);
+        p.getPages().add(estopPage);
+
         return p;
+    }
+
+    public static Project createDefaultStSampleProject() {
+        Project p = new Project("ultrasonic_st_control", "STM32F407-Maraflow-Std", IecLanguage.ST, 2);
+        p.setDirty(true);
+        Page page1 = p.getPages().getFirst();
+        page1.setName("Main_ST");
+        page1.getStVariables().clear();
+        page1.getStVariables().add(new StVariable(StVariable.Scope.VAR, "ScanCount", DataType.INT, "0", "Total scan cycles executed"));
+        page1.getStVariables().add(new StVariable(StVariable.Scope.VAR, "EchoUs", DataType.INT, "1160", "Captured ultrasonic echo pulse width (us)"));
+        page1.getStVariables().add(new StVariable(StVariable.Scope.VAR, "DistanceCm", DataType.FLOAT, "0", "Computed obstacle distance (cm)"));
+        page1.getStVariables().add(new StVariable(StVariable.Scope.VAR, "ObstacleClose", DataType.BOOL, "0", "True when obstacle < 25 cm"));
+        page1.setStCode("""
+                VAR
+                    ScanCount : INT := 0; // Total scan cycles executed
+                    EchoUs : INT := 1160; // Captured ultrasonic echo pulse width (us)
+                    DistanceCm : FLOAT := 0; // Computed obstacle distance (cm)
+                    ObstacleClose : BOOL := 0; // True when obstacle < 25 cm
+                END_VAR
+
+                // IEC 61131-3 Structured Text (ST) Ultrasonic & Pump Control
+                ScanCount := ScanCount + 1;
+                
+                // Convert ultrasonic echo pulse width (us) to centimeters
+                IF EchoUs > 100 AND EchoUs < 25000 THEN
+                    DistanceCm := INT_TO_FLOAT(EchoUs) / 58.0;
+                ELSE
+                    DistanceCm := 999.0;
+                END_IF;
+                
+                IF DistanceCm < 25.0 THEN
+                    ObstacleClose := TRUE;
+                    DO0 := FALSE;
+                    DO1 := TRUE;
+                ELSE
+                    ObstacleClose := FALSE;
+                    DO0 := DI0;
+                    DO1 := FALSE;
+                END_IF;
+                """);
+
+        // Add an ST Macro (*UltrasonicCm) that can be dropped onto FBD or Ladder pages
+        Page macroSt = new Page("*UltrasonicCm", IecLanguage.ST);
+        macroSt.getStVariables().add(new StVariable(StVariable.Scope.VAR_INPUT, "PulseUs", DataType.INT, "1160", "Echo pulse width in microseconds"));
+        macroSt.getStVariables().add(new StVariable(StVariable.Scope.VAR_INPUT, "Valid", DataType.BOOL, "1", "Interrupt Flag valid signal"));
+        macroSt.getStVariables().add(new StVariable(StVariable.Scope.VAR_OUTPUT, "DistCm", DataType.FLOAT, "20", "Calculated distance in cm"));
+        macroSt.getStVariables().add(new StVariable(StVariable.Scope.VAR_OUTPUT, "InRange", DataType.BOOL, "1", "Sensor reading within valid range"));
+        macroSt.setStCode("""
+                VAR_INPUT
+                    PulseUs : INT := 1160; // Echo pulse width in microseconds
+                    Valid : BOOL := 1; // Interrupt Flag valid signal
+                END_VAR
+
+                VAR_OUTPUT
+                    DistCm : FLOAT := 20; // Calculated distance in cm
+                    InRange : BOOL := 1; // Sensor reading within valid range
+                END_VAR
+
+                // ST Macro Function Block: Converts HC-SR04 echo pulse (us) to cm
+                IF Valid THEN
+                    IF PulseUs >= 116 AND PulseUs <= 23200 THEN
+                        DistCm := INT_TO_FLOAT(PulseUs) / 58.0;
+                        InRange := TRUE;
+                    ELSE
+                        DistCm := 0.0;
+                        InRange := FALSE;
+                    END_IF;
+                END_IF;
+                """);
+        p.getPages().add(macroSt);
+
+        // Add a dedicated !EStop page in ST
+        Page estopSt = new Page("!EStop", IecLanguage.ST);
+        estopSt.setEStopPage(true);
+        estopSt.getStVariables().add(new StVariable(StVariable.Scope.VAR, "TripCount", DataType.INT, "0", "Safety scan cycles while E-Stop active"));
+        estopSt.setStCode("""
+                VAR
+                    TripCount : INT := 0; // Safety scan cycles while E-Stop active
+                END_VAR
+
+                // Dedicated E-Stop Safety Handler (Executes when Mode 2 E-Stop is active)
+                TripCount := TripCount + 1;
+                DO0 := FALSE;
+                DO1 := FALSE;
+                DO7 := TRUE; // Energize E-Stop Beacon Output DO7
+                """);
+        p.getPages().add(estopSt);
+
+        BlockCatalog.syncMacrosFromProject(p);
+        return p;
+    }
+
+    public Page findEStopPage() {
+        String target = eStopConfig.getDedicatedEStopPageName();
+        for (Page p : pages) {
+            if (p.getName().equalsIgnoreCase(target) || p.isEStopPage()) {
+                return p;
+            }
+        }
+        return null;
     }
 
     /**
@@ -134,7 +283,7 @@ public class Project {
      */
     public void syncMacroInstances() {
         for (Page page : pages) {
-            for (BlockInstance b : page.getBlocks()) {
+            for (BlockInstance b : page.getAllBlockInstances()) {
                 if (b.getDefinitionId().startsWith("Macro.User.")) {
                     BlockDefinition def = BlockCatalog.getById(b.getDefinitionId());
                     if (def != null) {
@@ -163,7 +312,7 @@ public class Project {
         String oldDefId = "Macro.User." + oldClean;
         String newDefId = "Macro.User." + newClean;
         for (Page page : pages) {
-            for (BlockInstance b : page.getBlocks()) {
+            for (BlockInstance b : page.getAllBlockInstances()) {
                 if (b.getDefinitionId().equalsIgnoreCase(oldDefId)) {
                     b.setDefinitionId(newDefId);
                     b.setTypeName(newClean);
@@ -173,15 +322,15 @@ public class Project {
     }
 
     /**
-     * Collects all virtual registers, memory bits, and symbolic tags known across all FBD and LD pages.
+     * Collects all virtual registers, memory bits, and symbolic tags known across all FBD, LD, and ST pages.
      */
     public List<String> getAllKnownRegisterAndTagNames() {
-        java.util.Set<String> set = new java.util.LinkedHashSet<>();
+        Set<String> set = new LinkedHashSet<>();
         for (int i = 0; i < 16; i++) {
             set.add("REG_" + i);
         }
         for (Page page : pages) {
-            for (BlockInstance b : page.getBlocks()) {
+            for (BlockInstance b : page.getAllBlockInstances()) {
                 String reg = b.getCustomProperties().get("RegisterName");
                 if (reg != null && !reg.isBlank()) {
                     set.add(reg.trim());
@@ -282,6 +431,10 @@ public class Project {
 
     public void setPrimaryLanguage(IecLanguage primaryLanguage) {
         this.primaryLanguage = (primaryLanguage == null) ? IecLanguage.FBD : primaryLanguage;
+    }
+
+    public EStopConfig getEStopConfig() {
+        return eStopConfig;
     }
 
     public List<Page> getPages() {

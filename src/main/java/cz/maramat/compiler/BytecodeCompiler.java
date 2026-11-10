@@ -4,6 +4,7 @@ import cz.maramat.model.BlockCatalog;
 import cz.maramat.model.BlockDefinition;
 import cz.maramat.model.BlockInstance;
 import cz.maramat.model.DataType;
+import cz.maramat.model.EStopConfig;
 import cz.maramat.model.IecLanguage;
 import cz.maramat.model.LadderBranch;
 import cz.maramat.model.LadderElement;
@@ -12,7 +13,9 @@ import cz.maramat.model.Page;
 import cz.maramat.model.PinInstance;
 import cz.maramat.model.PlcThread;
 import cz.maramat.model.Project;
+import cz.maramat.model.StVariable;
 import cz.maramat.model.Wire;
+import cz.maramat.sim.StInterpreter;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -53,13 +56,46 @@ public final class BytecodeCompiler {
         int expandedModules = 0;
         int ladderRungCount = 0;
         int ladderContactCoilCount = 0;
+        int stPageCount = 0;
         int eepromBytes = 32; // Header in 64KiB EEPROM
         int flashBytes = 64;  // 32B VM image header + 32B thread vector table
         double[] threadUs = new double[6];
 
         int typeCastCount = 0;
 
+        EStopConfig eStopCfg = project.getEStopConfig();
+        if (eStopCfg.isEnabled()) {
+            flashBytes += 24;
+            logs.add("Info: Safety PLC E-Stop supervision enabled (" + eStopCfg.getMode().getDisplayName() + ").");
+        }
+
         for (Page page : project.getPages()) {
+            if (page.getLanguage() == IecLanguage.ST) {
+                stPageCount++;
+                List<StInterpreter.Diagnostic> diags = StInterpreter.validate(page.getStCode(), page.getStVariables());
+                for (StInterpreter.Diagnostic d : diags) {
+                    logs.add("Warning [" + page.getName() + "]: " + d);
+                }
+                int tid = Math.clamp(page.getStThreadId(), 1, 5);
+                for (StVariable v : page.getStVariables()) {
+                    DataType dt = v.getDataType();
+                    int bytes = switch (dt) {
+                        case BOOL -> 1;
+                        case INT -> 4;
+                        case LONG -> 8;
+                        case FLOAT -> 4;
+                    };
+                    ramByType.put(dt, ramByType.get(dt) + bytes);
+                }
+                int stLines = Math.max(1, page.getStCode().split("\n").length);
+                totalModules++;
+                expandedModules += Math.max(1, stLines / 2);
+                flashBytes += 16 + (stLines * 8);
+                if (!page.isMacro()) {
+                    threadUs[tid] += 0.15 + (stLines * 0.04);
+                }
+            }
+
             if (page.isMacro()) continue;
 
             if (page.getLanguage() == IecLanguage.LD) {
@@ -169,6 +205,9 @@ public final class BytecodeCompiler {
 
         if (ladderRungCount > 0) {
             logs.add("Info: Compiled " + ladderRungCount + " IEC 61131-3 Ladder rung(s) (" + ladderContactCoilCount + " contacts/coils).");
+        }
+        if (stPageCount > 0) {
+            logs.add("Info: Compiled " + stPageCount + " IEC 61131-3 Structured Text (ST) unit(s).");
         }
         logs.add("Info: Building constant arrays in rom memory (" + flashBytes + " bytes).");
         logs.add("Info: Building parameters array in eeprom memory (" + eepromBytes + " / 65536 bytes).");

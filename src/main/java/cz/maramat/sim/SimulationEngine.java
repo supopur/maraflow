@@ -2,6 +2,7 @@ package cz.maramat.sim;
 
 import cz.maramat.model.BlockInstance;
 import cz.maramat.model.DataType;
+import cz.maramat.model.EStopConfig;
 import cz.maramat.model.GraphicElement;
 import cz.maramat.model.IecLanguage;
 import cz.maramat.model.LadderBranch;
@@ -11,6 +12,7 @@ import cz.maramat.model.Page;
 import cz.maramat.model.PinInstance;
 import cz.maramat.model.PlcThread;
 import cz.maramat.model.Project;
+import cz.maramat.model.StVariable;
 import cz.maramat.model.Wire;
 
 import javax.swing.SwingUtilities;
@@ -19,6 +21,7 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -34,10 +37,17 @@ public class SimulationEngine {
 
     private volatile State state = State.STOPPED;
     private volatile double speedMultiplier = 1.0;
+    private volatile boolean manualEStopButtonPressed = false;
+    private volatile boolean eStopActive = false;
+    private volatile int eStopTrippedMask = 0;
+    private volatile int simulatedInterruptPulseCounter = 0;
+
     private final AtomicBoolean workerRunning = new AtomicBoolean(false);
     private Thread virtualSimThread;
     private final Map<String, Double> virtualRegisters = new ConcurrentHashMap<>();
     private final Map<String, Page> macroRuntimePages = new ConcurrentHashMap<>();
+    private final Map<String, Integer> blockLastInterruptPulseSeen = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> blockPendingRstClear = new ConcurrentHashMap<>();
     private final Runnable uiRepaintCallback;
     private final List<ScopeSampleListener> scopeListeners = new ArrayList<>();
 
@@ -163,10 +173,54 @@ public class SimulationEngine {
         requestUiRepaint();
     }
 
+    public void setManualEStopButtonPressed(boolean pressed) {
+        this.manualEStopButtonPressed = pressed;
+        if (pressed) {
+            this.eStopActive = true;
+            this.eStopTrippedMask |= 0x8000;
+        }
+        requestUiRepaint();
+    }
+
+    public void manualResetEStop() {
+        this.manualEStopButtonPressed = false;
+        this.eStopActive = false;
+        this.eStopTrippedMask = 0;
+        requestUiRepaint();
+    }
+
+    public boolean isEStopActive() {
+        return eStopActive;
+    }
+
+    public int getEStopTrippedMask() {
+        return eStopTrippedMask;
+    }
+
+    public void fireSimulatedInterruptPulse() {
+        this.simulatedInterruptPulseCounter++;
+        requestUiRepaint();
+    }
+
     private void resetAllBlocks(Project project) {
         virtualRegisters.clear();
         macroRuntimePages.clear();
+        blockLastInterruptPulseSeen.clear();
+        blockPendingRstClear.clear();
+        eStopActive = manualEStopButtonPressed;
+        eStopTrippedMask = manualEStopButtonPressed ? 0x8000 : 0;
         if (project == null) return;
+
+        // Initialize Active-Low (NC) E-Stop channels to 1.0 (Closed = Safe) by default on reset
+        EStopConfig cfg = project.getEStopConfig();
+        if (cfg.isEnabled()) {
+            for (EStopConfig.InputRule r : cfg.getInputRules()) {
+                if (r.isEnabled() && r.isActiveLow()) {
+                    virtualRegisters.put(r.getInputChannel().toUpperCase(), 1.0);
+                }
+            }
+        }
+
         for (Page page : project.getPages()) {
             for (BlockInstance b : page.getBlocks()) {
                 b.resetRuntimeState();
@@ -174,6 +228,50 @@ public class SimulationEngine {
             for (LadderRung r : page.getRungs()) {
                 r.resetRuntimeState();
             }
+            for (StVariable v : page.getStVariables()) {
+                v.resetRuntimeState();
+            }
+        }
+    }
+
+    private void updateEStopSupervision(Project project) {
+        if (project == null) return;
+        EStopConfig cfg = project.getEStopConfig();
+        if (!cfg.isEnabled()) {
+            eStopActive = false;
+            eStopTrippedMask = 0;
+            return;
+        }
+
+        int mask = manualEStopButtonPressed ? 0x8000 : 0;
+        List<EStopConfig.InputRule> rules = cfg.getInputRules();
+        for (int i = 0; i < rules.size(); i++) {
+            EStopConfig.InputRule rule = rules.get(i);
+            if (!rule.isEnabled()) continue;
+            double v = getOperandValue(project, rule.getInputChannel());
+            boolean high = Math.abs(v) >= 0.5;
+            boolean tripped = rule.isActiveLow() ? !high : high;
+            if (tripped) {
+                mask |= (1 << Math.min(14, i));
+            }
+        }
+
+        if (mask != 0) {
+            eStopActive = true;
+            eStopTrippedMask = mask;
+        } else if (!cfg.isRequireManualReset()) {
+            eStopActive = false;
+            eStopTrippedMask = 0;
+        }
+    }
+
+    private void forceAllHardwareOutputsZero() {
+        for (int i = 0; i < 16; i++) {
+            virtualRegisters.put("DO" + i, 0.0);
+        }
+        for (int i = 0; i < 8; i++) {
+            virtualRegisters.put("AO" + i, 0.0);
+            virtualRegisters.put("PWM" + i, 0.0);
         }
     }
 
@@ -225,46 +323,128 @@ public class SimulationEngine {
     }
 
     private void executeThreadScan(Project project, int threadId, double dtMs, double simTimeSeconds) {
-        // 1. Execute top-level LD pages first so any registers/coils written in LD are immediately visible to FBD
+        updateEStopSupervision(project);
+        EStopConfig cfg = project.getEStopConfig();
+
+        if (eStopActive) {
+            if (cfg.getMode() == EStopConfig.Mode.DISABLE_OUTPUTS_AND_STOP) {
+                forceAllHardwareOutputsZero();
+                return;
+            }
+            // Mode 2: DEDICATED_ESTOP_PAGE -> Normal thread code stops immediately; execute ONLY dedicated E-Stop page(s)
+            Page dedicated = project.findEStopPage();
+            for (Page page : project.getPages()) {
+                if (page.isMacro()) continue;
+                if (page == dedicated || page.isEStopPage()) {
+                    executeSinglePageScan(project, page, threadId, dtMs, simTimeSeconds, true);
+                }
+            }
+            flushPendingInterruptResets(project);
+            return;
+        }
+
+        // Normal operation: Execute all non-macro, non-EStop pages
+        // 1. LD and ST pages first
         for (Page page : project.getPages()) {
-            if (page.isMacro()) continue;
-            if (page.getLanguage() == IecLanguage.LD) {
-                executeLadderPageScan(project, page, threadId, dtMs, simTimeSeconds);
+            if (page.isMacro() || page.isEStopPage()) continue;
+            if (page.getLanguage() == IecLanguage.LD || page.getLanguage() == IecLanguage.ST) {
+                executeSinglePageScan(project, page, threadId, dtMs, simTimeSeconds, false);
             }
         }
 
-        // 2. Execute top-level FBD pages
+        // 2. FBD pages
         for (Page page : project.getPages()) {
-            if (page.isMacro() || page.getLanguage() == IecLanguage.LD) continue;
+            if (page.isMacro() || page.isEStopPage() || page.getLanguage() != IecLanguage.FBD) continue;
+            executeSinglePageScan(project, page, threadId, dtMs, simTimeSeconds, false);
+        }
 
-            // Apply any active Visual Buttons on this FBD page
-            for (GraphicElement ge : page.getGraphics()) {
-                if (ge.getKind() == GraphicElement.Kind.VISUAL_BUTTON && !ge.getBoundTargetPin().isBlank()) {
-                    String[] parts = ge.getBoundTargetPin().split("\\.");
-                    if (parts.length == 2) {
-                        BlockInstance targetBlock = page.findBlockByName(parts[0]);
-                        if (targetBlock != null) {
-                            for (int i = 0; i < targetBlock.getInputs().size(); i++) {
-                                PinInstance pin = targetBlock.getInputs().get(i);
-                                if (pin.getShortName().equalsIgnoreCase(parts[1])) {
-                                    pin.setRuntimeValue(ge.isActiveState() ? 1.0 : 0.0);
-                                }
+        flushPendingInterruptResets(project);
+    }
+
+    private void executeSinglePageScan(Project project, Page page, int threadId, double dtMs, double simTimeSeconds, boolean ignoreThreadFilterForEStop) {
+        if (page.getLanguage() == IecLanguage.LD) {
+            executeLadderPageScan(project, page, ignoreThreadFilterForEStop ? -1 : threadId, dtMs, simTimeSeconds);
+            return;
+        }
+        if (page.getLanguage() == IecLanguage.ST) {
+            if (ignoreThreadFilterForEStop || page.getStThreadId() == threadId) {
+                executeStPageScan(project, page);
+            }
+            return;
+        }
+
+        // FBD page execution
+        for (GraphicElement ge : page.getGraphics()) {
+            if (ge.getKind() == GraphicElement.Kind.VISUAL_BUTTON && !ge.getBoundTargetPin().isBlank()) {
+                String[] parts = ge.getBoundTargetPin().split("\\.");
+                if (parts.length == 2) {
+                    BlockInstance targetBlock = page.findBlockByName(parts[0]);
+                    if (targetBlock != null) {
+                        for (int i = 0; i < targetBlock.getInputs().size(); i++) {
+                            PinInstance pin = targetBlock.getInputs().get(i);
+                            if (pin.getShortName().equalsIgnoreCase(parts[1])) {
+                                pin.setRuntimeValue(ge.isActiveState() ? 1.0 : 0.0);
                             }
                         }
                     }
                 }
             }
+        }
 
-            List<BlockInstance> threadBlocks = new ArrayList<>();
-            for (BlockInstance b : page.getBlocks()) {
-                if (b.getThreadId() == threadId) {
-                    threadBlocks.add(b);
-                }
+        List<BlockInstance> threadBlocks = new ArrayList<>();
+        for (BlockInstance b : page.getBlocks()) {
+            if (ignoreThreadFilterForEStop || b.getThreadId() == threadId) {
+                threadBlocks.add(b);
             }
-            threadBlocks.sort(Comparator.comparingInt(BlockInstance::getOrder));
+        }
+        threadBlocks.sort(Comparator.comparingInt(BlockInstance::getOrder));
 
-            for (BlockInstance b : threadBlocks) {
-                evaluateBlock(project, page, b, dtMs, simTimeSeconds, true, 0);
+        for (BlockInstance b : threadBlocks) {
+            evaluateBlock(project, page, b, dtMs, simTimeSeconds, true, 0);
+        }
+    }
+
+    private void executeStPageScan(Project project, Page page) {
+        Map<String, Double> localMap = new LinkedHashMap<>();
+        for (StVariable v : page.getStVariables()) {
+            if (v.getScope() == StVariable.Scope.VAR_TEMP) {
+                localMap.put(v.getName(), v.getDataType().toNumericValue(v.getInitialValue()));
+            } else {
+                localMap.put(v.getName(), v.getRuntimeValue());
+            }
+        }
+
+        StInterpreter.execute(page.getStCode(), localMap, new StInterpreter.OperandAccessor() {
+            @Override
+            public double readOperand(String name) {
+                return getOperandValue(project, name);
+            }
+
+            @Override
+            public void writeOperand(String name, double value) {
+                setOperandValue(name, value);
+            }
+        });
+
+        for (StVariable v : page.getStVariables()) {
+            Double updated = localMap.get(v.getName());
+            if (updated != null) {
+                v.setRuntimeValue(DataType.convertValue(updated, DataType.FLOAT, v.getDataType()));
+            }
+        }
+    }
+
+    private void flushPendingInterruptResets(Project project) {
+        if (blockPendingRstClear.isEmpty() || project == null) return;
+        for (Page page : project.getPages()) {
+            for (BlockInstance b : page.getAllBlockInstances()) {
+                if ("Main.Execution.Interrupt".equals(b.getDefinitionId())
+                        && Boolean.TRUE.equals(blockPendingRstClear.remove(b.getId()))) {
+                    b.setInternalState2(0.0);
+                    if (b.getOutputs().size() > 1) {
+                        b.getOutputs().get(1).setRuntimeValue(0.0);
+                    }
+                }
             }
         }
     }
@@ -272,7 +452,7 @@ public class SimulationEngine {
     private void executeLadderPageScan(Project project, Page page, int threadId, double dtMs, double simTimeSeconds) {
         List<LadderRung> threadRungs = new ArrayList<>();
         for (LadderRung rung : page.getRungs()) {
-            if (rung.getThreadId() == threadId) {
+            if (threadId == -1 || rung.getThreadId() == threadId) {
                 threadRungs.add(rung);
             }
         }
@@ -783,8 +963,92 @@ public class SimulationEngine {
                 double v = out.getDataType().toNumericValue(b.getCustomProperties().getOrDefault("CurrentValue", "0"));
                 out.setRuntimeValue(v);
             }
+            case "Main.Execution.Interrupt" -> {
+                evaluateInterruptBlock(project, b, ins, outs);
+            }
+            case "Main.Safety.EStop" -> {
+                boolean rst = ins.size() > 1 && ins.get(1).getRuntimeValue() != 0.0;
+                boolean prevRst = b.isPrevTriggerState();
+                b.setPrevTriggerState(rst);
+                if (rst && !prevRst && !manualEStopButtonPressed) {
+                    manualResetEStop();
+                }
+                if (outs.size() > 0) outs.get(0).setRuntimeValue(eStopActive ? 0.0 : 1.0);
+                if (outs.size() > 1) outs.get(1).setRuntimeValue(eStopActive ? 1.0 : 0.0);
+                if (outs.size() > 2) outs.get(2).setRuntimeValue(eStopTrippedMask);
+            }
             default -> {
             }
+        }
+    }
+
+    private void evaluateInterruptBlock(Project project, BlockInstance b, List<PinInstance> ins, List<PinInstance> outs) {
+        String source = b.getCustomProperties().getOrDefault("InterruptSource", "TIM_IC1 (Ultrasonic Echo)");
+        String edgeMode = b.getCustomProperties().getOrDefault("TriggerEdge", "RISING");
+        String capMode = b.getCustomProperties().getOrDefault("CaptureMode", "PULSE_WIDTH_US");
+        String latchPolicy = b.getCustomProperties().getOrDefault("LatchPolicy", "HOLD_FIRST_UNTIL_RST");
+        String simPulseRaw = b.getCustomProperties().getOrDefault("SimPulseValue", "1160");
+
+        double simPulseVal = 1160.0;
+        try {
+            simPulseVal = Double.parseDouble(simPulseRaw.trim());
+        } catch (NumberFormatException ignored) {}
+
+        // Detect whether a new hardware edge or simulated pulse occurred since last scan
+        boolean eventTriggered = false;
+        double capturedValue = simPulseVal;
+
+        int currentPulseCount = this.simulatedInterruptPulseCounter;
+        int prevPulseCount = blockLastInterruptPulseSeen.getOrDefault(b.getId(), currentPulseCount);
+        blockLastInterruptPulseSeen.put(b.getId(), currentPulseCount);
+        if (currentPulseCount != prevPulseCount) {
+            eventTriggered = true;
+        }
+
+        // Also check EXTI_DI0..DI7 edge transition
+        if (source.startsWith("EXTI_DI")) {
+            String diChannel = source.substring("EXTI_".length()).trim();
+            boolean curHigh = getOperandValue(project, diChannel) != 0.0;
+            boolean prevHigh = b.isPrevTriggerState();
+            b.setPrevTriggerState(curHigh);
+            boolean rising = curHigh && !prevHigh;
+            boolean falling = !curHigh && prevHigh;
+            if (("RISING".equalsIgnoreCase(edgeMode) && rising)
+                    || ("FALLING".equalsIgnoreCase(edgeMode) && falling)
+                    || ("BOTH".equalsIgnoreCase(edgeMode) && (rising || falling))) {
+                eventTriggered = true;
+                if (capMode.startsWith("GPIO_STATE")) {
+                    capturedValue = curHigh ? 1.0 : 0.0;
+                }
+            }
+        }
+
+        boolean alreadyLatched = b.getInternalState2() >= 0.5;
+        if (eventTriggered) {
+            if ("EDGE_COUNT".equalsIgnoreCase(capMode)) {
+                double nextCount = b.getInternalState1() + 1.0;
+                b.setInternalState1(nextCount);
+                b.setInternalState2(1.0);
+            } else if (!alreadyLatched || "OVERWRITE_LATEST".equalsIgnoreCase(latchPolicy)) {
+                b.setInternalState1(capturedValue);
+                b.setInternalState2(1.0);
+            }
+        }
+
+        double outVal = b.getInternalState1();
+        double outFlg = b.getInternalState2() >= 0.5 ? 1.0 : 0.0;
+
+        if (outs.size() > 0) {
+            outs.get(0).setRuntimeValue(DataType.convertValue(outVal, DataType.FLOAT, outs.get(0).getDataType()));
+        }
+        if (outs.size() > 1) {
+            outs.get(1).setRuntimeValue(outFlg);
+        }
+
+        // Clear-at-end-of-scan Rst behavior: when Rst is high on Scan N, Val and Flg remain valid for downstream blocks during Scan N
+        boolean rstHigh = ins.size() > 1 && ins.get(1).getRuntimeValue() != 0.0;
+        if (rstHigh && outFlg >= 0.5) {
+            blockPendingRstClear.put(b.getId(), Boolean.TRUE);
         }
     }
 
@@ -799,6 +1063,11 @@ public class SimulationEngine {
             }
         }
         if (macroDefPage == null) return;
+
+        if (macroDefPage.getLanguage() == IecLanguage.ST) {
+            evaluateStMacroBlock(project, macroDefPage, macroBlock);
+            return;
+        }
 
         final Page defRef = macroDefPage;
         Page rtPage = macroRuntimePages.compute(macroBlock.getId(), (k, existing) -> {
@@ -880,6 +1149,63 @@ public class SimulationEngine {
             }
             for (int p = 0; p < Math.min(db.getOutputs().size(), rb.getOutputs().size()); p++) {
                 db.getOutputs().get(p).setRuntimeValue(rb.getOutputs().get(p).getRuntimeValue());
+            }
+        }
+    }
+
+    private void evaluateStMacroBlock(Project project, Page macroDefPage, BlockInstance macroBlock) {
+        final Page defRef = macroDefPage;
+        Page rtPage = macroRuntimePages.compute(macroBlock.getId(), (k, existing) -> {
+            if (existing == null || existing.getStVariables().size() != defRef.getStVariables().size()) {
+                return defRef.copy();
+            }
+            return existing;
+        });
+
+        Map<String, Double> localMap = new LinkedHashMap<>();
+        int inPinIdx = 1; // index 0 is En
+        for (int i = 0; i < defRef.getStVariables().size(); i++) {
+            StVariable defVar = defRef.getStVariables().get(i);
+            StVariable rtVar = rtPage.getStVariables().get(i);
+            if (defVar.getScope() == StVariable.Scope.VAR_INPUT) {
+                double val = (inPinIdx < macroBlock.getInputs().size())
+                        ? macroBlock.getInputs().get(inPinIdx++).getRuntimeValue()
+                        : defVar.getDataType().toNumericValue(defVar.getInitialValue());
+                localMap.put(defVar.getName(), val);
+                rtVar.setRuntimeValue(val);
+                defVar.setRuntimeValue(val);
+            } else if (defVar.getScope() == StVariable.Scope.VAR_TEMP) {
+                localMap.put(defVar.getName(), defVar.getDataType().toNumericValue(defVar.getInitialValue()));
+            } else {
+                localMap.put(defVar.getName(), rtVar.getRuntimeValue());
+            }
+        }
+
+        StInterpreter.execute(defRef.getStCode(), localMap, new StInterpreter.OperandAccessor() {
+            @Override
+            public double readOperand(String name) {
+                return getOperandValue(project, name);
+            }
+
+            @Override
+            public void writeOperand(String name, double value) {
+                setOperandValue(name, value);
+            }
+        });
+
+        int outPinIdx = 0;
+        for (int i = 0; i < defRef.getStVariables().size(); i++) {
+            StVariable defVar = defRef.getStVariables().get(i);
+            StVariable rtVar = rtPage.getStVariables().get(i);
+            Double val = localMap.get(defVar.getName());
+            if (val != null) {
+                double converted = DataType.convertValue(val, DataType.FLOAT, defVar.getDataType());
+                rtVar.setRuntimeValue(converted);
+                defVar.setRuntimeValue(converted);
+                if (defVar.getScope() == StVariable.Scope.VAR_OUTPUT && outPinIdx < macroBlock.getOutputs().size()) {
+                    PinInstance outPin = macroBlock.getOutputs().get(outPinIdx++);
+                    outPin.setRuntimeValue(DataType.convertValue(converted, defVar.getDataType(), outPin.getDataType()));
+                }
             }
         }
     }

@@ -74,6 +74,7 @@ public class NewProjectWizardDialog extends JDialog {
     // Step 3 controls
     private JRadioButton fbdRadio;
     private JRadioButton ldRadio;
+    private JRadioButton stRadio;
     private JTextField initialPageNameField;
     private JComboBox<PlcThread> defaultThreadCombo;
 
@@ -306,26 +307,32 @@ public class NewProjectWizardDialog extends JDialog {
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.anchor = GridBagConstraints.WEST;
 
-        JPanel langBox = new JPanel(new GridLayout(2, 1, 4, 6));
+        JPanel langBox = new JPanel(new GridLayout(3, 1, 4, 6));
         langBox.setBorder(BorderFactory.createTitledBorder("Initial Page IEC 61131-3 Programming Language"));
 
         fbdRadio = new JRadioButton("FBD - Function Block Diagram (2D wired function blocks, buses, SCADA visuals)");
         ldRadio = new JRadioButton("LD - Ladder Diagram (Structured rungs, power rails, contacts, coils, and function blocks)");
+        stRadio = new JRadioButton("ST - Structured Text (Split variable/pin table + high-level IEC 61131-3 structured code)");
         fbdRadio.setFont(AppFonts.ui(Font.BOLD, 11));
         ldRadio.setFont(AppFonts.ui(Font.BOLD, 11));
+        stRadio.setFont(AppFonts.ui(Font.BOLD, 11));
 
         ButtonGroup bg = new ButtonGroup();
         bg.add(fbdRadio);
         bg.add(ldRadio);
+        bg.add(stRadio);
 
         if (preselectedLanguage == IecLanguage.LD) {
             ldRadio.setSelected(true);
+        } else if (preselectedLanguage == IecLanguage.ST) {
+            stRadio.setSelected(true);
         } else {
             fbdRadio.setSelected(true);
         }
 
         langBox.add(fbdRadio);
         langBox.add(ldRadio);
+        langBox.add(stRadio);
 
         gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 2; gbc.weightx = 1.0;
         p.add(langBox, gbc);
@@ -333,18 +340,28 @@ public class NewProjectWizardDialog extends JDialog {
         gbc.gridwidth = 1;
         gbc.gridx = 0; gbc.gridy = 1; gbc.weightx = 0;
         p.add(new JLabel("Initial Page Name:"), gbc);
-        initialPageNameField = new JTextField(preselectedLanguage == IecLanguage.LD ? "Main_LD" : "Page 1", 20);
+        String defaultPageName = (preselectedLanguage == IecLanguage.LD) ? "Main_LD"
+                : (preselectedLanguage == IecLanguage.ST ? "Main_ST" : "Page 1");
+        initialPageNameField = new JTextField(defaultPageName, 20);
         gbc.gridx = 1; gbc.weightx = 1.0;
         p.add(initialPageNameField, gbc);
 
         fbdRadio.addActionListener(e -> {
-            if ("Main_LD".equals(initialPageNameField.getText().trim())) {
+            String cur = initialPageNameField.getText().trim();
+            if ("Main_LD".equals(cur) || "Main_ST".equals(cur)) {
                 initialPageNameField.setText("Page 1");
             }
         });
         ldRadio.addActionListener(e -> {
-            if ("Page 1".equals(initialPageNameField.getText().trim())) {
+            String cur = initialPageNameField.getText().trim();
+            if ("Page 1".equals(cur) || "Main_ST".equals(cur)) {
                 initialPageNameField.setText("Main_LD");
+            }
+        });
+        stRadio.addActionListener(e -> {
+            String cur = initialPageNameField.getText().trim();
+            if ("Page 1".equals(cur) || "Main_LD".equals(cur)) {
+                initialPageNameField.setText("Main_ST");
             }
         });
 
@@ -355,7 +372,7 @@ public class NewProjectWizardDialog extends JDialog {
         gbc.gridx = 1; gbc.weightx = 1.0;
         p.add(defaultThreadCombo, gbc);
 
-        JLabel noteLbl = new JLabel("Note: You can add both FBD and Ladder (LD) pages and FBD macros within the same project.");
+        JLabel noteLbl = new JLabel("Note: You can freely mix FBD, Ladder (LD), Structured Text (ST) pages, *Macros, and !EStop pages in one project.");
         noteLbl.setFont(AppFonts.ui(Font.ITALIC, 11));
         noteLbl.setForeground(new Color(0x44, 0x55, 0x66));
         gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 2;
@@ -391,7 +408,8 @@ public class NewProjectWizardDialog extends JDialog {
 
         String projName = projectNameField.getText().trim();
         String platform = (String) platformCombo.getSelectedItem();
-        IecLanguage lang = ldRadio.isSelected() ? IecLanguage.LD : IecLanguage.FBD;
+        IecLanguage lang = ldRadio.isSelected() ? IecLanguage.LD
+                : (stRadio.isSelected() ? IecLanguage.ST : IecLanguage.FBD);
         PlcThread defThread = (PlcThread) defaultThreadCombo.getSelectedItem();
         int tid = defThread != null ? defThread.getId() : 2;
 
