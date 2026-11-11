@@ -30,6 +30,7 @@ public final class StInterpreter {
     private enum TokType {
         IDENT, NUMBER,
         ASSIGN,         // :=
+        ARROW,          // =>
         SEMI,           // ;
         COLON,          // :
         COMMA,          // ,
@@ -50,6 +51,16 @@ public final class StInterpreter {
 
     private record Token(TokType type, String text, double numVal, int line) {}
 
+    private record CallArg(String paramName, Expr expr, String outputVarName, boolean isOutput) {}
+
+    private static boolean isCallableKeyword(TokType type) {
+        return type == TokType.KW_AND
+                || type == TokType.KW_OR
+                || type == TokType.KW_XOR
+                || type == TokType.KW_NOT
+                || type == TokType.KW_MOD;
+    }
+
     private StInterpreter() {}
 
     public static List<Diagnostic> validate(String code, List<StVariable> variables) {
@@ -58,12 +69,11 @@ public final class StInterpreter {
             return diags;
         }
         try {
-            StDeclarationSync.CodeSplit split = StDeclarationSync.splitCode(code);
-            String execBody = split.executableBody();
-            if (execBody.isBlank()) {
+            String masked = StDeclarationSync.maskDeclarations(code);
+            if (masked.isBlank()) {
                 return diags;
             }
-            List<Token> tokens = tokenize(execBody);
+            List<Token> tokens = tokenize(masked);
             Parser parser = new Parser(tokens, diags);
             parser.parseStatementList(TokType.EOF);
         } catch (StSyntaxException ex) {
@@ -77,12 +87,11 @@ public final class StInterpreter {
     public static void execute(String code, Map<String, Double> localVars, OperandAccessor accessor) {
         if (code == null || code.isBlank()) return;
         try {
-            StDeclarationSync.CodeSplit split = StDeclarationSync.splitCode(code);
-            String execBody = split.executableBody();
-            if (execBody.isBlank()) return;
+            String masked = StDeclarationSync.maskDeclarations(code);
+            if (masked.isBlank()) return;
 
             List<Diagnostic> diags = new ArrayList<>();
-            List<Token> tokens = tokenize(execBody);
+            List<Token> tokens = tokenize(masked);
             Parser parser = new Parser(tokens, diags);
             List<Stmt> stmts = parser.parseStatementList(TokType.EOF);
             if (!diags.isEmpty()) {
@@ -153,6 +162,11 @@ public final class StInterpreter {
             // Multi-char operators
             if (c == ':' && i + 1 < n && src.charAt(i + 1) == '=') {
                 out.add(new Token(TokType.ASSIGN, ":=", 0, line));
+                i += 2;
+                continue;
+            }
+            if (c == '=' && i + 1 < n && src.charAt(i + 1) == '>') {
+                out.add(new Token(TokType.ARROW, "=>", 0, line));
                 i += 2;
                 continue;
             }
@@ -466,6 +480,20 @@ public final class StInterpreter {
         }
     }
 
+    private record CallStmt(String targetName, List<CallArg> args) implements Stmt {
+        @Override
+        public void exec(EvalContext ctx) {
+            for (CallArg arg : args) {
+                if (!arg.isOutput() && arg.expr() != null) {
+                    double val = arg.expr().eval(ctx);
+                    if (arg.paramName() != null) {
+                        ctx.localVars.put(targetName + "." + arg.paramName(), val);
+                    }
+                }
+            }
+        }
+    }
+
     // =========================================================================
     // Recursive-Descent Parser
     // =========================================================================
@@ -482,6 +510,10 @@ public final class StInterpreter {
 
         private Token peek() {
             return tokens.get(pos);
+        }
+
+        private Token lookahead() {
+            return (pos + 1 < tokens.size()) ? tokens.get(pos + 1) : tokens.get(tokens.size() - 1);
         }
 
         private Token next() {
@@ -506,6 +538,30 @@ public final class StInterpreter {
             throw new StSyntaxException(t.line, msg + " (found '" + (t.text.isEmpty() ? "EOF" : t.text) + "')");
         }
 
+        private List<CallArg> parseCallArgs() {
+            List<CallArg> list = new ArrayList<>();
+            if (peek().type == TokType.RPAREN) {
+                return list;
+            }
+            do {
+                if (peek().type == TokType.IDENT && (lookahead().type == TokType.ASSIGN || lookahead().type == TokType.ARROW)) {
+                    Token nameTok = next();
+                    if (match(TokType.ARROW)) {
+                        Token outVar = expect(TokType.IDENT, "Expected output variable name after '=>'");
+                        list.add(new CallArg(nameTok.text, null, outVar.text, true));
+                    } else {
+                        expect(TokType.ASSIGN, "Expected ':=' after parameter name '" + nameTok.text + "'");
+                        Expr val = parseExpr();
+                        list.add(new CallArg(nameTok.text, val, null, false));
+                    }
+                } else {
+                    Expr val = parseExpr();
+                    list.add(new CallArg(null, val, null, false));
+                }
+            } while (match(TokType.COMMA));
+            return list;
+        }
+
         List<Stmt> parseStatementList(TokType... stopTokens) {
             List<Stmt> list = new ArrayList<>();
             while (peek().type != TokType.EOF && !isStopToken(peek().type, stopTokens)) {
@@ -525,6 +581,24 @@ public final class StInterpreter {
 
         private Stmt parseStatement() {
             Token t = peek();
+            if (t.type == TokType.IDENT) {
+                Token id = next();
+                if (match(TokType.LPAREN)) {
+                    List<CallArg> args = parseCallArgs();
+                    expect(TokType.RPAREN, "Expected ')' after invocation arguments");
+                    return new CallStmt(id.text, args);
+                }
+                expect(TokType.ASSIGN, "Expected ':=' in assignment to '" + id.text + "'");
+                Expr rhs = parseExpr();
+                return new AssignStmt(id.text, rhs);
+            }
+            if (isCallableKeyword(t.type) && lookahead().type == TokType.LPAREN) {
+                Token id = next();
+                next(); // consume LPAREN
+                List<CallArg> args = parseCallArgs();
+                expect(TokType.RPAREN, "Expected ')' after invocation arguments");
+                return new CallStmt(id.text, args);
+            }
             return switch (t.type) {
                 case KW_IF -> parseIf();
                 case KW_CASE -> parseCase();
@@ -533,13 +607,7 @@ public final class StInterpreter {
                 case KW_REPEAT -> parseRepeat();
                 case KW_EXIT -> { next(); yield new ExitStmt(); }
                 case KW_RETURN -> { next(); yield new ReturnStmt(); }
-                case IDENT -> {
-                    Token id = next();
-                    expect(TokType.ASSIGN, "Expected ':=' in assignment to '" + id.text + "'");
-                    Expr rhs = parseExpr();
-                    yield new AssignStmt(id.text, rhs);
-                }
-                default -> throw new StSyntaxException(t.line, "Unexpected token '" + t.text + "' at start of statement");
+                default -> throw new StSyntaxException(t.line, "Unexpected token '" + (t.text.isEmpty() ? "EOF" : t.text) + "' at start of statement");
             };
         }
 
@@ -783,81 +851,273 @@ public final class StInterpreter {
                 expect(TokType.RPAREN, "Expected ')'");
                 return inner;
             }
-            if (match(TokType.IDENT)) {
-                String name = t.text;
+            if (t.type == TokType.IDENT || (isCallableKeyword(t.type) && lookahead().type == TokType.LPAREN)) {
+                Token fnTok = next();
+                String name = fnTok.text;
                 if (match(TokType.LPAREN)) {
-                    List<Expr> args = new ArrayList<>();
-                    if (peek().type != TokType.RPAREN) {
-                        do {
-                            args.add(parseExpr());
-                        } while (match(TokType.COMMA));
-                    }
+                    List<CallArg> args = parseCallArgs();
                     expect(TokType.RPAREN, "Expected ')' after function arguments");
-                    return buildFunctionCall(name, args, t.line);
+                    return buildFunctionCall(name, args, fnTok.line);
                 }
-                return ctx -> ctx.read(name);
+                if (fnTok.type == TokType.IDENT) {
+                    return ctx -> ctx.read(name);
+                }
             }
             throw new StSyntaxException(t.line, "Expected expression (found '" + (t.text.isEmpty() ? "EOF" : t.text) + "')");
         }
 
-        private Expr buildFunctionCall(String fnName, List<Expr> args, int line) {
+        private Expr buildFunctionCall(String fnName, List<CallArg> rawArgs, int line) {
             String up = fnName.toUpperCase(Locale.ROOT);
+            List<Expr> inputExprs = rawArgs.stream()
+                    .filter(a -> !a.isOutput() && a.expr() != null)
+                    .map(CallArg::expr)
+                    .toList();
+
+            CallArg enArg = rawArgs.stream()
+                    .filter(a -> "EN".equalsIgnoreCase(a.paramName()))
+                    .findFirst()
+                    .orElse(null);
+
+            List<Expr> operandExprs = (enArg != null)
+                    ? rawArgs.stream()
+                            .filter(a -> !a.isOutput() && a.expr() != null && !"EN".equalsIgnoreCase(a.paramName()))
+                            .map(CallArg::expr)
+                            .toList()
+                    : inputExprs;
+
             return switch (up) {
+                case "AND" -> {
+                    if (inputExprs.isEmpty()) {
+                        throw new StSyntaxException(line, "AND() requires at least one argument");
+                    }
+                    if (enArg != null) {
+                        Expr en = enArg.expr();
+                        yield ctx -> Math.abs(en.eval(ctx)) < 0.5 ? 0.0 : (operandExprs.stream().allMatch(e -> Math.abs(e.eval(ctx)) >= 0.5) ? 1.0 : 0.0);
+                    }
+                    yield ctx -> inputExprs.stream().allMatch(e -> Math.abs(e.eval(ctx)) >= 0.5) ? 1.0 : 0.0;
+                }
+                case "NAND" -> {
+                    if (inputExprs.isEmpty()) {
+                        throw new StSyntaxException(line, "NAND() requires at least one argument");
+                    }
+                    if (enArg != null) {
+                        Expr en = enArg.expr();
+                        yield ctx -> Math.abs(en.eval(ctx)) < 0.5 ? 0.0 : (operandExprs.stream().allMatch(e -> Math.abs(e.eval(ctx)) >= 0.5) ? 0.0 : 1.0);
+                    }
+                    yield ctx -> inputExprs.stream().allMatch(e -> Math.abs(e.eval(ctx)) >= 0.5) ? 0.0 : 1.0;
+                }
+                case "OR" -> {
+                    if (inputExprs.isEmpty()) {
+                        throw new StSyntaxException(line, "OR() requires at least one argument");
+                    }
+                    if (enArg != null) {
+                        Expr en = enArg.expr();
+                        yield ctx -> Math.abs(en.eval(ctx)) < 0.5 ? 0.0 : (operandExprs.stream().anyMatch(e -> Math.abs(e.eval(ctx)) >= 0.5) ? 1.0 : 0.0);
+                    }
+                    yield ctx -> inputExprs.stream().anyMatch(e -> Math.abs(e.eval(ctx)) >= 0.5) ? 1.0 : 0.0;
+                }
+                case "NOR" -> {
+                    if (inputExprs.isEmpty()) {
+                        throw new StSyntaxException(line, "NOR() requires at least one argument");
+                    }
+                    if (enArg != null) {
+                        Expr en = enArg.expr();
+                        yield ctx -> Math.abs(en.eval(ctx)) < 0.5 ? 0.0 : (operandExprs.stream().anyMatch(e -> Math.abs(e.eval(ctx)) >= 0.5) ? 0.0 : 1.0);
+                    }
+                    yield ctx -> inputExprs.stream().anyMatch(e -> Math.abs(e.eval(ctx)) >= 0.5) ? 0.0 : 1.0;
+                }
+                case "XOR" -> {
+                    if (inputExprs.isEmpty()) {
+                        throw new StSyntaxException(line, "XOR() requires at least one argument");
+                    }
+                    if (enArg != null) {
+                        Expr en = enArg.expr();
+                        yield ctx -> {
+                            if (Math.abs(en.eval(ctx)) < 0.5) return 0.0;
+                            boolean res = false;
+                            for (Expr e : operandExprs) {
+                                res ^= (Math.abs(e.eval(ctx)) >= 0.5);
+                            }
+                            return res ? 1.0 : 0.0;
+                        };
+                    }
+                    yield ctx -> {
+                        boolean res = false;
+                        for (Expr e : inputExprs) {
+                            res ^= (Math.abs(e.eval(ctx)) >= 0.5);
+                        }
+                        return res ? 1.0 : 0.0;
+                    };
+                }
+                case "XNOR" -> {
+                    if (inputExprs.isEmpty()) {
+                        throw new StSyntaxException(line, "XNOR() requires at least one argument");
+                    }
+                    yield ctx -> {
+                        boolean res = false;
+                        for (Expr e : operandExprs) {
+                            res ^= (Math.abs(e.eval(ctx)) >= 0.5);
+                        }
+                        return res ? 0.0 : 1.0;
+                    };
+                }
+                case "NOT" -> {
+                    requireArgs(up, operandExprs, 1, line);
+                    Expr in = operandExprs.getFirst();
+                    if (enArg != null) {
+                        Expr en = enArg.expr();
+                        yield ctx -> Math.abs(en.eval(ctx)) < 0.5 ? 0.0 : (Math.abs(in.eval(ctx)) >= 0.5 ? 0.0 : 1.0);
+                    }
+                    yield ctx -> Math.abs(in.eval(ctx)) >= 0.5 ? 0.0 : 1.0;
+                }
+                case "ADD" -> {
+                    if (inputExprs.isEmpty()) throw new StSyntaxException(line, "ADD() requires arguments");
+                    yield ctx -> {
+                        double sum = 0.0;
+                        for (Expr e : inputExprs) sum += e.eval(ctx);
+                        return sum;
+                    };
+                }
+                case "SUB" -> {
+                    requireArgs(up, inputExprs, 2, line);
+                    yield ctx -> inputExprs.get(0).eval(ctx) - inputExprs.get(1).eval(ctx);
+                }
+                case "MUL" -> {
+                    if (inputExprs.isEmpty()) throw new StSyntaxException(line, "MUL() requires arguments");
+                    yield ctx -> {
+                        double prod = 1.0;
+                        for (Expr e : inputExprs) prod *= e.eval(ctx);
+                        return prod;
+                    };
+                }
+                case "DIV" -> {
+                    requireArgs(up, inputExprs, 2, line);
+                    yield ctx -> {
+                        double d = inputExprs.get(1).eval(ctx);
+                        return Math.abs(d) < 1e-12 ? 0.0 : inputExprs.get(0).eval(ctx) / d;
+                    };
+                }
+                case "MOD" -> {
+                    requireArgs(up, inputExprs, 2, line);
+                    yield ctx -> {
+                        long d = Math.round(inputExprs.get(1).eval(ctx));
+                        return d == 0 ? 0.0 : (double) (Math.round(inputExprs.get(0).eval(ctx)) % d);
+                    };
+                }
+                case "EQ" -> {
+                    requireArgs(up, inputExprs, 2, line);
+                    yield ctx -> Math.abs(inputExprs.get(0).eval(ctx) - inputExprs.get(1).eval(ctx)) < 1e-6 ? 1.0 : 0.0;
+                }
+                case "NE" -> {
+                    requireArgs(up, inputExprs, 2, line);
+                    yield ctx -> Math.abs(inputExprs.get(0).eval(ctx) - inputExprs.get(1).eval(ctx)) >= 1e-6 ? 1.0 : 0.0;
+                }
+                case "LT" -> {
+                    requireArgs(up, inputExprs, 2, line);
+                    yield ctx -> inputExprs.get(0).eval(ctx) < inputExprs.get(1).eval(ctx) ? 1.0 : 0.0;
+                }
+                case "LE" -> {
+                    requireArgs(up, inputExprs, 2, line);
+                    yield ctx -> inputExprs.get(0).eval(ctx) <= inputExprs.get(1).eval(ctx) ? 1.0 : 0.0;
+                }
+                case "GT" -> {
+                    requireArgs(up, inputExprs, 2, line);
+                    yield ctx -> inputExprs.get(0).eval(ctx) > inputExprs.get(1).eval(ctx) ? 1.0 : 0.0;
+                }
+                case "GE" -> {
+                    requireArgs(up, inputExprs, 2, line);
+                    yield ctx -> inputExprs.get(0).eval(ctx) >= inputExprs.get(1).eval(ctx) ? 1.0 : 0.0;
+                }
                 case "ABS" -> {
-                    requireArgs(up, args, 1, line);
-                    yield ctx -> Math.abs(args.get(0).eval(ctx));
+                    requireArgs(up, inputExprs, 1, line);
+                    yield ctx -> Math.abs(inputExprs.getFirst().eval(ctx));
                 }
                 case "SQRT" -> {
-                    requireArgs(up, args, 1, line);
-                    yield ctx -> Math.sqrt(Math.max(0.0, args.get(0).eval(ctx)));
+                    requireArgs(up, inputExprs, 1, line);
+                    yield ctx -> Math.sqrt(Math.max(0.0, inputExprs.getFirst().eval(ctx)));
+                }
+                case "LN" -> {
+                    requireArgs(up, inputExprs, 1, line);
+                    yield ctx -> Math.log(Math.max(1e-12, inputExprs.getFirst().eval(ctx)));
+                }
+                case "LOG" -> {
+                    requireArgs(up, inputExprs, 1, line);
+                    yield ctx -> Math.log10(Math.max(1e-12, inputExprs.getFirst().eval(ctx)));
+                }
+                case "EXP" -> {
+                    requireArgs(up, inputExprs, 1, line);
+                    yield ctx -> Math.exp(inputExprs.getFirst().eval(ctx));
                 }
                 case "SIN" -> {
-                    requireArgs(up, args, 1, line);
-                    yield ctx -> Math.sin(args.get(0).eval(ctx));
+                    requireArgs(up, inputExprs, 1, line);
+                    yield ctx -> Math.sin(inputExprs.getFirst().eval(ctx));
                 }
                 case "COS" -> {
-                    requireArgs(up, args, 1, line);
-                    yield ctx -> Math.cos(args.get(0).eval(ctx));
+                    requireArgs(up, inputExprs, 1, line);
+                    yield ctx -> Math.cos(inputExprs.getFirst().eval(ctx));
                 }
                 case "TAN" -> {
-                    requireArgs(up, args, 1, line);
-                    yield ctx -> Math.tan(args.get(0).eval(ctx));
+                    requireArgs(up, inputExprs, 1, line);
+                    yield ctx -> Math.tan(inputExprs.getFirst().eval(ctx));
+                }
+                case "ASIN" -> {
+                    requireArgs(up, inputExprs, 1, line);
+                    yield ctx -> Math.asin(Math.clamp(inputExprs.getFirst().eval(ctx), -1.0, 1.0));
+                }
+                case "ACOS" -> {
+                    requireArgs(up, inputExprs, 1, line);
+                    yield ctx -> Math.acos(Math.clamp(inputExprs.getFirst().eval(ctx), -1.0, 1.0));
+                }
+                case "ATAN" -> {
+                    requireArgs(up, inputExprs, 1, line);
+                    yield ctx -> Math.atan(inputExprs.getFirst().eval(ctx));
                 }
                 case "TRUNC", "FLOAT_TO_INT", "REAL_TO_INT", "DINT_TO_INT" -> {
-                    requireArgs(up, args, 1, line);
-                    yield ctx -> (double) ((long) args.get(0).eval(ctx));
+                    requireArgs(up, inputExprs, 1, line);
+                    yield ctx -> (double) ((long) inputExprs.getFirst().eval(ctx));
                 }
                 case "ROUND" -> {
-                    requireArgs(up, args, 1, line);
-                    yield ctx -> (double) Math.round(args.get(0).eval(ctx));
+                    requireArgs(up, inputExprs, 1, line);
+                    yield ctx -> (double) Math.round(inputExprs.getFirst().eval(ctx));
                 }
                 case "INT_TO_FLOAT", "INT_TO_REAL", "BOOL_TO_INT" -> {
-                    requireArgs(up, args, 1, line);
-                    yield ctx -> args.get(0).eval(ctx);
+                    requireArgs(up, inputExprs, 1, line);
+                    yield ctx -> inputExprs.getFirst().eval(ctx);
                 }
                 case "INT_TO_BOOL" -> {
-                    requireArgs(up, args, 1, line);
-                    yield ctx -> Math.abs(args.get(0).eval(ctx)) >= 0.5 ? 1.0 : 0.0;
+                    requireArgs(up, inputExprs, 1, line);
+                    yield ctx -> Math.abs(inputExprs.getFirst().eval(ctx)) >= 0.5 ? 1.0 : 0.0;
                 }
                 case "MIN" -> {
-                    requireArgs(up, args, 2, line);
-                    yield ctx -> Math.min(args.get(0).eval(ctx), args.get(1).eval(ctx));
+                    requireArgs(up, inputExprs, 2, line);
+                    yield ctx -> Math.min(inputExprs.get(0).eval(ctx), inputExprs.get(1).eval(ctx));
                 }
                 case "MAX" -> {
-                    requireArgs(up, args, 2, line);
-                    yield ctx -> Math.max(args.get(0).eval(ctx), args.get(1).eval(ctx));
+                    requireArgs(up, inputExprs, 2, line);
+                    yield ctx -> Math.max(inputExprs.get(0).eval(ctx), inputExprs.get(1).eval(ctx));
                 }
                 case "LIMIT" -> {
-                    requireArgs(up, args, 3, line);
-                    yield ctx -> Math.clamp(args.get(1).eval(ctx), args.get(0).eval(ctx), args.get(2).eval(ctx));
+                    requireArgs(up, inputExprs, 3, line);
+                    yield ctx -> Math.clamp(inputExprs.get(1).eval(ctx), inputExprs.get(0).eval(ctx), inputExprs.get(2).eval(ctx));
                 }
                 case "CLAMP" -> {
-                    requireArgs(up, args, 3, line);
-                    yield ctx -> Math.clamp(args.get(0).eval(ctx), args.get(1).eval(ctx), args.get(2).eval(ctx));
+                    requireArgs(up, inputExprs, 3, line);
+                    yield ctx -> Math.clamp(inputExprs.get(0).eval(ctx), inputExprs.get(1).eval(ctx), inputExprs.get(2).eval(ctx));
                 }
                 case "SEL" -> {
-                    requireArgs(up, args, 3, line);
-                    yield ctx -> Math.abs(args.get(0).eval(ctx)) >= 0.5 ? args.get(2).eval(ctx) : args.get(1).eval(ctx);
+                    requireArgs(up, inputExprs, 3, line);
+                    yield ctx -> Math.abs(inputExprs.get(0).eval(ctx)) >= 0.5 ? inputExprs.get(2).eval(ctx) : inputExprs.get(1).eval(ctx);
+                }
+                case "MUX" -> {
+                    if (inputExprs.size() < 2) throw new StSyntaxException(line, "MUX() requires at least 2 arguments");
+                    yield ctx -> {
+                        int sel = (int) Math.round(inputExprs.get(0).eval(ctx));
+                        int targetIdx = sel + 1;
+                        if (targetIdx >= 1 && targetIdx < inputExprs.size()) {
+                            return inputExprs.get(targetIdx).eval(ctx);
+                        }
+                        return 0.0;
+                    };
                 }
                 default -> throw new StSyntaxException(line, "Unknown ST function '" + fnName + "'");
             };

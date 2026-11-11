@@ -3,6 +3,7 @@ package cz.maramat.model;
 import cz.maramat.model.BlockDefinition.PinSpec;
 
 import java.awt.Point;
+import java.awt.geom.Point2D;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -112,7 +113,7 @@ public class BlockInstance {
             customProperties.put("CsPin", "PB12");
             customProperties.put("BitWidth", "8");
         } else if (definitionId.equals("Main.Execution.Interrupt")) {
-            customProperties.put("InterruptSource", "TIM_IC1 (Ultrasonic Echo)");
+            customProperties.put("InterruptSource", "TIM_IC1");
             customProperties.put("TriggerEdge", "RISING");
             customProperties.put("CaptureMode", "PULSE_WIDTH_US");
             customProperties.put("LatchPolicy", "HOLD_FIRST_UNTIL_RST");
@@ -170,17 +171,17 @@ public class BlockInstance {
     }
 
     /**
-     * Returns the integer grid point where a wire connects to the given input pin.
+     * Returns the grid point where a wire connects to the center of the given input pin (offset by 0.5).
      */
-    public Point getInputPinAnchorGrid(int pinIndex) {
-        return new Point(gridX, gridY + HEADER_GRID_HEIGHT + pinIndex + 1);
+    public Point2D.Double getInputPinAnchorGrid(int pinIndex) {
+        return new Point2D.Double(gridX, gridY + HEADER_GRID_HEIGHT + pinIndex + 0.5);
     }
 
     /**
-     * Returns the integer grid point where a wire connects to the given output pin.
+     * Returns the grid point where a wire connects to the center of the given output pin (offset by 0.5).
      */
-    public Point getOutputPinAnchorGrid(int pinIndex) {
-        return new Point(gridX + getGridWidth(), gridY + HEADER_GRID_HEIGHT + pinIndex + 1);
+    public Point2D.Double getOutputPinAnchorGrid(int pinIndex) {
+        return new Point2D.Double(gridX + getGridWidth(), gridY + HEADER_GRID_HEIGHT + pinIndex + 0.5);
     }
 
     public void setVariableInputCount(int newCount) {

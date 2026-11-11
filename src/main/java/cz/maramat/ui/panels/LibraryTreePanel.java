@@ -19,8 +19,10 @@ import java.awt.BorderLayout;
 import java.awt.Font;
 import java.awt.datatransfer.StringSelection;
 import java.awt.datatransfer.Transferable;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 public class LibraryTreePanel extends JPanel {
     private final JTree tree;
@@ -81,6 +83,7 @@ public class LibraryTreePanel extends JPanel {
     }
 
     public void rebuildTree() {
+        Set<String> expanded = getExpandedPathStrings();
         rootNode.removeAllChildren();
         Map<String, DefaultMutableTreeNode> folderNodes = new LinkedHashMap<>();
 
@@ -101,8 +104,12 @@ public class LibraryTreePanel extends JPanel {
             }
 
             treeModel.reload();
-            for (int i = 0; i < tree.getRowCount(); i++) {
-                tree.expandRow(i);
+            if (!expanded.isEmpty()) {
+                restoreExpandedPathStrings(expanded);
+            } else {
+                for (int i = 0; i < tree.getRowCount(); i++) {
+                    tree.expandRow(i);
+                }
             }
             return;
         }
@@ -136,13 +143,48 @@ public class LibraryTreePanel extends JPanel {
         }
 
         treeModel.reload();
-        for (int i = 0; i < tree.getRowCount(); i++) {
-            TreePath tp = tree.getPathForRow(i);
-            if (tp != null) {
-                String seg = tp.getLastPathComponent().toString();
-                if (seg.equals("Bool") || seg.equals("Visual") || seg.equals("Macro")) {
-                    tree.expandRow(i);
+        if (!expanded.isEmpty()) {
+            restoreExpandedPathStrings(expanded);
+        } else {
+            for (int i = 0; i < tree.getRowCount(); i++) {
+                TreePath tp = tree.getPathForRow(i);
+                if (tp != null) {
+                    String seg = tp.getLastPathComponent().toString();
+                    if (seg.equals("Bool") || seg.equals("Visual") || seg.equals("Macro")) {
+                        tree.expandRow(i);
+                    }
                 }
+            }
+        }
+    }
+
+    private Set<String> getExpandedPathStrings() {
+        Set<String> set = new HashSet<>();
+        for (int i = 0; i < tree.getRowCount(); i++) {
+            if (tree.isExpanded(i)) {
+                TreePath path = tree.getPathForRow(i);
+                if (path != null) {
+                    set.add(pathToString(path));
+                }
+            }
+        }
+        return set;
+    }
+
+    private String pathToString(TreePath path) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < path.getPathCount(); i++) {
+            if (i > 0) sb.append("/");
+            sb.append(path.getPathComponent(i).toString());
+        }
+        return sb.toString();
+    }
+
+    private void restoreExpandedPathStrings(Set<String> expanded) {
+        for (int i = 0; i < tree.getRowCount(); i++) {
+            TreePath path = tree.getPathForRow(i);
+            if (path != null && expanded.contains(pathToString(path))) {
+                tree.expandRow(i);
             }
         }
     }

@@ -108,6 +108,14 @@ public class LadderCanvas extends JPanel {
 
     private Point panStartScreen = null;
     private Point panStartViewPos = null;
+    private long lastPopupTimestamp = 0;
+
+    private static boolean isPopupTrigger(MouseEvent e) {
+        return e.isPopupTrigger()
+                || SwingUtilities.isRightMouseButton(e)
+                || (e.isControlDown() && SwingUtilities.isLeftMouseButton(e))
+                || (e.getModifiersEx() & (MouseEvent.BUTTON3_DOWN_MASK | MouseEvent.BUTTON2_DOWN_MASK)) != 0;
+    }
 
     public LadderCanvas(Project project, SimulationEngine simEngine, FbdCanvas.CanvasEditListener editListener) {
         this.project = project;
@@ -120,7 +128,17 @@ public class LadderCanvas extends JPanel {
         installDropTarget();
     }
 
+    private Page forcedPage = null;
+
+    public void setForcedPage(Page page) {
+        this.forcedPage = page;
+        updatePreferredSizeFromRungs();
+        revalidate();
+        repaint();
+    }
+
     public Page getActivePage() {
+        if (forcedPage != null) return forcedPage;
         if (project == null || project.getPages().isEmpty()) return null;
         int idx = Math.clamp(activePageIndex, 0, project.getPages().size() - 1);
         return project.getPages().get(idx);
@@ -146,6 +164,27 @@ public class LadderCanvas extends JPanel {
         Page p = getActivePage();
         if (p == null || p.getRungs().isEmpty()) return -1;
         return Math.clamp(selectedRungIndex, 0, p.getRungs().size() - 1);
+    }
+
+    public void selectAndCenterRung(int rungIndex) {
+        Page p = getActivePage();
+        if (p == null || rungIndex < 0 || rungIndex >= p.getRungs().size()) return;
+        this.selectedRungIndex = rungIndex;
+        this.selectedElement = null;
+        this.selectedBranch = null;
+
+        for (RungHitBox rhb : rungHitBoxes) {
+            if (rhb.rungIndex == rungIndex) {
+                if (getParent() instanceof JViewport vp) {
+                    int vy = Math.max(0, rhb.bounds.y - 60);
+                    vp.setViewPosition(new Point(0, vy));
+                } else {
+                    scrollRectToVisible(new Rectangle(0, Math.max(0, rhb.bounds.y - 60), getWidth(), rhb.bounds.height + 120));
+                }
+                break;
+            }
+        }
+        repaint();
     }
 
     // =========================================================================
@@ -416,15 +455,19 @@ public class LadderCanvas extends JPanel {
                     return;
                 }
 
+                if (isPopupTrigger(e)) {
+                    lastPopupTimestamp = System.currentTimeMillis();
+                    handlePopupAt(e);
+                    return;
+                }
+
                 Point logicPt = toLogicalPoint(e.getPoint());
 
                 // 1. Check Pin Operand boxes on Function Blocks
                 for (PinOperandHitBox phb : pinHitBoxes) {
                     if (phb.bounds().contains(logicPt)) {
                         selectedRungIndex = phb.rungIndex();
-                        if (SwingUtilities.isRightMouseButton(e)) {
-                            showPinContextMenu(phb, e.getX(), e.getY());
-                        } else if (e.getClickCount() == 2) {
+                        if (e.getClickCount() == 2) {
                             promptEditPinOperand(phb);
                         } else if (e.getClickCount() == 1 && simEngine.getState() == SimulationEngine.State.RUNNING && phb.isInput()) {
                             String op = phb.block().getInputs().get(phb.pinIndex()).getConstantValue();
@@ -445,9 +488,7 @@ public class LadderCanvas extends JPanel {
                         selectedBranch = ehb.parentBranch();
                         repaint();
 
-                        if (SwingUtilities.isRightMouseButton(e)) {
-                            showElementContextMenu(ehb, e.getX(), e.getY());
-                        } else if (e.getClickCount() == 2) {
+                        if (e.getClickCount() == 2) {
                             openElementEditor(ehb.element());
                         } else if (e.getClickCount() == 1 && simEngine.getState() == SimulationEngine.State.RUNNING) {
                             if (ehb.element().getKind().isContact()) {
@@ -472,18 +513,45 @@ public class LadderCanvas extends JPanel {
                         selectedBranch = null;
                         repaint();
 
-                        if (SwingUtilities.isRightMouseButton(e)) {
-                            showRungContextMenu(rhb.rungIndex(), e.getX(), e.getY());
-                        } else if (e.getClickCount() == 2 && rhb.headerBounds().contains(logicPt)) {
+                        if (e.getClickCount() == 2 && rhb.headerBounds().contains(logicPt)) {
                             promptEditRungProperties(rhb.rungIndex());
                         }
                         return;
                     }
                 }
+            }
 
-                if (SwingUtilities.isRightMouseButton(e)) {
-                    showRungContextMenu(getSelectedRungIndex(), e.getX(), e.getY());
+            private void handlePopupAt(MouseEvent e) {
+                Point logicPt = toLogicalPoint(e.getPoint());
+                for (PinOperandHitBox phb : pinHitBoxes) {
+                    if (phb.bounds().contains(logicPt)) {
+                        selectedRungIndex = phb.rungIndex();
+                        showPinContextMenu(phb, e.getX(), e.getY());
+                        repaint();
+                        return;
+                    }
                 }
+                for (ElementHitBox ehb : elementHitBoxes) {
+                    if (ehb.bounds().contains(logicPt)) {
+                        selectedRungIndex = ehb.rungIndex();
+                        selectedElement = ehb.element();
+                        selectedBranch = ehb.parentBranch();
+                        repaint();
+                        showElementContextMenu(ehb, e.getX(), e.getY());
+                        return;
+                    }
+                }
+                for (RungHitBox rhb : rungHitBoxes) {
+                    if (rhb.bounds().contains(logicPt)) {
+                        selectedRungIndex = rhb.rungIndex();
+                        selectedElement = null;
+                        selectedBranch = null;
+                        repaint();
+                        showRungContextMenu(rhb.rungIndex(), e.getX(), e.getY());
+                        return;
+                    }
+                }
+                showRungContextMenu(getSelectedRungIndex(), e.getX(), e.getY());
             }
 
             @Override
@@ -505,6 +573,13 @@ public class LadderCanvas extends JPanel {
             public void mouseReleased(MouseEvent e) {
                 panStartScreen = null;
                 panStartViewPos = null;
+                if (isPopupTrigger(e)) {
+                    long now = System.currentTimeMillis();
+                    if (now - lastPopupTimestamp > 250) {
+                        lastPopupTimestamp = now;
+                        handlePopupAt(e);
+                    }
+                }
             }
 
             @Override

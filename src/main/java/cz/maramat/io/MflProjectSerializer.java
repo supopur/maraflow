@@ -19,6 +19,7 @@ import cz.maramat.model.Wire;
 
 import java.awt.Color;
 import java.awt.Point;
+import java.awt.geom.Point2D;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -108,8 +109,12 @@ public final class MflProjectSerializer {
                 StringBuilder pts = new StringBuilder();
                 for (int k = 0; k < w.getGridPoints().size(); k++) {
                     if (k > 0) pts.append(";");
-                    Point pt = w.getGridPoints().get(k);
-                    pts.append(pt.x).append(",").append(pt.y);
+                    Point2D.Double pt = w.getGridPoints().get(k);
+                    if (pt.x == Math.floor(pt.x) && pt.y == Math.floor(pt.y)) {
+                        pts.append((long) pt.x).append(",").append((long) pt.y);
+                    } else {
+                        pts.append(pt.x).append(",").append(pt.y);
+                    }
                 }
                 props.setProperty(wp + "points", pts.toString());
             }
@@ -133,6 +138,10 @@ public final class MflProjectSerializer {
                 props.setProperty(gp + "fontSize", Integer.toString(g.getFontSize()));
                 props.setProperty(gp + "boundTargetPin", g.getBoundTargetPin());
                 props.setProperty(gp + "toggleButton", Boolean.toString(g.isToggleButton()));
+                props.setProperty(gp + "indicatorEnabled", Boolean.toString(g.isIndicatorEnabled()));
+                props.setProperty(gp + "indicatorPin", g.getIndicatorPin());
+                props.setProperty(gp + "indicatorActiveColor", Integer.toString(g.getIndicatorActiveColor().getRGB()));
+                props.setProperty(gp + "indicatorInactiveColor", Integer.toString(g.getIndicatorInactiveColor().getRGB()));
             }
 
             // Save Ladder Rungs
@@ -243,7 +252,7 @@ public final class MflProjectSerializer {
         project.setPrimaryLanguage(IecLanguage.fromCode(props.getProperty("project.primaryLanguage", "FBD")));
 
         EStopConfig ecfg = project.getEStopConfig();
-        ecfg.setEnabled(Boolean.parseBoolean(props.getProperty("project.estop.enabled", "true")));
+        ecfg.setEnabled(Boolean.parseBoolean(props.getProperty("project.estop.enabled", "false")));
         try {
             ecfg.setMode(EStopConfig.Mode.valueOf(props.getProperty("project.estop.mode", EStopConfig.Mode.DISABLE_OUTPUTS_AND_STOP.name())));
         } catch (IllegalArgumentException ignored) {}
@@ -332,7 +341,7 @@ public final class MflProjectSerializer {
                     for (String tok : ptsStr.split(";")) {
                         String[] xy = tok.split(",");
                         if (xy.length == 2) {
-                            w.getGridPoints().add(new Point(Integer.parseInt(xy[0]), Integer.parseInt(xy[1])));
+                            w.getGridPoints().add(new Point2D.Double(Double.parseDouble(xy[0]), Double.parseDouble(xy[1])));
                         }
                     }
                 }
@@ -358,6 +367,16 @@ public final class MflProjectSerializer {
                 g.setFontSize(Integer.parseInt(props.getProperty(gp + "fontSize", "11")));
                 g.setBoundTargetPin(props.getProperty(gp + "boundTargetPin", ""));
                 g.setToggleButton(Boolean.parseBoolean(props.getProperty(gp + "toggleButton", "false")));
+                g.setIndicatorEnabled(Boolean.parseBoolean(props.getProperty(gp + "indicatorEnabled", "false")));
+                g.setIndicatorPin(props.getProperty(gp + "indicatorPin", ""));
+                String actRgb = props.getProperty(gp + "indicatorActiveColor");
+                if (actRgb != null) {
+                    try { g.setIndicatorActiveColor(new Color(Integer.parseInt(actRgb))); } catch (Exception ignored) {}
+                }
+                String inactRgb = props.getProperty(gp + "indicatorInactiveColor");
+                if (inactRgb != null) {
+                    try { g.setIndicatorInactiveColor(new Color(Integer.parseInt(inactRgb))); } catch (Exception ignored) {}
+                }
                 page.getGraphics().add(g);
             }
 

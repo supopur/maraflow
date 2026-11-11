@@ -86,7 +86,7 @@ public class EStopConfig {
         }
     }
 
-    private boolean enabled = true;
+    private boolean enabled = false;
     private Mode mode = Mode.DISABLE_OUTPUTS_AND_STOP;
     private boolean manualResetRequired = true;
     private String dedicatedEStopPageName = "!EStop";

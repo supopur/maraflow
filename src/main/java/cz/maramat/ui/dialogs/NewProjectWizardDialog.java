@@ -112,7 +112,7 @@ public class NewProjectWizardDialog extends JDialog {
         JLabel bannerTitle = new JLabel("Create New Maraflow PLC Project");
         bannerTitle.setFont(AppFonts.ui(Font.BOLD, 13));
         bannerTitle.setForeground(Color.WHITE);
-        JLabel bannerSub = new JLabel("Configure project metadata, target STM32F407 PLC hardware, and IEC 61131-3 language (FBD / Ladder).");
+        JLabel bannerSub = new JLabel("Configure project identity, hardware target, and initial page.");
         bannerSub.setFont(AppFonts.ui(Font.PLAIN, 11));
         bannerSub.setForeground(new Color(0xD6, 0xEA, 0xF8));
         banner.add(bannerTitle, BorderLayout.NORTH);
@@ -131,7 +131,7 @@ public class NewProjectWizardDialog extends JDialog {
         String[] stepTitles = {
                 "1. Project Identity",
                 "2. Target Hardware",
-                "3. IEC 61131-3 Language"
+                "3. Language"
         };
         for (int i = 0; i < 3; i++) {
             JLabel lbl = new JLabel("  " + stepTitles[i]);
@@ -308,11 +308,11 @@ public class NewProjectWizardDialog extends JDialog {
         gbc.anchor = GridBagConstraints.WEST;
 
         JPanel langBox = new JPanel(new GridLayout(3, 1, 4, 6));
-        langBox.setBorder(BorderFactory.createTitledBorder("Initial Page IEC 61131-3 Programming Language"));
+        langBox.setBorder(BorderFactory.createTitledBorder("Initial Page Programming Language"));
 
-        fbdRadio = new JRadioButton("FBD - Function Block Diagram (2D wired function blocks, buses, SCADA visuals)");
-        ldRadio = new JRadioButton("LD - Ladder Diagram (Structured rungs, power rails, contacts, coils, and function blocks)");
-        stRadio = new JRadioButton("ST - Structured Text (Split variable/pin table + high-level IEC 61131-3 structured code)");
+        fbdRadio = new JRadioButton("FBD - Function Block Diagram");
+        ldRadio = new JRadioButton("LD - Ladder Diagram");
+        stRadio = new JRadioButton("ST - Structured Text");
         fbdRadio.setFont(AppFonts.ui(Font.BOLD, 11));
         ldRadio.setFont(AppFonts.ui(Font.BOLD, 11));
         stRadio.setFont(AppFonts.ui(Font.BOLD, 11));
@@ -371,12 +371,6 @@ public class NewProjectWizardDialog extends JDialog {
         defaultThreadCombo.setSelectedItem(PlcThread.THREAD_2);
         gbc.gridx = 1; gbc.weightx = 1.0;
         p.add(defaultThreadCombo, gbc);
-
-        JLabel noteLbl = new JLabel("Note: You can freely mix FBD, Ladder (LD), Structured Text (ST) pages, *Macros, and !EStop pages in one project.");
-        noteLbl.setFont(AppFonts.ui(Font.ITALIC, 11));
-        noteLbl.setForeground(new Color(0x44, 0x55, 0x66));
-        gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 2;
-        p.add(noteLbl, gbc);
 
         return p;
     }

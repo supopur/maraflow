@@ -375,6 +375,40 @@ public final class VectorIcons {
         };
     }
 
+    public static Icon minimizeWindowIcon() {
+        return new ScaledIcon(10, 10) {
+            @Override
+            protected void paintLogical(Component c, Graphics2D g2) {
+                g2.setColor(new Color(0x33, 0x33, 0x33));
+                g2.setStroke(new BasicStroke(1.8f));
+                g2.drawLine(1, 8, 8, 8);
+            }
+        };
+    }
+
+    public static Icon maximizeWindowIcon() {
+        return new ScaledIcon(10, 10) {
+            @Override
+            protected void paintLogical(Component c, Graphics2D g2) {
+                g2.setColor(new Color(0x33, 0x33, 0x33));
+                g2.setStroke(new BasicStroke(1.2f));
+                g2.drawRect(1, 1, 7, 7);
+            }
+        };
+    }
+
+    public static Icon restoreWindowIcon() {
+        return new ScaledIcon(10, 10) {
+            @Override
+            protected void paintLogical(Component c, Graphics2D g2) {
+                g2.setColor(new Color(0x33, 0x33, 0x33));
+                g2.setStroke(new BasicStroke(1.0f));
+                g2.drawRect(3, 1, 5, 5);
+                g2.drawRect(1, 3, 5, 5);
+            }
+        };
+    }
+
     public static Icon ladderAddRungIcon() {
         return new ScaledIcon(18, 16) {
             @Override

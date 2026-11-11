@@ -1,9 +1,9 @@
 package cz.maramat.model;
 
 public enum IecLanguage {
-    FBD("FBD", "Function Block Diagram (IEC 61131-3)"),
-    LD("LD", "Ladder Diagram (IEC 61131-3)"),
-    ST("ST", "Structured Text (IEC 61131-3)");
+    FBD("FBD", "Function Block Diagram"),
+    LD("LD", "Ladder Diagram"),
+    ST("ST", "Structured Text");
 
     private final String shortCode;
     private final String displayName;

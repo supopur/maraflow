@@ -270,7 +270,7 @@ public class PlcConfigDialog extends JDialog {
             IecLanguage[] langs = IecLanguage.values();
             IecLanguage chosen = (IecLanguage) JOptionPane.showInputDialog(
                     this,
-                    "Select IEC 61131-3 language for Dedicated E-Stop Page (" + rawName + "):",
+                    "Select language for Dedicated E-Stop Page (" + rawName + "):",
                     "Create Dedicated E-Stop Safety Page",
                     JOptionPane.QUESTION_MESSAGE,
                     null,

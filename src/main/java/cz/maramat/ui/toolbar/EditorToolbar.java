@@ -4,8 +4,10 @@ import cz.maramat.model.GraphicElement;
 import cz.maramat.model.IecLanguage;
 import cz.maramat.model.LadderElement;
 import cz.maramat.model.PlcThread;
+import cz.maramat.settings.AppSettings;
 import cz.maramat.sim.BlockSorter.OrderSortMode;
 import cz.maramat.sim.SimulationEngine;
+import cz.maramat.ui.AppFonts;
 import cz.maramat.ui.icons.VectorIcons;
 import cz.maramat.undo.UndoManager50;
 import cz.maramat.undo.UndoManager50.HistoryEntry;
@@ -14,6 +16,7 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.ButtonGroup;
 import javax.swing.JButton;
+import javax.swing.JCheckBoxMenuItem;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
@@ -74,6 +77,10 @@ public class EditorToolbar extends JToolBar {
         default void onEStopToggled(boolean mushroomPressed) {}
         default void onEStopManualReset() {}
         default void onFireInterruptPulse() {}
+        default void onFireInterruptPulse(String specificSource) { onFireInterruptPulse(); }
+        default boolean isSafetyPlcEnabled() { return false; }
+        default void onToggleSafetyPlc(boolean enabled) {}
+        default List<String> getListeningInterruptSources() { return List.of(); }
     }
 
     private final ToolbarListener listener;
@@ -300,12 +307,28 @@ public class EditorToolbar extends JToolBar {
         add(stopBtn);
 
         add(Box.createHorizontalStrut(3));
-        eStopBtn = new JToggleButton("E-STOP", VectorIcons.eStopIcon());
+        eStopBtn = new JToggleButton(VectorIcons.eStopIcon());
         eStopBtn.setFocusable(false);
-        eStopBtn.setFont(new Font("SansSerif", Font.BOLD, 10));
-        eStopBtn.setMargin(new Insets(2, 5, 2, 5));
-        eStopBtn.setToolTipText("Emergency Stop Mushroom Button (Click to Trip/Release E-Stop, Right-Click to Manual Reset or Configure)");
+        eStopBtn.setMargin(new Insets(2, 4, 2, 4));
+        eStopBtn.setPreferredSize(new Dimension(AppSettings.get().scale(30), AppSettings.get().scale(26)));
+        eStopBtn.setMaximumSize(new Dimension(AppSettings.get().scale(30), AppSettings.get().scale(26)));
+        eStopBtn.setToolTipText("Emergency Stop Mushroom Button (Click to Trip/Release E-Stop, Right-Click to configure Safety PLC)");
         eStopBtn.addActionListener(e -> {
+            if (!listener.isSafetyPlcEnabled()) {
+                int res = JOptionPane.showConfirmDialog(
+                        this,
+                        "Safety PLC / E-Stop supervision is currently turned OFF.\nWould you like to turn on Safety PLC mode?",
+                        "Enable Safety PLC",
+                        JOptionPane.YES_NO_OPTION,
+                        JOptionPane.QUESTION_MESSAGE
+                );
+                if (res == JOptionPane.YES_OPTION) {
+                    listener.onToggleSafetyPlc(true);
+                } else {
+                    eStopBtn.setSelected(false);
+                    return;
+                }
+            }
             updateEStopButtonVisual(eStopBtn.isSelected());
             listener.onEStopToggled(eStopBtn.isSelected());
         });
@@ -314,16 +337,23 @@ public class EditorToolbar extends JToolBar {
             public void mousePressed(MouseEvent e) {
                 if (SwingUtilities.isRightMouseButton(e)) {
                     JPopupMenu pm = new JPopupMenu();
+                    JCheckBoxMenuItem safetyToggle = new JCheckBoxMenuItem("Enable Safety PLC Mode", listener.isSafetyPlcEnabled());
+                    safetyToggle.addActionListener(ev -> {
+                        listener.onToggleSafetyPlc(safetyToggle.isSelected());
+                        updateEStopButtonVisual(eStopBtn.isSelected());
+                    });
                     JMenuItem rstItem = new JMenuItem("Manual Reset E-Stop Latch");
                     rstItem.addActionListener(ev -> {
                         eStopBtn.setSelected(false);
                         updateEStopButtonVisual(false);
                         listener.onEStopManualReset();
                     });
-                    JMenuItem cfgItem = new JMenuItem("Configure E-Stop Inputs & Mode...");
+                    JMenuItem cfgItem = new JMenuItem("Configure Safety PLC & E-Stop...");
                     cfgItem.addActionListener(ev -> listener.onPlcConfig());
-                    pm.add(rstItem);
+
+                    pm.add(safetyToggle);
                     pm.addSeparator();
+                    pm.add(rstItem);
                     pm.add(cfgItem);
                     pm.show(eStopBtn, 0, eStopBtn.getHeight());
                 }
@@ -331,8 +361,35 @@ public class EditorToolbar extends JToolBar {
         });
         add(eStopBtn);
 
-        JButton intPulseBtn = createActionBtn(VectorIcons.interruptPulseIcon(), "Fire Simulated Hardware Interrupt Pulse (Triggers Main.Execution.Interrupt blocks)");
-        intPulseBtn.addActionListener(e -> listener.onFireInterruptPulse());
+        JButton intPulseBtn = createActionBtn(VectorIcons.interruptPulseIcon(), "Fire Simulated Hardware Interrupt Pulse");
+        intPulseBtn.addActionListener(e -> {
+            List<String> sources = listener.getListeningInterruptSources();
+            if (sources == null || sources.isEmpty()) {
+                JOptionPane.showMessageDialog(
+                        this,
+                        "There are no active Hardware Interrupt blocks in the current project.",
+                        "Interrupts",
+                        JOptionPane.INFORMATION_MESSAGE
+                );
+                return;
+            }
+            if (sources.size() == 1) {
+                listener.onFireInterruptPulse(sources.getFirst());
+                return;
+            }
+            JPopupMenu pm = new JPopupMenu();
+            JMenuItem allItem = new JMenuItem("Fire All (" + sources.size() + " interrupts)");
+            allItem.setFont(AppFonts.uiBold());
+            allItem.addActionListener(ev -> listener.onFireInterruptPulse(null));
+            pm.add(allItem);
+            pm.addSeparator();
+            for (String srcName : sources) {
+                JMenuItem item = new JMenuItem("Fire " + srcName);
+                item.addActionListener(ev -> listener.onFireInterruptPulse(srcName));
+                pm.add(item);
+            }
+            pm.show(intPulseBtn, 0, intPulseBtn.getHeight());
+        });
         add(intPulseBtn);
 
         add(Box.createHorizontalStrut(4));
@@ -438,9 +495,18 @@ public class EditorToolbar extends JToolBar {
 
     public void updateEStopButtonVisual(boolean tripped) {
         if (eStopBtn == null) return;
-        eStopBtn.setBackground(tripped ? new Color(0xD3, 0x2F, 0x2F) : null);
-        eStopBtn.setForeground(tripped ? Color.WHITE : new Color(0x88, 0x11, 0x11));
-        eStopBtn.setText(tripped ? "E-STOP TRIPPED!" : "E-STOP");
+        boolean safetyOn = listener != null && listener.isSafetyPlcEnabled();
+        if (tripped) {
+            eStopBtn.setBackground(new Color(0xD3, 0x2F, 0x2F));
+            eStopBtn.setToolTipText("E-STOP TRIPPED! (Click to Release, Right-Click for menu)");
+        } else if (!safetyOn) {
+            eStopBtn.setBackground(null);
+            eStopBtn.setToolTipText("Emergency Stop (Safety PLC is OFF — Click or Right-Click to enable)");
+        } else {
+            eStopBtn.setBackground(null);
+            eStopBtn.setToolTipText("Emergency Stop (Safety PLC is ON — Click to Trip)");
+        }
+        eStopBtn.setText(null);
     }
 
     private void installPhotoshopFlyout(JToggleButton btn, GraphicElement.Kind[] kinds, boolean isPolygonGroup) {

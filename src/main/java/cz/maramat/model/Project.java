@@ -1,6 +1,7 @@
 package cz.maramat.model;
 
 import java.awt.Point;
+import java.awt.geom.Point2D;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -101,16 +102,16 @@ public class Project {
         page1.getBlocks().add(bAnd2);
         page1.getBlocks().add(bSeg1);
 
-        Point s1 = bDi.getOutputPinAnchorGrid(0);
-        Point e1 = bAnd1.getInputPinAnchorGrid(1);
+        Point2D.Double s1 = bDi.getOutputPinAnchorGrid(0);
+        Point2D.Double e1 = bAnd1.getInputPinAnchorGrid(1);
         page1.getWires().add(new Wire(bDi.getId(), 0, bAnd1.getId(), 1, "8xDI1.DI0", s1, e1));
 
-        Point s2 = bDi.getOutputPinAnchorGrid(1);
-        Point e2 = bAnd1.getInputPinAnchorGrid(2);
+        Point2D.Double s2 = bDi.getOutputPinAnchorGrid(1);
+        Point2D.Double e2 = bAnd1.getInputPinAnchorGrid(2);
         page1.getWires().add(new Wire(bDi.getId(), 1, bAnd1.getId(), 2, "8xDI1.DI1", s2, e2));
 
-        Point s3 = bAnd1.getOutputPinAnchorGrid(0);
-        Point e3 = bVal1.getInputPinAnchorGrid(0);
+        Point2D.Double s3 = bAnd1.getOutputPinAnchorGrid(0);
+        Point2D.Double e3 = bVal1.getInputPinAnchorGrid(0);
         page1.getWires().add(new Wire(bAnd1.getId(), 0, bVal1.getId(), 0, "And1.Y", s3, e3));
 
         return p;

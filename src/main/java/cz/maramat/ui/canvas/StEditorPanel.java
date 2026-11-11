@@ -1,49 +1,91 @@
 package cz.maramat.ui.canvas;
 
 import cz.maramat.model.BlockCatalog;
+import cz.maramat.model.BlockDefinition;
 import cz.maramat.model.DataType;
 import cz.maramat.model.Page;
 import cz.maramat.model.Project;
 import cz.maramat.model.StVariable;
+import cz.maramat.settings.AppSettings;
 import cz.maramat.sim.StDeclarationSync;
 import cz.maramat.sim.StInterpreter;
+import cz.maramat.sim.StLanguageServer;
 import cz.maramat.ui.AppFonts;
 
+import javax.swing.AbstractAction;
+import javax.swing.Action;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultCellEditor;
+import javax.swing.DefaultListCellRenderer;
+import javax.swing.DefaultListModel;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
+import javax.swing.JList;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JSplitPane;
 import javax.swing.JTable;
+import javax.swing.JTextField;
 import javax.swing.JTextPane;
+import javax.swing.JWindow;
+import javax.swing.KeyStroke;
 import javax.swing.ListSelectionModel;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
+import javax.swing.ToolTipManager;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.text.BadLocationException;
+import javax.swing.text.DefaultHighlighter;
+import javax.swing.text.Highlighter;
+import javax.swing.text.JTextComponent;
 import javax.swing.text.Style;
 import javax.swing.text.StyleConstants;
 import javax.swing.text.StyledDocument;
+import javax.swing.undo.CannotRedoException;
+import javax.swing.undo.CannotUndoException;
+import javax.swing.undo.UndoManager;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
+import java.awt.Insets;
+import java.awt.Point;
+import java.awt.Shape;
+import java.awt.Toolkit;
+import java.awt.Window;
+import java.awt.datatransfer.DataFlavor;
+import java.awt.dnd.DnDConstants;
+import java.awt.dnd.DropTarget;
+import java.awt.dnd.DropTargetAdapter;
+import java.awt.dnd.DropTargetDropEvent;
+import java.awt.event.ActionEvent;
+import java.awt.event.InputEvent;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.event.MouseMotionAdapter;
+import java.awt.geom.Rectangle2D;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -85,15 +127,40 @@ public class StEditorPanel extends JPanel {
             "T:1 (1000 ms)", "T:2 (100 ms)", "T:3 (10 ms)", "T:4 (1 ms Fast)", "T:5 (Idle Task)"
     });
     private final JSpinner orderSpinner = new JSpinner(new SpinnerNumberModel(10, 0, 9999, 10));
-    private final JLabel pageModeBadge = new JLabel(" [ST Page] ");
+
+    // ST Language Server State
+    private final List<StLanguageServer.Diagnostic> diagnostics = new ArrayList<>();
+    private final List<Object> diagnosticHighlights = new ArrayList<>();
+    private final Highlighter.HighlightPainter errorPainter = new SquigglyUnderlinePainter(new Color(0xD3, 0x2F, 0x2F));
+    private final Highlighter.HighlightPainter warningPainter = new SquigglyUnderlinePainter(new Color(0xF5, 0x7C, 0x00));
+
+    private JWindow completionWindow;
+    private JScrollPane completionScroll;
+    private JList<StLanguageServer.CompletionItem> completionList;
+    private DefaultListModel<StLanguageServer.CompletionItem> completionModel;
+    private final Timer completionDebounce = new Timer(150, e -> triggerCompletion());
+    private Consumer<String> macroNavigator;
 
     private final JTextPane codePane = new JTextPane();
     private final LineNumberGutter gutter = new LineNumberGutter(codePane);
     private final JLabel statusLabel = new JLabel("ST Syntax OK");
     private final JSplitPane splitPane;
 
+    // Find & Replace in ST
+    private JPanel findBar;
+    private JPanel replaceRow;
+    private final JTextField findField = new JTextField(16);
+    private final JTextField replaceField = new JTextField(16);
+    private final JCheckBox caseCheck = new JCheckBox("Match Case");
+    private final JLabel findMatchesLabel = new JLabel("0 of 0");
+    private final List<int[]> currentMatches = new ArrayList<>();
+    private int currentMatchIndex = -1;
+    private final Highlighter.HighlightPainter matchPainter = new DefaultHighlighter.DefaultHighlightPainter(new Color(255, 255, 140));
+    private final Highlighter.HighlightPainter currentMatchPainter = new DefaultHighlighter.DefaultHighlightPainter(new Color(255, 160, 50));
+
     private boolean suppressEvents = false;
     private boolean highlighting = false;
+    private final UndoManager stUndoManager = new UndoManager();
     private final Timer highlightDebounce;
 
     private final Style styleDefault;
@@ -168,6 +235,180 @@ public class StEditorPanel extends JPanel {
             public void changedUpdate(DocumentEvent e) {}
         });
 
+        doc.addUndoableEditListener(e -> {
+            if (!suppressEvents && !highlighting) {
+                stUndoManager.addEdit(e.getEdit());
+            }
+        });
+
+        int menuMask = Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
+        Action undoAction = new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                undo();
+            }
+        };
+        Action redoAction = new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                redo();
+            }
+        };
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_Z, menuMask), "stUndo");
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_Z, KeyEvent.CTRL_DOWN_MASK), "stUndo");
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_Z, KeyEvent.META_DOWN_MASK), "stUndo");
+        codePane.getActionMap().put("stUndo", undoAction);
+
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_Z, menuMask | InputEvent.SHIFT_DOWN_MASK), "stRedo");
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_Z, KeyEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), "stRedo");
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_Z, KeyEvent.META_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), "stRedo");
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_Y, menuMask), "stRedo");
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_Y, KeyEvent.CTRL_DOWN_MASK), "stRedo");
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_Y, KeyEvent.META_DOWN_MASK), "stRedo");
+        codePane.getActionMap().put("stRedo", redoAction);
+        Action openFindAction = new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                openFindBar(false);
+            }
+        };
+        Action openReplaceAction = new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                openFindBar(true);
+            }
+        };
+
+        Action formatAction = new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                actionFormatCode();
+            }
+        };
+
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_F, menuMask), "find");
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_F, KeyEvent.CTRL_DOWN_MASK), "find");
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_F, KeyEvent.META_DOWN_MASK), "find");
+        codePane.getActionMap().put("find", openFindAction);
+
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_H, menuMask), "replace");
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_H, KeyEvent.CTRL_DOWN_MASK), "replace");
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_H, KeyEvent.META_DOWN_MASK), "replace");
+        codePane.getActionMap().put("replace", openReplaceAction);
+
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_F, menuMask | KeyEvent.SHIFT_DOWN_MASK), "format");
+        codePane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_F, KeyEvent.ALT_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK), "format");
+        codePane.getActionMap().put("format", formatAction);
+
+        completionDebounce.setRepeats(false);
+
+        codePane.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyPressed(KeyEvent e) {
+                if (completionWindow != null && completionWindow.isVisible()) {
+                    if (e.getKeyCode() == KeyEvent.VK_DOWN) {
+                        if (completionModel != null && !completionModel.isEmpty()) {
+                            int idx = (completionList.getSelectedIndex() + 1) % completionModel.size();
+                            completionList.setSelectedIndex(idx);
+                            completionList.ensureIndexIsVisible(idx);
+                        }
+                        e.consume();
+                        return;
+                    } else if (e.getKeyCode() == KeyEvent.VK_UP) {
+                        if (completionModel != null && !completionModel.isEmpty()) {
+                            int idx = (completionList.getSelectedIndex() - 1 + completionModel.size()) % completionModel.size();
+                            completionList.setSelectedIndex(idx);
+                            completionList.ensureIndexIsVisible(idx);
+                        }
+                        e.consume();
+                        return;
+                    } else if (e.getKeyCode() == KeyEvent.VK_ENTER || e.getKeyCode() == KeyEvent.VK_TAB) {
+                        insertSelectedCompletion();
+                        e.consume();
+                        return;
+                    } else if (e.getKeyCode() == KeyEvent.VK_ESCAPE) {
+                        hideCompletionPopup();
+                        e.consume();
+                        return;
+                    } else if (e.getKeyCode() == KeyEvent.VK_SPACE) {
+                        hideCompletionPopup();
+                        return; // Let space pass through to document
+                    }
+                }
+
+                // Manual trigger: Ctrl+Space or Alt+Space (NOT Cmd+Space on Mac)
+                if (e.getKeyCode() == KeyEvent.VK_SPACE && (e.isControlDown() || e.isAltDown())) {
+                    triggerCompletion();
+                    e.consume();
+                }
+            }
+
+            @Override
+            public void keyReleased(KeyEvent e) {
+                char c = e.getKeyChar();
+                if (Character.isLetterOrDigit(c) || c == '_') {
+                    if (completionWindow != null && completionWindow.isVisible()) {
+                        triggerCompletion();
+                    } else if (AppSettings.get().isStIntelliSenseEnabled() && AppSettings.get().isStAutoPopup()) {
+                        completionDebounce.setInitialDelay(AppSettings.get().getStPopupDelayMs());
+                        completionDebounce.restart();
+                    }
+                } else if (e.getKeyCode() == KeyEvent.VK_BACK_SPACE || e.getKeyCode() == KeyEvent.VK_DELETE) {
+                    if (completionWindow != null && completionWindow.isVisible()) {
+                        triggerCompletion();
+                    }
+                } else if (c == ';' || c == '\n' || c == ')') {
+                    hideCompletionPopup();
+                }
+            }
+        });
+
+        ToolTipManager.sharedInstance().registerComponent(codePane);
+        codePane.addMouseMotionListener(new MouseMotionAdapter() {
+            @Override
+            public void mouseMoved(MouseEvent e) {
+                if (page == null) return;
+                try {
+                    int offset = codePane.viewToModel2D(e.getPoint());
+                    String token = extractTokenAtOffset(codePane.getText(), offset);
+
+                    boolean isJumpModifier = e.isControlDown() || e.isMetaDown();
+                    if (isJumpModifier && isDeclarationTarget(token)) {
+                        codePane.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                    } else {
+                        codePane.setCursor(Cursor.getPredefinedCursor(Cursor.TEXT_CURSOR));
+                    }
+
+                    String doc = StLanguageServer.getHoverDoc(token, page.getStVariables(), project);
+                    codePane.setToolTipText(doc);
+                } catch (Exception ignored) {
+                    codePane.setToolTipText(null);
+                    codePane.setCursor(Cursor.getPredefinedCursor(Cursor.TEXT_CURSOR));
+                }
+            }
+        });
+
+        codePane.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 1 && (e.isControlDown() || e.isMetaDown())) {
+                    try {
+                        int offset = codePane.viewToModel2D(e.getPoint());
+                        String token = extractTokenAtOffset(codePane.getText(), offset);
+                        if (token != null && !token.isBlank()) {
+                            jumpToDeclaration(token.trim());
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }
+        });
+
+        getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT).put(KeyStroke.getKeyStroke(KeyEvent.VK_F, menuMask), "find");
+        getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT).put(KeyStroke.getKeyStroke(KeyEvent.VK_F, KeyEvent.CTRL_DOWN_MASK), "find");
+        getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT).put(KeyStroke.getKeyStroke(KeyEvent.VK_F, KeyEvent.META_DOWN_MASK), "find");
+        getActionMap().put("find", openFindAction);
+
+        setupDropTarget();
         setPage(project, page);
     }
 
@@ -186,13 +427,6 @@ public class StEditorPanel extends JPanel {
 
         JPanel leftControls = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         leftControls.setOpaque(false);
-
-        pageModeBadge.setFont(AppFonts.uiBold());
-        pageModeBadge.setOpaque(true);
-        pageModeBadge.setBackground(new Color(0xDC, 0xE6, 0xF4));
-        pageModeBadge.setForeground(new Color(0x10, 0x30, 0x60));
-        pageModeBadge.setBorder(BorderFactory.createLineBorder(new Color(0x70, 0x90, 0xB8)));
-        leftControls.add(pageModeBadge);
 
         JButton addVarBtn = createBarButton("+ Variable", "Add local variable or Macro input/output pin");
         addVarBtn.addActionListener(e -> addVariableRow());
@@ -307,7 +541,7 @@ public class StEditorPanel extends JPanel {
         JPanel snippetPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         snippetPanel.setOpaque(false);
 
-        JLabel stTitle = new JLabel("Structured Text (IEC 61131-3):");
+        JLabel stTitle = new JLabel("Structured Text:");
         stTitle.setFont(AppFonts.uiBold());
         snippetPanel.add(stTitle);
 
@@ -323,16 +557,19 @@ public class StEditorPanel extends JPanel {
         forBtn.addActionListener(e -> insertSnippet("FOR i := 0 TO 7 DO\n    REG_0 := REG_0 + 1;\nEND_FOR;\n"));
         snippetPanel.add(forBtn);
 
-        JButton checkBtn = createBarButton("Check Syntax", "Validate IEC 61131-3 ST syntax now");
+        JButton checkBtn = createBarButton("Check Syntax", "Validate ST syntax now");
         checkBtn.addActionListener(e -> validateStCode());
         snippetPanel.add(checkBtn);
 
-        bar.add(snippetPanel, BorderLayout.WEST);
+        JButton formatBtn = createBarButton("Format", "Auto-format and indent ST code (Shift+Alt+F)");
+        formatBtn.addActionListener(e -> actionFormatCode());
+        snippetPanel.add(formatBtn);
 
-        JLabel ioHint = new JLabel("Direct I/O & Regs: DI0..15, DO0..15, AI0..7, AO0..3, PWM0..3, M0..15, REG_0..15");
-        ioHint.setFont(AppFonts.uiSmall());
-        ioHint.setForeground(new Color(0x50, 0x55, 0x60));
-        bar.add(ioHint, BorderLayout.EAST);
+        JButton findBtn = createBarButton("Find... (Cmd+F)", "Find & Replace in ST code (Cmd+F / Ctrl+F)");
+        findBtn.addActionListener(e -> openFindBar(false));
+        snippetPanel.add(findBtn);
+
+        bar.add(snippetPanel, BorderLayout.WEST);
 
         panel.add(bar, BorderLayout.NORTH);
 
@@ -343,7 +580,13 @@ public class StEditorPanel extends JPanel {
         JScrollPane codeScroll = new JScrollPane(codePane);
         codeScroll.setRowHeaderView(gutter);
         codeScroll.setBorder(BorderFactory.createLoweredBevelBorder());
-        panel.add(codeScroll, BorderLayout.CENTER);
+
+        findBar = buildFindBar();
+
+        JPanel editorWithFind = new JPanel(new BorderLayout());
+        editorWithFind.add(findBar, BorderLayout.NORTH);
+        editorWithFind.add(codeScroll, BorderLayout.CENTER);
+        panel.add(editorWithFind, BorderLayout.CENTER);
 
         // Status / Diagnostic Footer
         JPanel footer = new JPanel(new BorderLayout(8, 0));
@@ -360,6 +603,275 @@ public class StEditorPanel extends JPanel {
         return panel;
     }
 
+    private JPanel buildFindBar() {
+        JPanel bar = new JPanel(new BorderLayout(4, 2));
+        bar.setBackground(new Color(0xF3, 0xF5, 0xF8));
+        bar.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(0xBB, 0xC4, 0xD0)),
+                BorderFactory.createEmptyBorder(3, 6, 3, 6)
+        ));
+
+        JPanel topRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 1));
+        topRow.setOpaque(false);
+
+        JLabel findLbl = new JLabel("Find:");
+        findLbl.setFont(AppFonts.uiBold());
+        topRow.add(findLbl);
+
+        findField.setFont(AppFonts.canvasMono(12f));
+        topRow.add(findField);
+
+        JButton prevBtn = new JButton("▲");
+        prevBtn.setMargin(new Insets(1, 4, 1, 4));
+        prevBtn.setToolTipText("Previous Match (Shift+Enter)");
+        prevBtn.addActionListener(e -> findPrev());
+        topRow.add(prevBtn);
+
+        JButton nextBtn = new JButton("▼");
+        nextBtn.setMargin(new Insets(1, 4, 1, 4));
+        nextBtn.setToolTipText("Next Match (Enter)");
+        nextBtn.addActionListener(e -> findNext());
+        topRow.add(nextBtn);
+
+        caseCheck.setFont(AppFonts.uiSmall());
+        caseCheck.setOpaque(false);
+        caseCheck.addActionListener(e -> searchMatches(true));
+        topRow.add(caseCheck);
+
+        findMatchesLabel.setFont(AppFonts.uiSmall());
+        findMatchesLabel.setForeground(new Color(0x40, 0x45, 0x50));
+        topRow.add(findMatchesLabel);
+
+        replaceRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 1));
+        replaceRow.setOpaque(false);
+
+        JLabel repLbl = new JLabel("Replace:");
+        repLbl.setFont(AppFonts.uiBold());
+        replaceRow.add(repLbl);
+
+        replaceField.setFont(AppFonts.canvasMono(12f));
+        replaceRow.add(replaceField);
+
+        JButton repBtn = new JButton("Replace");
+        repBtn.setFont(AppFonts.uiPlain());
+        repBtn.setMargin(new Insets(1, 6, 1, 6));
+        repBtn.addActionListener(e -> replaceCurrentAndNext());
+        replaceRow.add(repBtn);
+
+        JButton repAllBtn = new JButton("Replace All");
+        repAllBtn.setFont(AppFonts.uiPlain());
+        repAllBtn.setMargin(new Insets(1, 6, 1, 6));
+        repAllBtn.addActionListener(e -> replaceAll());
+        replaceRow.add(repAllBtn);
+
+        JButton toggleReplaceBtn = new JButton("Replace ▾");
+        toggleReplaceBtn.setFont(AppFonts.uiSmall());
+        toggleReplaceBtn.setMargin(new Insets(1, 4, 1, 4));
+        toggleReplaceBtn.addActionListener(e -> {
+            replaceRow.setVisible(!replaceRow.isVisible());
+            revalidate();
+            repaint();
+        });
+        topRow.add(toggleReplaceBtn);
+
+        JButton closeBtn = new JButton("✕");
+        closeBtn.setFont(AppFonts.uiBold());
+        closeBtn.setMargin(new Insets(1, 4, 1, 4));
+        closeBtn.setToolTipText("Close Find Bar (Escape)");
+        closeBtn.addActionListener(e -> closeFindBar());
+
+        JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 1));
+        rightPanel.setOpaque(false);
+        rightPanel.add(closeBtn);
+
+        JPanel mainFindContainer = new JPanel(new BorderLayout());
+        mainFindContainer.setOpaque(false);
+        mainFindContainer.add(topRow, BorderLayout.WEST);
+        mainFindContainer.add(rightPanel, BorderLayout.EAST);
+
+        bar.add(mainFindContainer, BorderLayout.NORTH);
+        bar.add(replaceRow, BorderLayout.SOUTH);
+        replaceRow.setVisible(false);
+
+        findField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) { searchMatches(true); }
+            @Override
+            public void removeUpdate(DocumentEvent e) { searchMatches(true); }
+            @Override
+            public void changedUpdate(DocumentEvent e) { searchMatches(true); }
+        });
+
+        findField.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyPressed(KeyEvent e) {
+                if (e.getKeyCode() == KeyEvent.VK_ENTER) {
+                    if (e.isShiftDown()) findPrev();
+                    else findNext();
+                    e.consume();
+                } else if (e.getKeyCode() == KeyEvent.VK_ESCAPE) {
+                    closeFindBar();
+                    e.consume();
+                }
+            }
+        });
+
+        replaceField.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyPressed(KeyEvent e) {
+                if (e.getKeyCode() == KeyEvent.VK_ENTER) {
+                    replaceCurrentAndNext();
+                    e.consume();
+                } else if (e.getKeyCode() == KeyEvent.VK_ESCAPE) {
+                    closeFindBar();
+                    e.consume();
+                }
+            }
+        });
+
+        bar.setVisible(false);
+        return bar;
+    }
+
+    public void openFindBar(boolean showReplace) {
+        String selected = codePane.getSelectedText();
+        if (selected != null && !selected.isBlank() && !selected.contains("\n")) {
+            findField.setText(selected);
+        }
+        findBar.setVisible(true);
+        if (showReplace) {
+            replaceRow.setVisible(true);
+        }
+        revalidate();
+        repaint();
+        findField.requestFocusInWindow();
+        findField.selectAll();
+        searchMatches(true);
+    }
+
+    public void closeFindBar() {
+        findBar.setVisible(false);
+        clearFindHighlights();
+        codePane.requestFocusInWindow();
+    }
+
+    private void searchMatches(boolean selectCurrent) {
+        clearFindHighlights();
+        currentMatches.clear();
+        String q = findField.getText();
+        if (q == null || q.isEmpty()) {
+            findMatchesLabel.setText("0 of 0");
+            currentMatchIndex = -1;
+            return;
+        }
+
+        String text = codePane.getText();
+        boolean matchCase = caseCheck.isSelected();
+        String searchIn = matchCase ? text : text.toLowerCase();
+        String searchFor = matchCase ? q : q.toLowerCase();
+
+        int idx = 0;
+        int caret = codePane.getCaretPosition();
+        int closestIdx = -1;
+        while ((idx = searchIn.indexOf(searchFor, idx)) >= 0) {
+            currentMatches.add(new int[]{idx, idx + searchFor.length()});
+            if (closestIdx == -1 && idx >= caret) {
+                closestIdx = currentMatches.size() - 1;
+            }
+            idx += searchFor.length();
+        }
+
+        if (currentMatches.isEmpty()) {
+            findMatchesLabel.setText("No matches");
+            currentMatchIndex = -1;
+            return;
+        }
+
+        if (currentMatchIndex < 0 || currentMatchIndex >= currentMatches.size()) {
+            currentMatchIndex = closestIdx >= 0 ? closestIdx : 0;
+        }
+
+        highlightAllMatches();
+        if (selectCurrent) {
+            jumpToMatch(currentMatchIndex);
+        } else {
+            updateMatchLabel();
+        }
+    }
+
+    private void highlightAllMatches() {
+        Highlighter hl = codePane.getHighlighter();
+        hl.removeAllHighlights();
+        for (int i = 0; i < currentMatches.size(); i++) {
+            int[] m = currentMatches.get(i);
+            try {
+                hl.addHighlight(m[0], m[1], (i == currentMatchIndex) ? currentMatchPainter : matchPainter);
+            } catch (BadLocationException ignored) {}
+        }
+        updateMatchLabel();
+    }
+
+    private void jumpToMatch(int index) {
+        if (currentMatches.isEmpty() || index < 0 || index >= currentMatches.size()) return;
+        currentMatchIndex = index;
+        int[] m = currentMatches.get(index);
+        codePane.setCaretPosition(m[0]);
+        codePane.moveCaretPosition(m[1]);
+        highlightAllMatches();
+    }
+
+    private void findNext() {
+        if (currentMatches.isEmpty()) return;
+        currentMatchIndex = (currentMatchIndex + 1) % currentMatches.size();
+        jumpToMatch(currentMatchIndex);
+    }
+
+    private void findPrev() {
+        if (currentMatches.isEmpty()) return;
+        currentMatchIndex = (currentMatchIndex - 1 + currentMatches.size()) % currentMatches.size();
+        jumpToMatch(currentMatchIndex);
+    }
+
+    private void updateMatchLabel() {
+        if (currentMatches.isEmpty()) {
+            findMatchesLabel.setText("No matches");
+        } else {
+            findMatchesLabel.setText((currentMatchIndex + 1) + " of " + currentMatches.size());
+        }
+    }
+
+    private void clearFindHighlights() {
+        codePane.getHighlighter().removeAllHighlights();
+    }
+
+    private void replaceCurrentAndNext() {
+        if (currentMatches.isEmpty() || currentMatchIndex < 0 || currentMatchIndex >= currentMatches.size()) return;
+        int[] m = currentMatches.get(currentMatchIndex);
+        String rep = replaceField.getText();
+        try {
+            codePane.getDocument().remove(m[0], m[1] - m[0]);
+            codePane.getDocument().insertString(m[0], rep, null);
+            searchMatches(false);
+            if (!currentMatches.isEmpty()) {
+                jumpToMatch(Math.min(currentMatchIndex, currentMatches.size() - 1));
+            }
+        } catch (BadLocationException ignored) {}
+    }
+
+    private void replaceAll() {
+        if (currentMatches.isEmpty()) return;
+        String rep = replaceField.getText();
+        String q = findField.getText();
+        if (q == null || q.isEmpty()) return;
+        boolean matchCase = caseCheck.isSelected();
+        String text = codePane.getText();
+        String newText = matchCase
+                ? text.replace(q, rep)
+                : Pattern.compile(Pattern.quote(q), Pattern.CASE_INSENSITIVE).matcher(text).replaceAll(Matcher.quoteReplacement(rep));
+        codePane.setText(newText);
+        searchMatches(true);
+    }
+
     private JButton createBarButton(String text, String tooltip) {
         JButton b = new JButton(text);
         b.setFont(AppFonts.uiPlain());
@@ -372,12 +884,12 @@ public class StEditorPanel extends JPanel {
     public void setPage(Project project, Page page) {
         this.project = project;
         this.page = page;
+        stUndoManager.discardAllEdits();
         suppressEvents = true;
         try {
             if (page != null) {
                 threadCombo.setSelectedIndex(Math.clamp(page.getStThreadId() - 1, 0, 4));
                 orderSpinner.setValue(page.getStOrder());
-                updatePageBadge();
 
                 // If code is empty or has no declarations while variables exist, sync them to code
                 if (!page.getStVariables().isEmpty() && StDeclarationSync.parseDeclarationsFromCode(page.getStCode()) == null) {
@@ -398,20 +910,19 @@ public class StEditorPanel extends JPanel {
         }
     }
 
-    private void updatePageBadge() {
-        if (page == null) return;
-        if (page.isEStopPage()) {
-            pageModeBadge.setText(" [!E-STOP SAFETY ST HANDLER] ");
-            pageModeBadge.setBackground(new Color(0xF8, 0xD7, 0xDA));
-            pageModeBadge.setForeground(new Color(0x84, 0x10, 0x18));
-        } else if (page.isMacro()) {
-            pageModeBadge.setText(" [*ST MACRO FUNCTION BLOCK: " + page.getCleanName() + "] ");
-            pageModeBadge.setBackground(new Color(0xE8, 0xDA, 0xF8));
-            pageModeBadge.setForeground(new Color(0x4A, 0x14, 0x8C));
-        } else {
-            pageModeBadge.setText(" [ST PAGE: " + page.getName() + "] ");
-            pageModeBadge.setBackground(new Color(0xDC, 0xE6, 0xF4));
-            pageModeBadge.setForeground(new Color(0x10, 0x30, 0x60));
+    public void undo() {
+        if (stUndoManager.canUndo()) {
+            try {
+                stUndoManager.undo();
+            } catch (CannotUndoException ignored) {}
+        }
+    }
+
+    public void redo() {
+        if (stUndoManager.canRedo()) {
+            try {
+                stUndoManager.redo();
+            } catch (CannotRedoException ignored) {}
         }
     }
 
@@ -470,13 +981,14 @@ public class StEditorPanel extends JPanel {
         if (page == null) return;
         String updated = StDeclarationSync.replaceDeclarationsInCode(codePane.getText(), page.getStVariables());
         page.setStCode(updated);
+        boolean prev = suppressEvents;
         suppressEvents = true;
         try {
             int caret = Math.min(codePane.getCaretPosition(), updated.length());
             codePane.setText(updated);
             codePane.setCaretPosition(caret);
         } finally {
-            suppressEvents = false;
+            suppressEvents = prev;
         }
         gutter.repaint();
         applySyntaxHighlighting();
@@ -572,17 +1084,426 @@ public class StEditorPanel extends JPanel {
         });
     }
 
+    public void setMacroNavigator(Consumer<String> macroNavigator) {
+        this.macroNavigator = macroNavigator;
+    }
+
     private void validateStCode() {
         if (page == null) return;
-        List<StInterpreter.Diagnostic> diags = StInterpreter.validate(page.getStCode(), page.getStVariables());
-        if (diags.isEmpty()) {
-            statusLabel.setText("IEC 61131-3 ST Syntax OK  |  " + page.getStVariables().size() + " variable(s) declared");
+        if (!AppSettings.get().isStRealtimeDiagnostics()) {
+            diagnostics.clear();
+            gutter.setDiagnostics(List.of());
+            updateDiagnosticHighlights();
+            statusLabel.setText("Diagnostics disabled in Settings");
+            statusLabel.setForeground(Color.GRAY);
+            return;
+        }
+
+        diagnostics.clear();
+        diagnostics.addAll(StLanguageServer.analyze(page.getStCode(), page.getStVariables(), project));
+
+        if (AppSettings.get().isStGutterMarkers()) {
+            gutter.setDiagnostics(diagnostics);
+        } else {
+            gutter.setDiagnostics(List.of());
+        }
+
+        updateDiagnosticHighlights();
+
+        if (diagnostics.isEmpty()) {
+            statusLabel.setText("✔ ST Syntax OK  |  " + page.getStVariables().size() + " variable(s) declared");
             statusLabel.setForeground(new Color(0x1B, 0x5E, 0x20));
         } else {
-            StInterpreter.Diagnostic first = diags.getFirst();
-            statusLabel.setText("Syntax Error (" + first + ")");
-            statusLabel.setForeground(new Color(0xB7, 0x1C, 0x1C));
+            long errors = diagnostics.stream().filter(d -> d.severity() == StLanguageServer.Severity.ERROR).count();
+            long warnings = diagnostics.stream().filter(d -> d.severity() == StLanguageServer.Severity.WARNING).count();
+            StLanguageServer.Diagnostic first = diagnostics.getFirst();
+            statusLabel.setText("✖ " + errors + " error(s), " + warnings + " warning(s) — Line " + first.line() + ": " + first.message());
+            statusLabel.setForeground(errors > 0 ? new Color(0xB7, 0x1C, 0x1C) : new Color(0xE6, 0x51, 0x00));
         }
+    }
+
+    private void updateDiagnosticHighlights() {
+        Highlighter hl = codePane.getHighlighter();
+        for (Object tag : diagnosticHighlights) {
+            hl.removeHighlight(tag);
+        }
+        diagnosticHighlights.clear();
+
+        if (!AppSettings.get().isStSquigglyUnderlines()) return;
+
+        String text = codePane.getText();
+        String[] lines = text.split("\n", -1);
+        int[] lineStarts = new int[lines.length + 1];
+        int running = 0;
+        for (int i = 0; i < lines.length; i++) {
+            lineStarts[i] = running;
+            running += lines[i].length() + 1;
+        }
+
+        for (StLanguageServer.Diagnostic d : diagnostics) {
+            if (d.line() < 1 || d.line() > lines.length) continue;
+            int lineIdx = d.line() - 1;
+            int lineStart = lineStarts[lineIdx];
+            int lineLen = lines[lineIdx].length();
+            if (lineLen == 0) continue;
+
+            int p0 = lineStart + Math.clamp(d.colStart(), 0, lineLen);
+            int p1 = (d.colEnd() > d.colStart())
+                    ? lineStart + Math.clamp(d.colEnd(), 0, lineLen)
+                    : lineStart + lineLen;
+            if (p1 <= p0) p1 = Math.min(p0 + 4, text.length());
+
+            try {
+                Highlighter.HighlightPainter painter = (d.severity() == StLanguageServer.Severity.ERROR)
+                        ? errorPainter
+                        : warningPainter;
+                Object tag = hl.addHighlight(p0, p1, painter);
+                diagnosticHighlights.add(tag);
+            } catch (BadLocationException ignored) {}
+        }
+    }
+
+    private void triggerCompletion() {
+        if (page == null || !AppSettings.get().isStIntelliSenseEnabled()) return;
+        int caret = codePane.getCaretPosition();
+        String code = codePane.getText();
+        List<StLanguageServer.CompletionItem> items = StLanguageServer.getCompletions(code, caret, page.getStVariables(), project);
+        if (items.isEmpty()) {
+            hideCompletionPopup();
+            return;
+        }
+        showCompletionPopup(items, caret);
+    }
+
+    private void showCompletionPopup(List<StLanguageServer.CompletionItem> items, int caret) {
+        if (!AppSettings.get().isStIntelliSenseEnabled() || items.isEmpty()) {
+            hideCompletionPopup();
+            return;
+        }
+
+        Window owner = SwingUtilities.getWindowAncestor(this);
+        if (owner == null) return;
+
+        if (completionWindow == null) {
+            completionWindow = new JWindow(owner);
+            completionWindow.setType(Window.Type.POPUP);
+            completionWindow.setFocusableWindowState(false); // CRITICAL: Focus NEVER leaves codePane!
+            completionWindow.setAutoRequestFocus(false);     // CRITICAL: Cannot steal focus!
+
+            completionModel = new DefaultListModel<>();
+            completionList = new JList<>(completionModel);
+            completionList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+            completionList.setFont(AppFonts.canvasMono(12f));
+            completionList.setCellRenderer(new CompletionCellRenderer());
+
+            completionList.addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseClicked(MouseEvent e) {
+                    if (e.getClickCount() == 2 || SwingUtilities.isLeftMouseButton(e)) {
+                        insertSelectedCompletion();
+                    }
+                }
+            });
+
+            completionScroll = new JScrollPane(completionList);
+            completionScroll.setBorder(BorderFactory.createLineBorder(new Color(0x60, 0x75, 0x90), 1));
+            completionWindow.setContentPane(completionScroll);
+        }
+
+        completionModel.clear();
+        int maxLen = 0;
+        for (StLanguageServer.CompletionItem item : items) {
+            completionModel.addElement(item);
+            int len = item.label().length() + item.detail().length();
+            if (len > maxLen) maxLen = len;
+        }
+        completionList.setSelectedIndex(0);
+
+        // Dynamic height based on content!
+        int visibleRows = Math.clamp(items.size(), 1, 8);
+        int rowHeight = AppFonts.scaled(22);
+        int popupH = visibleRows * rowHeight + 4;
+        int popupW = Math.max(AppFonts.scaled(280), Math.min(AppFonts.scaled(480), maxLen * 8 + AppFonts.scaled(80)));
+        completionScroll.setPreferredSize(new Dimension(popupW, popupH));
+        completionWindow.pack();
+
+        try {
+            Rectangle2D r = codePane.modelToView2D(caret);
+            if (r != null) {
+                Point screenPt = new Point((int) r.getX(), (int) (r.getY() + r.getHeight() + 2));
+                SwingUtilities.convertPointToScreen(screenPt, codePane);
+                completionWindow.setLocation(screenPt);
+                completionWindow.setVisible(true);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void hideCompletionPopup() {
+        if (completionWindow != null && completionWindow.isVisible()) {
+            completionWindow.setVisible(false);
+        }
+    }
+
+    private void insertSelectedCompletion() {
+        StLanguageServer.CompletionItem item = (completionList != null) ? completionList.getSelectedValue() : null;
+        if (item == null) return;
+        hideCompletionPopup();
+
+        int caret = codePane.getCaretPosition();
+        String text = codePane.getText();
+        String prefix = StLanguageServer.extractPrefix(text, caret);
+        int replaceStart = caret - prefix.length();
+
+        try {
+            StyledDocument doc = codePane.getStyledDocument();
+            doc.remove(replaceStart, prefix.length());
+            doc.insertString(replaceStart, item.insertText(), styleDefault);
+            codePane.setCaretPosition(replaceStart + item.insertText().length());
+            codePane.requestFocusInWindow();
+        } catch (BadLocationException ignored) {}
+    }
+
+    private void jumpToDeclaration(String token) {
+        if (page == null || token == null || token.isBlank()) return;
+
+        // 1. Check if token matches a declared variable
+        List<StVariable> vars = page.getStVariables();
+        for (int i = 0; i < vars.size(); i++) {
+            StVariable v = vars.get(i);
+            if (v.getName().equalsIgnoreCase(token)) {
+                varTable.setRowSelectionInterval(i, i);
+                varTable.scrollRectToVisible(varTable.getCellRect(i, 0, true));
+                statusLabel.setText("Jumped to declaration of variable '" + v.getName() + "' [" + v.getScope() + " " + v.getDataType() + "]");
+                statusLabel.setForeground(new Color(0x0D, 0x47, 0xA1));
+
+                // If code also has textual VAR declaration, navigate caret to it
+                Pattern varDeclPat = Pattern.compile("(?i)\\b" + Pattern.quote(token) + "\\s*:");
+                Matcher m = varDeclPat.matcher(codePane.getText());
+                if (m.find()) {
+                    codePane.setCaretPosition(m.start());
+                    codePane.requestFocusInWindow();
+                }
+                return;
+            }
+        }
+
+        // 2. Check if token matches a project Macro
+        if (project != null) {
+            for (Page p : project.getPages()) {
+                if (p.isMacro() && (p.getCleanName().equalsIgnoreCase(token) || p.getName().equalsIgnoreCase(token))) {
+                    statusLabel.setText("Jumped to Macro definition '" + p.getName() + "'");
+                    statusLabel.setForeground(new Color(0x4A, 0x14, 0x8C));
+                    if (macroNavigator != null) {
+                        macroNavigator.accept(p.getCleanName());
+                    }
+                    return;
+                }
+            }
+        }
+
+        // 3. Hardware I/O / Register check
+        if (StLanguageServer.isHardwareIo(token)) {
+            statusLabel.setText("Hardware I/O channel: " + token.toUpperCase());
+            statusLabel.setForeground(new Color(0x9A, 0x34, 0x12));
+        }
+    }
+
+    private boolean isDeclarationTarget(String token) {
+        if (token == null || token.isBlank() || page == null) return false;
+        for (StVariable v : page.getStVariables()) {
+            if (v.getName().equalsIgnoreCase(token)) return true;
+        }
+        if (project != null) {
+            for (Page p : project.getPages()) {
+                if (p.isMacro() && (p.getCleanName().equalsIgnoreCase(token) || p.getName().equalsIgnoreCase(token))) return true;
+            }
+        }
+        return false;
+    }
+
+    private void setupDropTarget() {
+        new DropTarget(codePane, DnDConstants.ACTION_COPY, new DropTargetAdapter() {
+            @Override
+            public void drop(DropTargetDropEvent dtde) {
+                try {
+                    if (!dtde.isDataFlavorSupported(DataFlavor.stringFlavor)) {
+                        dtde.rejectDrop();
+                        return;
+                    }
+                    dtde.acceptDrop(DnDConstants.ACTION_COPY);
+                    String defId = (String) dtde.getTransferable().getTransferData(DataFlavor.stringFlavor);
+                    if (defId == null || defId.isBlank() || defId.startsWith("Ladder.")) {
+                        dtde.dropComplete(false);
+                        return;
+                    }
+                    BlockDefinition def = BlockCatalog.getById(defId);
+                    if (def == null || page == null) {
+                        dtde.dropComplete(false);
+                        return;
+                    }
+
+                    Point pt = dtde.getLocation();
+                    int dropOffset = codePane.viewToModel2D(pt);
+                    insertDroppedBlockTemplate(def, dropOffset);
+                    dtde.dropComplete(true);
+                } catch (Exception ex) {
+                    dtde.dropComplete(false);
+                }
+            }
+        });
+    }
+
+    private void insertDroppedBlockTemplate(BlockDefinition def, int offset) {
+        if (page == null || def == null) return;
+        boolean prev = suppressEvents;
+        suppressEvents = true;
+        try {
+            StringBuilder sb = new StringBuilder();
+            sb.append("\n// Block: ").append(def.getId()).append("\n");
+
+            List<BlockDefinition.PinSpec> inputs = def.getDefaultInputs();
+            List<BlockDefinition.PinSpec> outputs = def.getDefaultOutputs();
+
+            if (outputs.size() == 1) {
+                BlockDefinition.PinSpec outPin = outputs.getFirst();
+                String outVar = getUniqueVarName(page, def.getTypeName() + "_Out");
+                String defVal = (outPin.defaultConstant() != null && !outPin.defaultConstant().isBlank())
+                        ? outPin.defaultConstant()
+                        : outPin.dataType().getDefaultConstant();
+                page.getStVariables().add(new StVariable(StVariable.Scope.VAR, outVar, outPin.dataType(), defVal, "Output of " + def.getTypeName()));
+
+                sb.append(outVar).append(" := ").append(def.getTypeName()).append("(\n");
+                for (int i = 0; i < inputs.size(); i++) {
+                    BlockDefinition.PinSpec inPin = inputs.get(i);
+                    String val = (inPin.defaultConstant() != null && !inPin.defaultConstant().isBlank())
+                            ? inPin.defaultConstant()
+                            : inPin.dataType().getDefaultConstant();
+                    sb.append("    ").append(inPin.shortName()).append(" := ").append(val);
+                    if (i < inputs.size() - 1) sb.append(",");
+                    sb.append(" // ").append(inPin.dataType()).append(": ").append(inPin.fullName()).append("\n");
+                }
+                sb.append(");\n");
+            } else {
+                String instName = getUniqueVarName(page, "Inst_" + def.getTypeName());
+                page.getStVariables().add(new StVariable(StVariable.Scope.VAR, instName, DataType.INT, "0", "Instance of " + def.getTypeName()));
+                List<String> outVarNames = new ArrayList<>();
+                for (BlockDefinition.PinSpec outPin : outputs) {
+                    String outVar = getUniqueVarName(page, def.getTypeName() + "_" + outPin.shortName());
+                    String defVal = (outPin.defaultConstant() != null && !outPin.defaultConstant().isBlank())
+                            ? outPin.defaultConstant()
+                            : outPin.dataType().getDefaultConstant();
+                    page.getStVariables().add(new StVariable(StVariable.Scope.VAR, outVar, outPin.dataType(), defVal, "Output " + outPin.fullName() + " of " + instName));
+                    outVarNames.add(outVar);
+                }
+
+                sb.append(instName).append("(\n");
+                int totalPins = inputs.size() + outputs.size();
+                int current = 0;
+                for (BlockDefinition.PinSpec inPin : inputs) {
+                    String val = (inPin.defaultConstant() != null && !inPin.defaultConstant().isBlank())
+                            ? inPin.defaultConstant()
+                            : inPin.dataType().getDefaultConstant();
+                    sb.append("    ").append(inPin.shortName()).append(" := ").append(val);
+                    current++;
+                    if (current < totalPins) sb.append(",");
+                    sb.append(" // ").append(inPin.dataType()).append(": ").append(inPin.fullName()).append("\n");
+                }
+                for (int i = 0; i < outputs.size(); i++) {
+                    BlockDefinition.PinSpec outPin = outputs.get(i);
+                    String outVar = outVarNames.get(i);
+                    sb.append("    ").append(outPin.shortName()).append(" => ").append(outVar);
+                    current++;
+                    if (current < totalPins) sb.append(",");
+                    sb.append(" // ").append(outPin.dataType()).append(": ").append(outPin.fullName()).append("\n");
+                }
+                sb.append(");\n");
+            }
+
+            varTableModel.fireTableDataChanged();
+            if (project != null) project.setDirty(true);
+
+            String templateText = sb.toString();
+            try {
+                int insertPos = Math.clamp(offset, 0, codePane.getDocument().getLength());
+                codePane.getDocument().insertString(insertPos, templateText, styleDefault);
+                codePane.setCaretPosition(insertPos + templateText.length());
+                codePane.requestFocusInWindow();
+            } catch (BadLocationException ignored) {}
+
+            syncTableToCode();
+        } finally {
+            suppressEvents = prev;
+        }
+        applySyntaxHighlighting();
+        validateStCode();
+        statusLabel.setText("Inserted template for " + def.getTypeName() + " with auto-created variables");
+        statusLabel.setForeground(new Color(0x1B, 0x5E, 0x20));
+    }
+
+    private static String getUniqueVarName(Page page, String base) {
+        String sanitized = base.replaceAll("[^A-Za-z0-9_]", "_");
+        if (!Character.isLetter(sanitized.charAt(0)) && sanitized.charAt(0) != '_') {
+            sanitized = "V_" + sanitized;
+        }
+        boolean exists = false;
+        if (page != null) {
+            for (StVariable v : page.getStVariables()) {
+                if (v.getName().equalsIgnoreCase(sanitized)) {
+                    exists = true;
+                    break;
+                }
+            }
+        }
+        if (!exists) return sanitized;
+        int num = 1;
+        while (true) {
+            String cand = sanitized + "_" + num;
+            boolean match = false;
+            for (StVariable v : page.getStVariables()) {
+                if (v.getName().equalsIgnoreCase(cand)) {
+                    match = true;
+                    break;
+                }
+            }
+            if (!match) return cand;
+            num++;
+        }
+    }
+
+    private void actionFormatCode() {
+        if (page == null) return;
+        String cur = codePane.getText();
+        String formatted = StLanguageServer.formatCode(cur);
+        if (formatted.equals(cur)) return;
+        int caret = Math.min(codePane.getCaretPosition(), formatted.length());
+        page.setStCode(formatted);
+        if (project != null) project.setDirty(true);
+        codePane.setText(formatted);
+        codePane.setCaretPosition(caret);
+        applySyntaxHighlighting();
+        validateStCode();
+        gutter.repaint();
+    }
+
+    private static String extractTokenAtOffset(String text, int offset) {
+        if (text == null || offset < 0 || offset >= text.length()) return null;
+        char c = text.charAt(offset);
+        if (!Character.isLetterOrDigit(c) && c != '_') {
+            if (offset > 0 && (Character.isLetterOrDigit(text.charAt(offset - 1)) || text.charAt(offset - 1) == '_')) {
+                offset--;
+            } else {
+                return null;
+            }
+        }
+        int start = offset;
+        while (start > 0 && (Character.isLetterOrDigit(text.charAt(start - 1)) || text.charAt(start - 1) == '_')) {
+            start--;
+        }
+        int end = offset;
+        while (end < text.length() && (Character.isLetterOrDigit(text.charAt(end)) || text.charAt(end) == '_')) {
+            end++;
+        }
+        return text.substring(start, end);
     }
 
     private final class VarTableModel extends AbstractTableModel {
@@ -654,13 +1575,84 @@ public class StEditorPanel extends JPanel {
         }
     }
 
+    private static final class SquigglyUnderlinePainter implements Highlighter.HighlightPainter {
+        private final Color color;
+
+        SquigglyUnderlinePainter(Color color) {
+            this.color = color;
+        }
+
+        @Override
+        public void paint(Graphics g, int p0, int p1, Shape bounds, JTextComponent c) {
+            try {
+                Rectangle2D r0 = c.modelToView2D(p0);
+                Rectangle2D r1 = c.modelToView2D(p1);
+                if (r0 == null || r1 == null) return;
+                int y = (int) (r0.getY() + r0.getHeight() - 1);
+                int x1 = (int) r0.getX();
+                int x2 = (int) ((r0.getY() == r1.getY()) ? r1.getX() : r0.getX() + 30);
+                if (x2 <= x1) x2 = x1 + 12;
+                g.setColor(color);
+                for (int x = x1; x < x2; x += 4) {
+                    g.drawLine(x, y, x + 2, y + 2);
+                    g.drawLine(x + 2, y + 2, Math.min(x + 4, x2), y);
+                }
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private static final class CompletionCellRenderer extends DefaultListCellRenderer {
+        @Override
+        public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean isSelected, boolean cellHasFocus) {
+            super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+            if (value instanceof StLanguageServer.CompletionItem item) {
+                String kindBadge = switch (item.kind()) {
+                    case VARIABLE -> "<font color='#6A1B9A'><b>[VAR]</b></font>";
+                    case HARDWARE_IO -> "<font color='#D84315'><b>[I/O]</b></font>";
+                    case FUNCTION -> "<font color='#00695C'><b>[FN]</b></font>";
+                    case FUNCTION_BLOCK -> "<font color='#1565C0'><b>[FB]</b></font>";
+                    case KEYWORD -> "<font color='#0D47A1'><b>[KW]</b></font>";
+                    case SNIPPET -> "<font color='#2E7D32'><b>[SNIP]</b></font>";
+                };
+                setText("<html>" + kindBadge + " <b>" + item.label() + "</b> <font color='#666666'>&mdash; " + item.detail() + "</font></html>");
+            }
+            return this;
+        }
+    }
+
     private static final class LineNumberGutter extends JPanel {
         private final JTextPane pane;
+        private List<StLanguageServer.Diagnostic> diagnostics = List.of();
 
         LineNumberGutter(JTextPane pane) {
             this.pane = pane;
             setBackground(new Color(0xEC, 0xEE, 0xF2));
             setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, new Color(0xB8, 0xBE, 0xC8)));
+            ToolTipManager.sharedInstance().registerComponent(this);
+        }
+
+        void setDiagnostics(List<StLanguageServer.Diagnostic> diags) {
+            this.diagnostics = diags == null ? List.of() : new ArrayList<>(diags);
+            repaint();
+        }
+
+        @Override
+        public String getToolTipText(MouseEvent e) {
+            int lineHeight = pane.getFontMetrics(pane.getFont()).getHeight();
+            int line = Math.max(1, e.getY() / lineHeight + 1);
+            List<StLanguageServer.Diagnostic> matches = diagnostics.stream()
+                    .filter(d -> d.line() == line)
+                    .toList();
+            if (matches.isEmpty()) return null;
+            StringBuilder sb = new StringBuilder("<html><b>Line ").append(line).append(":</b><br>");
+            for (StLanguageServer.Diagnostic d : matches) {
+                String color = d.severity() == StLanguageServer.Severity.ERROR ? "#D32F2F" : "#E65100";
+                sb.append("<span style='color:").append(color).append(";'>")
+                        .append(d.severity()).append(": ").append(d.message())
+                        .append("</span><br>");
+            }
+            sb.append("</html>");
+            return sb.toString();
         }
 
         @Override
@@ -669,7 +1661,7 @@ public class StEditorPanel extends JPanel {
             int digits = Math.max(3, String.valueOf(lines).length());
             Font f = AppFonts.canvasMono(12f);
             FontMetrics fm = getFontMetrics(f);
-            int w = fm.charWidth('0') * digits + AppFonts.scaled(14);
+            int w = fm.charWidth('0') * digits + AppFonts.scaled(20);
             return new Dimension(w, pane.getPreferredSize().height);
         }
 
@@ -686,17 +1678,31 @@ public class StEditorPanel extends JPanel {
         protected void paintComponent(Graphics g) {
             super.paintComponent(g);
             if (g instanceof java.awt.Graphics2D g2) {
-                g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_OFF);
+                g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
                 g2.setRenderingHint(java.awt.RenderingHints.KEY_TEXT_ANTIALIASING, java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
             }
-            g.setFont(AppFonts.canvasMono(12f));
-            g.setColor(new Color(0x55, 0x60, 0x70));
-            FontMetrics fm = g.getFontMetrics();
+            FontMetrics fm = g.getFontMetrics(AppFonts.canvasMono(12f));
             int lineHeight = pane.getFontMetrics(pane.getFont()).getHeight();
             int ascent = pane.getFontMetrics(pane.getFont()).getAscent();
             int lines = countLines();
             int y = ascent + 2;
             for (int i = 1; i <= lines; i++) {
+                final int lineNum = i;
+                StLanguageServer.Diagnostic lineDiag = diagnostics.stream()
+                        .filter(d -> d.line() == lineNum)
+                        .findFirst()
+                        .orElse(null);
+                if (lineDiag != null) {
+                    if (lineDiag.severity() == StLanguageServer.Severity.ERROR) {
+                        g.setColor(new Color(0xD3, 0x2F, 0x2F));
+                        g.fillOval(3, y - ascent + 2, 7, 7);
+                    } else {
+                        g.setColor(new Color(0xF5, 0x7C, 0x00));
+                        g.fillOval(3, y - ascent + 2, 7, 7);
+                    }
+                }
+                g.setFont(AppFonts.canvasMono(12f));
+                g.setColor(new Color(0x55, 0x60, 0x70));
                 String s = String.valueOf(i);
                 int x = getWidth() - fm.stringWidth(s) - 6;
                 g.drawString(s, x, y);

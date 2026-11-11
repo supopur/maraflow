@@ -51,6 +51,12 @@ public class GraphicElement {
     private boolean toggleButton = false;
     private transient boolean activeState = false;
 
+    // Shape Indicator specific fields
+    private boolean indicatorEnabled = false;
+    private String indicatorPin = ""; // Target block output pin: e.g. "And1.Y"
+    private Color indicatorActiveColor = new Color(0xE5, 0x39, 0x35); // Default Red
+    private Color indicatorInactiveColor = new Color(0xF0, 0xF4, 0xF8);
+
     public GraphicElement(Kind kind, int gridX, int gridY, int gridW, int gridH) {
         this.id = UUID.randomUUID().toString();
         this.kind = kind;
@@ -79,6 +85,10 @@ public class GraphicElement {
         g.boundTargetPin = this.boundTargetPin;
         g.toggleButton = this.toggleButton;
         g.activeState = this.activeState;
+        g.indicatorEnabled = this.indicatorEnabled;
+        g.indicatorPin = this.indicatorPin;
+        g.indicatorActiveColor = this.indicatorActiveColor;
+        g.indicatorInactiveColor = this.indicatorInactiveColor;
         return g;
     }
 
@@ -224,5 +234,37 @@ public class GraphicElement {
 
     public void setActiveState(boolean activeState) {
         this.activeState = activeState;
+    }
+
+    public boolean isIndicatorEnabled() {
+        return indicatorEnabled;
+    }
+
+    public void setIndicatorEnabled(boolean indicatorEnabled) {
+        this.indicatorEnabled = indicatorEnabled;
+    }
+
+    public String getIndicatorPin() {
+        return indicatorPin;
+    }
+
+    public void setIndicatorPin(String indicatorPin) {
+        this.indicatorPin = (indicatorPin == null) ? "" : indicatorPin.trim();
+    }
+
+    public Color getIndicatorActiveColor() {
+        return indicatorActiveColor;
+    }
+
+    public void setIndicatorActiveColor(Color indicatorActiveColor) {
+        this.indicatorActiveColor = indicatorActiveColor == null ? new Color(0xE5, 0x39, 0x35) : indicatorActiveColor;
+    }
+
+    public Color getIndicatorInactiveColor() {
+        return indicatorInactiveColor;
+    }
+
+    public void setIndicatorInactiveColor(Color indicatorInactiveColor) {
+        this.indicatorInactiveColor = indicatorInactiveColor == null ? new Color(0xF0, 0xF4, 0xF8) : indicatorInactiveColor;
     }
 }

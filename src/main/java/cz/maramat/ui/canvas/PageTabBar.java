@@ -23,25 +23,55 @@ import javax.swing.JPopupMenu;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
 import java.awt.Insets;
+import java.awt.Point;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.event.MouseMotionAdapter;
 
 public class PageTabBar extends JPanel {
 
     public interface PageTabListener {
         void onActivePageChanged(int pageIndex);
         void onPagesStructureChanged();
+        void onPagePoppedOut(int pageIndex, Point screenPt);
     }
 
     private Project project;
     private int activePageIndex = 0;
     private final PageTabListener listener;
+    private long lastPopupTimestamp = 0;
+
+    private static boolean isPopupTrigger(MouseEvent e) {
+        return e.isPopupTrigger()
+                || SwingUtilities.isRightMouseButton(e)
+                || (e.isControlDown() && SwingUtilities.isLeftMouseButton(e))
+                || (e.getModifiersEx() & (MouseEvent.BUTTON3_DOWN_MASK | MouseEvent.BUTTON2_DOWN_MASK)) != 0;
+    }
+
+    private void handleTabRightClick(MouseEvent e, JLabel tab, int idx) {
+        if (!isPopupTrigger(e)) return;
+        long now = System.currentTimeMillis();
+        if (now - lastPopupTimestamp < 250) return;
+        lastPopupTimestamp = now;
+        e.consume();
+        showTabContextMenu(this, idx, tab.getX() + e.getX(), tab.getY() + e.getY());
+    }
+
+    private void handleEmptyRightClick(MouseEvent e) {
+        if (!isPopupTrigger(e)) return;
+        long now = System.currentTimeMillis();
+        if (now - lastPopupTimestamp < 250) return;
+        lastPopupTimestamp = now;
+        e.consume();
+        showEmptyAreaContextMenu(e.getX(), e.getY());
+    }
 
     public PageTabBar(Project project, PageTabListener listener) {
         super(new FlowLayout(FlowLayout.LEFT, 0, 0));
@@ -49,6 +79,16 @@ public class PageTabBar extends JPanel {
         this.listener = listener;
         setBackground(new Color(0xEC, 0xF0, 0xF5));
         setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(0xB8, 0xB8, 0xB8)));
+        addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                handleEmptyRightClick(e);
+            }
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                handleEmptyRightClick(e);
+            }
+        });
         rebuildTabs();
     }
 
@@ -81,8 +121,7 @@ public class PageTabBar extends JPanel {
             Page page = project.getPages().get(i);
             boolean selected = (i == activePageIndex);
 
-            String badge = "[" + page.getLanguage().getShortCode() + "] ";
-            JLabel tab = new JLabel(badge + page.getName());
+            JLabel tab = new JLabel(page.getName());
             tab.setOpaque(true);
             tab.setFont(page.isMacro() ? italicFont : normalFont);
             if (page.isEStopPage()) {
@@ -109,23 +148,41 @@ public class PageTabBar extends JPanel {
                             selected ? topBarColor : new Color(0xB8, 0xB8, 0xB8)),
                     BorderFactory.createEmptyBorder(selected ? 3 : 5, 10, 4, 10)
             ));
-            String kindDesc = page.isEStopPage() ? "Dedicated E-Stop Safety Handler - "
-                    : (page.isMacro() ? "Macro Page - " : "Top-Level Page - ");
-            tab.setToolTipText(kindDesc
-                    + page.getLanguage().getDisplayName()
-                    + " (Double-click to rename, Right-click for options)");
+            tab.setToolTipText(page.getName() + " (" + page.getLanguage().getDisplayName() + ") — Drag out to open in separate window");
 
+            Point[] pressPt = new Point[1];
             tab.addMouseListener(new MouseAdapter() {
                 @Override
                 public void mousePressed(MouseEvent e) {
-                    if (SwingUtilities.isRightMouseButton(e)) {
-                        setActivePageIndex(idx);
-                        showTabContextMenu(tab, idx, e.getX(), e.getY());
-                    } else if (SwingUtilities.isLeftMouseButton(e)) {
+                    if (isPopupTrigger(e)) {
+                        handleTabRightClick(e, tab, idx);
+                    } else if (SwingUtilities.isLeftMouseButton(e) && !e.isControlDown()) {
+                        pressPt[0] = e.getLocationOnScreen();
                         if (e.getClickCount() == 2) {
                             promptRenamePage(idx);
                         } else if (idx != activePageIndex) {
                             setActivePageIndex(idx);
+                        }
+                    }
+                }
+
+                @Override
+                public void mouseReleased(MouseEvent e) {
+                    pressPt[0] = null;
+                    if (isPopupTrigger(e)) {
+                        handleTabRightClick(e, tab, idx);
+                    }
+                }
+            });
+
+            tab.addMouseMotionListener(new MouseMotionAdapter() {
+                @Override
+                public void mouseDragged(MouseEvent e) {
+                    if (pressPt[0] != null && SwingUtilities.isLeftMouseButton(e)) {
+                        Point cur = e.getLocationOnScreen();
+                        if (pressPt[0].distance(cur) > 28) {
+                            pressPt[0] = null;
+                            listener.onPagePoppedOut(idx, cur);
                         }
                     }
                 }
@@ -184,7 +241,7 @@ public class PageTabBar extends JPanel {
         if (project == null) return;
         IecLanguage chosen = (IecLanguage) JOptionPane.showInputDialog(
                 this,
-                "Select IEC 61131-3 language for Dedicated E-Stop Page (!EStop):",
+                "Select language for Dedicated E-Stop Page (!EStop):",
                 "Create Dedicated E-Stop Safety Page",
                 JOptionPane.QUESTION_MESSAGE,
                 null,
@@ -233,7 +290,7 @@ public class PageTabBar extends JPanel {
 
         panel.add(new JLabel(macro ? "Macro Name ('*' prefix):" : "Page Name ('!' for E-Stop):"));
         panel.add(nameField);
-        panel.add(new JLabel("IEC 61131-3 Language:"));
+        panel.add(new JLabel("Language:"));
         panel.add(langCombo);
 
         int res = JOptionPane.showConfirmDialog(
@@ -273,7 +330,7 @@ public class PageTabBar extends JPanel {
             p.setStThreadId(project.getDefaultThreadId());
             p.setStOrder(10);
             p.getStVariables().add(new StVariable(StVariable.Scope.VAR, "Counter", DataType.INT, "0", "Scan counter"));
-            p.setStCode("// IEC 61131-3 Structured Text Page\nCounter := Counter + 1;\n");
+            p.setStCode("// Structured Text Page\nCounter := Counter + 1;\n");
         }
         project.getPages().add(p);
         project.setDirty(true);
@@ -336,36 +393,23 @@ public class PageTabBar extends JPanel {
         }
     }
 
-    private void showTabContextMenu(JLabel tabComp, int idx, int x, int y) {
+    private void showTabContextMenu(Component invoker, int idx, int x, int y) {
         JPopupMenu menu = new JPopupMenu();
 
-        JMenuItem newFbdPageItem = new JMenuItem("New FBD Page...");
-        newFbdPageItem.addActionListener(e -> addNewPageWithLanguage(false, IecLanguage.FBD));
-        menu.add(newFbdPageItem);
-
-        JMenuItem newLdPageItem = new JMenuItem("New Ladder (LD) Page...");
-        newLdPageItem.addActionListener(e -> addNewPageWithLanguage(false, IecLanguage.LD));
-        menu.add(newLdPageItem);
-
-        JMenuItem newStPageItem = new JMenuItem("New Structured Text (ST) Page...");
-        newStPageItem.addActionListener(e -> addNewPageWithLanguage(false, IecLanguage.ST));
-        menu.add(newStPageItem);
-
-        JMenuItem newMacroItem = new JMenuItem("New Macro (*Macro)...");
-        newMacroItem.addActionListener(e -> addNewPage(true));
-        menu.add(newMacroItem);
-
-        JMenuItem newEStopItem = new JMenuItem("New Dedicated E-Stop Safety Page (!EStop)...");
-        newEStopItem.addActionListener(e -> addDedicatedEStopPage());
-        menu.add(newEStopItem);
-
+        JMenuItem popOutItem = new JMenuItem("Open in Separate Window");
+        popOutItem.addActionListener(e -> {
+            Point loc = invoker.getLocationOnScreen();
+            listener.onPagePoppedOut(idx, new Point(loc.x + x + 20, loc.y + y + 20));
+        });
+        menu.add(popOutItem);
         menu.addSeparator();
 
-        JMenuItem renameItem = new JMenuItem("Rename...");
+        JMenuItem renameItem = new JMenuItem("Rename Page...");
+        renameItem.setFont(new Font(renameItem.getFont().getName(), Font.BOLD, renameItem.getFont().getSize()));
         renameItem.addActionListener(e -> promptRenamePage(idx));
         menu.add(renameItem);
 
-        JMenuItem dupItem = new JMenuItem("Duplicate");
+        JMenuItem dupItem = new JMenuItem("Duplicate Page");
         dupItem.addActionListener(e -> {
             Page src = project.getPages().get(idx);
             Page copy = src.copy();
@@ -377,6 +421,33 @@ public class PageTabBar extends JPanel {
             listener.onPagesStructureChanged();
         });
         menu.add(dupItem);
+
+        JMenuItem delItem = new JMenuItem("Delete Page");
+        delItem.setEnabled(project.getPages().size() > 1);
+        delItem.addActionListener(e -> {
+            if (project.getPages().size() <= 1) {
+                JOptionPane.showMessageDialog(this, "Cannot delete the only remaining page in the project.", "Delete Page", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            Page targetPage = project.getPages().get(idx);
+            int res = JOptionPane.showConfirmDialog(
+                    this,
+                    "Are you sure you want to delete page '" + targetPage.getName() + "'?",
+                    "Confirm Delete Page",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.WARNING_MESSAGE
+            );
+            if (res != JOptionPane.YES_OPTION) return;
+
+            project.getPages().remove(idx);
+            project.setDirty(true);
+            BlockCatalog.syncMacrosFromProject(project);
+            setActivePageIndex(Math.min(activePageIndex, project.getPages().size() - 1));
+            listener.onPagesStructureChanged();
+        });
+        menu.add(delItem);
+
+        menu.addSeparator();
 
         JMenuItem moveLeftItem = new JMenuItem("Move Left");
         moveLeftItem.setEnabled(idx > 0);
@@ -400,18 +471,54 @@ public class PageTabBar extends JPanel {
 
         menu.addSeparator();
 
-        JMenuItem delItem = new JMenuItem("Delete Page");
-        delItem.setEnabled(project.getPages().size() > 1);
-        delItem.addActionListener(e -> {
-            if (project.getPages().size() <= 1) return;
-            project.getPages().remove(idx);
-            project.setDirty(true);
-            BlockCatalog.syncMacrosFromProject(project);
-            setActivePageIndex(Math.min(activePageIndex, project.getPages().size() - 1));
-            listener.onPagesStructureChanged();
-        });
-        menu.add(delItem);
+        JMenuItem newFbdPageItem = new JMenuItem("New FBD Page...");
+        newFbdPageItem.addActionListener(e -> addNewPageWithLanguage(false, IecLanguage.FBD));
+        menu.add(newFbdPageItem);
 
-        menu.show(tabComp, x, y);
+        JMenuItem newLdPageItem = new JMenuItem("New Ladder (LD) Page...");
+        newLdPageItem.addActionListener(e -> addNewPageWithLanguage(false, IecLanguage.LD));
+        menu.add(newLdPageItem);
+
+        JMenuItem newStPageItem = new JMenuItem("New Structured Text (ST) Page...");
+        newStPageItem.addActionListener(e -> addNewPageWithLanguage(false, IecLanguage.ST));
+        menu.add(newStPageItem);
+
+        JMenuItem newMacroItem = new JMenuItem("New Macro (*Macro)...");
+        newMacroItem.addActionListener(e -> addNewPage(true));
+        menu.add(newMacroItem);
+
+        JMenuItem newEStopItem = new JMenuItem("New Dedicated E-Stop Safety Page (!EStop)...");
+        newEStopItem.addActionListener(e -> addDedicatedEStopPage());
+        menu.add(newEStopItem);
+
+        menu.show(invoker, x, y);
+    }
+
+    private void showEmptyAreaContextMenu(int x, int y) {
+        JPopupMenu menu = new JPopupMenu();
+
+        JMenuItem newFbdPageItem = new JMenuItem("New FBD Page...");
+        newFbdPageItem.addActionListener(e -> addNewPageWithLanguage(false, IecLanguage.FBD));
+        menu.add(newFbdPageItem);
+
+        JMenuItem newLdPageItem = new JMenuItem("New Ladder (LD) Page...");
+        newLdPageItem.addActionListener(e -> addNewPageWithLanguage(false, IecLanguage.LD));
+        menu.add(newLdPageItem);
+
+        JMenuItem newStPageItem = new JMenuItem("New Structured Text (ST) Page...");
+        newStPageItem.addActionListener(e -> addNewPageWithLanguage(false, IecLanguage.ST));
+        menu.add(newStPageItem);
+
+        menu.addSeparator();
+
+        JMenuItem newMacroItem = new JMenuItem("New Macro (*Macro)...");
+        newMacroItem.addActionListener(e -> addNewPage(true));
+        menu.add(newMacroItem);
+
+        JMenuItem newEStopItem = new JMenuItem("New Dedicated E-Stop Safety Page (!EStop)...");
+        newEStopItem.addActionListener(e -> addDedicatedEStopPage());
+        menu.add(newEStopItem);
+
+        menu.show(this, x, y);
     }
 }

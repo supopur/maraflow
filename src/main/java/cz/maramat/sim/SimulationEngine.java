@@ -22,8 +22,10 @@ import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -41,6 +43,7 @@ public class SimulationEngine {
     private volatile boolean eStopActive = false;
     private volatile int eStopTrippedMask = 0;
     private volatile int simulatedInterruptPulseCounter = 0;
+    private final Map<String, Integer> simulatedInterruptPulseCounters = new ConcurrentHashMap<>();
 
     private final AtomicBoolean workerRunning = new AtomicBoolean(false);
     private Thread virtualSimThread;
@@ -198,8 +201,35 @@ public class SimulationEngine {
     }
 
     public void fireSimulatedInterruptPulse() {
-        this.simulatedInterruptPulseCounter++;
+        fireSimulatedInterruptPulse(null);
+    }
+
+    public void fireSimulatedInterruptPulse(String targetSource) {
+        if (targetSource == null || "ALL".equalsIgnoreCase(targetSource)) {
+            this.simulatedInterruptPulseCounter++;
+            for (String k : simulatedInterruptPulseCounters.keySet()) {
+                simulatedInterruptPulseCounters.merge(k, 1, Integer::sum);
+            }
+        } else {
+            simulatedInterruptPulseCounters.merge(targetSource.toUpperCase(), 1, Integer::sum);
+        }
         requestUiRepaint();
+    }
+
+    public static List<String> getListeningInterruptSources(Project project) {
+        if (project == null) return List.of();
+        Set<String> set = new LinkedHashSet<>();
+        for (Page p : project.getPages()) {
+            for (BlockInstance b : p.getBlocks()) {
+                if ("Main.Execution.Interrupt".equals(b.getDefinitionId())) {
+                    String src = b.getCustomProperties().getOrDefault("InterruptSource", "TIM_IC1");
+                    if (!src.isBlank()) {
+                        set.add(src.trim());
+                    }
+                }
+            }
+        }
+        return new ArrayList<>(set);
     }
 
     private void resetAllBlocks(Project project) {
@@ -983,7 +1013,7 @@ public class SimulationEngine {
     }
 
     private void evaluateInterruptBlock(Project project, BlockInstance b, List<PinInstance> ins, List<PinInstance> outs) {
-        String source = b.getCustomProperties().getOrDefault("InterruptSource", "TIM_IC1 (Ultrasonic Echo)");
+        String source = b.getCustomProperties().getOrDefault("InterruptSource", "TIM_IC1");
         String edgeMode = b.getCustomProperties().getOrDefault("TriggerEdge", "RISING");
         String capMode = b.getCustomProperties().getOrDefault("CaptureMode", "PULSE_WIDTH_US");
         String latchPolicy = b.getCustomProperties().getOrDefault("LatchPolicy", "HOLD_FIRST_UNTIL_RST");
@@ -998,7 +1028,9 @@ public class SimulationEngine {
         boolean eventTriggered = false;
         double capturedValue = simPulseVal;
 
-        int currentPulseCount = this.simulatedInterruptPulseCounter;
+        int globalCount = this.simulatedInterruptPulseCounter;
+        int specificCount = simulatedInterruptPulseCounters.getOrDefault(source.toUpperCase(), 0);
+        int currentPulseCount = globalCount + specificCount;
         int prevPulseCount = blockLastInterruptPulseSeen.getOrDefault(b.getId(), currentPulseCount);
         blockLastInterruptPulseSeen.put(b.getId(), currentPulseCount);
         if (currentPulseCount != prevPulseCount) {

@@ -231,14 +231,17 @@ public class ModulePropertiesDialog extends JDialog {
                     specificControls.put(k, trigBox);
                 } else if (k.equals("InterruptSource")) {
                     JComboBox<String> srcBox = new JComboBox<>(new String[]{
-                            "TIM_IC1 (Ultrasonic Echo)",
-                            "TIM_IC2 (Pulse Capture)",
+                            "TIM_IC1",
+                            "TIM_IC2",
                             "EXTI_DI0", "EXTI_DI1", "EXTI_DI2", "EXTI_DI3",
                             "EXTI_DI4", "EXTI_DI5", "EXTI_DI6", "EXTI_DI7",
                             "UART_RX_IDLE", "ADC_WATCHDOG"
                     });
                     srcBox.setEditable(true);
-                    srcBox.setSelectedItem(v);
+                    String selVal = v;
+                    if (selVal != null && selVal.startsWith("TIM_IC1")) selVal = "TIM_IC1";
+                    else if (selVal != null && selVal.startsWith("TIM_IC2")) selVal = "TIM_IC2";
+                    srcBox.setSelectedItem(selVal);
                     addRow(p, gbc, row++, "Interrupt Source:", srcBox);
                     specificControls.put(k, srcBox);
                 } else if (k.equals("TriggerEdge")) {

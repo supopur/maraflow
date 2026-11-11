@@ -1,6 +1,7 @@
 package cz.maramat.model;
 
 import java.awt.Point;
+import java.awt.geom.Point2D;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -229,8 +230,8 @@ public class Page {
                 if (src != null && dst != null
                         && w.getSourcePinIndex() < src.getOutputs().size()
                         && w.getTargetPinIndex() < dst.getInputs().size()) {
-                    Point pStart = src.getOutputPinAnchorGrid(w.getSourcePinIndex());
-                    Point pEnd = dst.getInputPinAnchorGrid(w.getTargetPinIndex());
+                    Point2D.Double pStart = src.getOutputPinAnchorGrid(w.getSourcePinIndex());
+                    Point2D.Double pEnd = dst.getInputPinAnchorGrid(w.getTargetPinIndex());
                     w.updateEndpoints(pStart, pEnd);
                     if (!w.isCustomNetName()) {
                         w.setNetName(src.getName() + "." + src.getOutputs().get(w.getSourcePinIndex()).getShortName(), false);

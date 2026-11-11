@@ -56,6 +56,13 @@ public class SettingsDialog extends JDialog {
     private JComboBox<String> defaultBaudCombo;
     private JTextField defaultPortField;
 
+    private JCheckBox stIntelliSenseChk;
+    private JCheckBox stAutoPopupChk;
+    private JSpinner stPopupDelaySpinner;
+    private JCheckBox stRealtimeDiagsChk;
+    private JCheckBox stGutterMarkersChk;
+    private JCheckBox stSquigglyUnderlinesChk;
+
     public SettingsDialog(Frame owner, Runnable onSettingsApplied) {
         super(owner, "Settings", true);
         this.onSettingsApplied = onSettingsApplied;
@@ -91,8 +98,13 @@ public class SettingsDialog extends JDialog {
         catDefaults.add(nodeComm);
         catDefaults.add(nodeScope);
 
+        DefaultMutableTreeNode catSt = new DefaultMutableTreeNode("ST Editor");
+        DefaultMutableTreeNode nodeIntelliSense = new DefaultMutableTreeNode("ST IntelliSense");
+        catSt.add(nodeIntelliSense);
+
         treeRoot.add(catVisual);
         treeRoot.add(catDefaults);
+        treeRoot.add(catSt);
 
         JTree navTree = new JTree(treeRoot);
         navTree.setRootVisible(false);
@@ -122,6 +134,7 @@ public class SettingsDialog extends JDialog {
         cardContainer.add(buildThreadsAndSortingPanel(), "Threads & Sorting");
         cardContainer.add(buildCommunicationDefaultsPanel(), "Communication");
         cardContainer.add(buildScopeDefaultsPanel(), "Oscilloscope");
+        cardContainer.add(buildStIntelliSensePanel(), "ST IntelliSense");
 
         navTree.addTreeSelectionListener(e -> {
             DefaultMutableTreeNode sel = (DefaultMutableTreeNode) navTree.getLastSelectedPathComponent();
@@ -131,6 +144,8 @@ public class SettingsDialog extends JDialog {
                 cardLayout.show(cardContainer, "UI Scale & Text");
             } else if (key.equals("Defaults")) {
                 cardLayout.show(cardContainer, "Wiring & Busses");
+            } else if (key.equals("ST Editor")) {
+                cardLayout.show(cardContainer, "ST IntelliSense");
             } else {
                 cardLayout.show(cardContainer, key);
             }
@@ -333,6 +348,49 @@ public class SettingsDialog extends JDialog {
         return p;
     }
 
+    private JPanel buildStIntelliSensePanel() {
+        JPanel p = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = createGbc();
+
+        stIntelliSenseChk = new JCheckBox("Enable IntelliSense & Code Completion", settings.isStIntelliSenseEnabled());
+        stAutoPopupChk = new JCheckBox("Automatically show completion popup while typing", settings.isStAutoPopup());
+        stPopupDelaySpinner = new JSpinner(new SpinnerNumberModel(settings.getStPopupDelayMs(), 50, 1000, 25));
+
+        stRealtimeDiagsChk = new JCheckBox("Enable real-time syntax and semantic diagnostics", settings.isStRealtimeDiagnostics());
+        stGutterMarkersChk = new JCheckBox("Show error and warning markers in line number gutter", settings.isStGutterMarkers());
+        stSquigglyUnderlinesChk = new JCheckBox("Show squiggly error underlines in code editor", settings.isStSquigglyUnderlines());
+
+        int r = 0;
+        gbc.gridx = 0; gbc.gridy = r; gbc.gridwidth = 2;
+        p.add(stIntelliSenseChk, gbc);
+        r++;
+
+        gbc.gridx = 0; gbc.gridy = r; gbc.gridwidth = 2;
+        p.add(stAutoPopupChk, gbc);
+        r++;
+
+        gbc.gridx = 0; gbc.gridy = r; gbc.gridwidth = 1; gbc.weightx = 0.0;
+        p.add(new JLabel("Auto-popup Delay (ms):"), gbc);
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        p.add(stPopupDelaySpinner, gbc);
+        r++;
+
+        gbc.gridx = 0; gbc.gridy = r; gbc.gridwidth = 2; gbc.weightx = 1.0;
+        p.add(stRealtimeDiagsChk, gbc);
+        r++;
+
+        gbc.gridx = 0; gbc.gridy = r; gbc.gridwidth = 2;
+        p.add(stGutterMarkersChk, gbc);
+        r++;
+
+        gbc.gridx = 0; gbc.gridy = r; gbc.gridwidth = 2;
+        p.add(stSquigglyUnderlinesChk, gbc);
+        r++;
+
+        pushToTop(p, gbc, r);
+        return p;
+    }
+
     private GridBagConstraints createGbc() {
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(5, 6, 5, 6);
@@ -367,6 +425,15 @@ public class SettingsDialog extends JDialog {
         settings.setDefaultCommMethod((String) defaultCommMethodCombo.getSelectedItem());
         settings.setDefaultBaudRate((String) defaultBaudCombo.getSelectedItem());
         settings.setDefaultSerialPort(defaultPortField.getText().trim());
+
+        if (stIntelliSenseChk != null) {
+            settings.setStIntelliSenseEnabled(stIntelliSenseChk.isSelected());
+            settings.setStAutoPopup(stAutoPopupChk.isSelected());
+            settings.setStPopupDelayMs((Integer) stPopupDelaySpinner.getValue());
+            settings.setStRealtimeDiagnostics(stRealtimeDiagsChk.isSelected());
+            settings.setStGutterMarkers(stGutterMarkersChk.isSelected());
+            settings.setStSquigglyUnderlines(stSquigglyUnderlinesChk.isSelected());
+        }
 
         settings.applySettingsToUi();
         if (onSettingsApplied != null) {

@@ -31,6 +31,7 @@ import java.awt.FlowLayout;
 import java.awt.Frame;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
+import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
@@ -150,6 +151,13 @@ public final class VisualElementDialogs {
      * Opens properties dialog for decorative shapes, lines, and text annotations.
      */
     public static boolean showGraphicPropertiesDialog(Frame owner, GraphicElement elem) {
+        return showGraphicPropertiesDialog(owner, null, elem);
+    }
+
+    /**
+     * Opens properties dialog for decorative shapes, lines, text annotations, and live indicators.
+     */
+    public static boolean showGraphicPropertiesDialog(Frame owner, Page page, GraphicElement elem) {
         if (elem.getKind() == GraphicElement.Kind.VISUAL_BUTTON) return false;
         JDialog dlg = new JDialog(owner, "Graphic Element Properties (" + elem.getKind().getDisplayName() + ")", true);
         final boolean[] confirmed = {false};
@@ -164,6 +172,8 @@ public final class VisualElementDialogs {
 
         final Color[] strokeColor = {elem.getStrokeColor()};
         final Color[] fillColor = {elem.getFillColor()};
+        final Color[] actColor = {elem.getIndicatorActiveColor()};
+        final Color[] inactColor = {elem.getIndicatorInactiveColor()};
 
         JButton strokeBtn = new JButton("Pick Stroke Color");
         strokeBtn.setBackground(strokeColor[0]);
@@ -229,11 +239,101 @@ public final class VisualElementDialogs {
             r++;
         }
 
-        root.add(form, BorderLayout.CENTER);
+        JPanel centerPanel = new JPanel(new BorderLayout(8, 8));
+        centerPanel.add(form, BorderLayout.NORTH);
+
+        JCheckBox indicatorChk = null;
+        JList<String> pinList = null;
+        if (elem.getKind() != GraphicElement.Kind.LINE && elem.getKind() != GraphicElement.Kind.TEXT) {
+            indicatorChk = new JCheckBox("Use Shape as Live Indicator (Bind to Output Pin)", elem.isIndicatorEnabled());
+            indicatorChk.setFont(cz.maramat.ui.AppFonts.uiBold());
+
+            JButton actColBtn = new JButton("Active (ON) Fill Color");
+            actColBtn.setBackground(actColor[0]);
+            actColBtn.addActionListener(e -> {
+                Color c = JColorChooser.showDialog(dlg, "Select Indicator Active Color", actColor[0]);
+                if (c != null) {
+                    actColor[0] = c;
+                    actColBtn.setBackground(c);
+                }
+            });
+
+            JButton inactColBtn = new JButton("Inactive (OFF) Fill Color");
+            inactColBtn.setBackground(inactColor[0]);
+            inactColBtn.addActionListener(e -> {
+                Color c = JColorChooser.showDialog(dlg, "Select Indicator Inactive Color", inactColor[0]);
+                if (c != null) {
+                    inactColor[0] = c;
+                    inactColBtn.setBackground(c);
+                }
+            });
+
+            List<String> allOutputPins = new ArrayList<>();
+            if (page != null) {
+                for (BlockInstance b : page.getBlocks()) {
+                    for (PinInstance p : b.getOutputs()) {
+                        allOutputPins.add(b.getName() + "." + p.getShortName());
+                    }
+                }
+            }
+
+            JPanel indicatorPanel = new JPanel(new BorderLayout(4, 4));
+            indicatorPanel.setBorder(BorderFactory.createTitledBorder("Live Output Indicator Binding"));
+
+            JPanel indTop = new JPanel(new GridLayout(3, 1, 3, 3));
+            indTop.add(indicatorChk);
+            JPanel colRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+            colRow.add(new JLabel("Active:"));
+            colRow.add(actColBtn);
+            colRow.add(new JLabel("Inactive:"));
+            colRow.add(inactColBtn);
+            indTop.add(colRow);
+
+            JPanel searchRow = new JPanel(new BorderLayout(4, 0));
+            searchRow.add(new JLabel("Search Output Pin:"), BorderLayout.WEST);
+            JTextField searchField = new JTextField();
+            searchRow.add(searchField, BorderLayout.CENTER);
+            indTop.add(searchRow);
+            indicatorPanel.add(indTop, BorderLayout.NORTH);
+
+            DefaultListModel<String> listModel = new DefaultListModel<>();
+            for (String s : allOutputPins) listModel.addElement(s);
+            pinList = new JList<>(listModel);
+            pinList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+            if (!elem.getIndicatorPin().isEmpty()) {
+                pinList.setSelectedValue(elem.getIndicatorPin(), true);
+            }
+
+            searchField.getDocument().addDocumentListener(new DocumentListener() {
+                private void filter() {
+                    String q = searchField.getText().trim().toLowerCase();
+                    listModel.clear();
+                    for (String item : allOutputPins) {
+                        if (q.isEmpty() || item.toLowerCase().contains(q)) {
+                            listModel.addElement(item);
+                        }
+                    }
+                }
+                @Override public void insertUpdate(DocumentEvent e) { filter(); }
+                @Override public void removeUpdate(DocumentEvent e) { filter(); }
+                @Override public void changedUpdate(DocumentEvent e) { filter(); }
+            });
+
+            JScrollPane scroll = new JScrollPane(pinList);
+            scroll.setPreferredSize(new Dimension(300, 100));
+            indicatorPanel.add(scroll, BorderLayout.CENTER);
+            centerPanel.add(indicatorPanel, BorderLayout.CENTER);
+        }
+
+        root.add(centerPanel, BorderLayout.CENTER);
 
         JPanel btnBar = new JPanel(new FlowLayout(FlowLayout.CENTER, 14, 2));
         JButton okBtn = new JButton("OK", VectorIcons.greenCheckIcon());
         okBtn.setPreferredSize(new Dimension(96, 28));
+
+        JCheckBox finalIndicatorChk = indicatorChk;
+        JList<String> finalPinList = pinList;
+
         okBtn.addActionListener(e -> {
             elem.setStrokeColor(strokeColor[0]);
             elem.setFillColor(fillColor[0]);
@@ -243,6 +343,16 @@ public final class VisualElementDialogs {
             elem.setNgonSides((Integer) sidesSpinner.getValue());
             elem.setText(textField.getText());
             elem.setFontSize((Integer) fontSizeSpinner.getValue());
+
+            if (finalIndicatorChk != null) {
+                elem.setIndicatorEnabled(finalIndicatorChk.isSelected());
+                elem.setIndicatorActiveColor(actColor[0]);
+                elem.setIndicatorInactiveColor(inactColor[0]);
+                if (finalPinList != null && finalPinList.getSelectedValue() != null) {
+                    elem.setIndicatorPin(finalPinList.getSelectedValue());
+                }
+            }
+
             confirmed[0] = true;
             dlg.dispose();
         });

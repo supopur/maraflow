@@ -8,6 +8,7 @@ import cz.maramat.model.BlockInstance;
 import cz.maramat.model.GraphicElement;
 import cz.maramat.model.IecLanguage;
 import cz.maramat.model.LadderElement;
+import cz.maramat.model.LadderRung;
 import cz.maramat.model.Page;
 import cz.maramat.model.Project;
 import cz.maramat.settings.AppSettings;
@@ -15,6 +16,7 @@ import cz.maramat.sim.BlockSorter;
 import cz.maramat.sim.BlockSorter.OrderSortMode;
 import cz.maramat.sim.SimulationEngine;
 import cz.maramat.ui.canvas.FbdCanvas;
+import cz.maramat.ui.canvas.FloatingPageWindow;
 import cz.maramat.ui.canvas.LadderCanvas;
 import cz.maramat.ui.canvas.PageTabBar;
 import cz.maramat.ui.canvas.StEditorPanel;
@@ -35,11 +37,14 @@ import cz.maramat.undo.UndoManager50.HistoryEntry;
 
 import javax.imageio.ImageIO;
 import javax.swing.AbstractAction;
+import javax.swing.Action;
 import javax.swing.BorderFactory;
 import javax.swing.JCheckBoxMenuItem;
+import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
+import javax.swing.JLabel;
 import javax.swing.JMenu;
 import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
@@ -54,6 +59,7 @@ import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
+import java.awt.Point;
 import java.awt.Toolkit;
 import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
@@ -104,6 +110,7 @@ public class MainWindow extends JFrame {
     private JCheckBoxMenuItem windowScopeItem;
     private JMenu recentProjectsMenu;
     private final List<File> recentFiles = new ArrayList<>();
+    private final List<FloatingPageWindow> floatingPageWindows = new ArrayList<>();
 
     public MainWindow() {
         this.project = Project.createDefaultSampleProject();
@@ -169,6 +176,7 @@ public class MainWindow extends JFrame {
             libraryTreePanel.rebuildTree();
             refreshTitles();
         });
+        stEditorPanel.setMacroNavigator(macroName -> editListener.onInspectMacroPage(macroName));
 
         JScrollPane fbdScroll = new JScrollPane(fbdCanvas);
         fbdScroll.setBorder(null);
@@ -194,6 +202,11 @@ public class MainWindow extends JFrame {
             public void onPagesStructureChanged() {
                 libraryTreePanel.rebuildTree();
                 refreshTitles();
+            }
+
+            @Override
+            public void onPagePoppedOut(int pageIndex, Point screenPt) {
+                actionPopOutPage(pageIndex, screenPt);
             }
         });
 
@@ -245,11 +258,10 @@ public class MainWindow extends JFrame {
         bottomHorizontalSplit.setBorder(null);
         bottomHorizontalSplit.setResizeWeight(0.65);
 
-        verticalSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, editorDock, scopeDock);
+        verticalSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, editorDock, null);
         verticalSplit.setBorder(null);
-        verticalSplit.setDividerSize(4);
-        verticalSplit.setResizeWeight(0.75);
-        verticalSplit.setDividerLocation(575);
+        verticalSplit.setDividerSize(0);
+        verticalSplit.setResizeWeight(1.0);
 
         horizontalSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, libraryDock, verticalSplit);
         horizontalSplit.setBorder(BorderFactory.createEmptyBorder(3, 3, 3, 3));
@@ -272,6 +284,10 @@ public class MainWindow extends JFrame {
     }
 
     private void showHomeScreen() {
+        for (FloatingPageWindow fpw : new ArrayList<>(floatingPageWindows)) {
+            fpw.closeWindow();
+        }
+        floatingPageWindows.clear();
         simEngine.stopSimulation(project);
         projectOpen = false;
         homeScreenPanel.setRecentFiles(recentFiles);
@@ -280,6 +296,10 @@ public class MainWindow extends JFrame {
     }
 
     private void loadProjectIntoWorkspace(Project newProj) {
+        for (FloatingPageWindow fpw : new ArrayList<>(floatingPageWindows)) {
+            fpw.closeWindow();
+        }
+        floatingPageWindows.clear();
         simEngine.stopSimulation(project);
         this.project = newProj;
         this.projectOpen = true;
@@ -321,6 +341,12 @@ public class MainWindow extends JFrame {
         return project.getPages().get(idx).getLanguage() == IecLanguage.LD;
     }
 
+    private boolean isActivePageSt() {
+        if (project == null || project.getPages().isEmpty()) return false;
+        int idx = Math.clamp(pageTabBar.getActivePageIndex(), 0, project.getPages().size() - 1);
+        return project.getPages().get(idx).getLanguage() == IecLanguage.ST;
+    }
+
     private void onSimulationTickUiUpdate() {
         if (fbdCanvas != null) {
             fbdCanvas.repaint();
@@ -331,9 +357,50 @@ public class MainWindow extends JFrame {
         if (stEditorPanel != null) {
             stEditorPanel.refreshRuntimeValues();
         }
+        for (FloatingPageWindow fpw : floatingPageWindows) {
+            fpw.refreshSimulationState();
+        }
         if (editorToolbar != null) {
             editorToolbar.updateSimState(simEngine.getState());
             editorToolbar.updateEStopButtonVisual(simEngine.isEStopActive());
+        }
+    }
+
+    private void actionPopOutPage(int pageIndex, Point screenPt) {
+        if (project == null || pageIndex < 0 || pageIndex >= project.getPages().size()) return;
+        Page page = project.getPages().get(pageIndex);
+
+        // Check if window already open for this page
+        for (FloatingPageWindow fpw : floatingPageWindows) {
+            if (fpw.getPage() == page) {
+                fpw.setVisible(true);
+                return;
+            }
+        }
+
+        final FloatingPageWindow[] holder = new FloatingPageWindow[1];
+        FloatingPageWindow fpw = new FloatingPageWindow(
+                this,
+                project,
+                page,
+                simEngine,
+                createCanvasEditListener(),
+                () -> floatingPageWindows.remove(holder[0])
+        );
+        holder[0] = fpw;
+        floatingPageWindows.add(fpw);
+        if (screenPt != null) {
+            fpw.setLocation(screenPt.x - 40, screenPt.y - 12);
+        } else {
+            fpw.setLocation(getX() + 80, getY() + 80);
+        }
+        fpw.setVisible(true);
+
+        // If user popped out the currently active tab and we have multiple pages,
+        // switch main window to another page so both can be viewed at once!
+        if (pageTabBar.getActivePageIndex() == pageIndex && project.getPages().size() > 1) {
+            int altIndex = (pageIndex == 0) ? 1 : pageIndex - 1;
+            pageTabBar.setActivePageIndex(altIndex);
         }
     }
 
@@ -470,9 +537,9 @@ public class MainWindow extends JFrame {
         });
         editMenu.add(selAllItem);
 
-        JMenuItem findItem = new JMenuItem("Find Block...");
+        JMenuItem findItem = new JMenuItem("Find Block / Text...");
         findItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_F, menuMask));
-        findItem.addActionListener(e -> actionFindBlock());
+        findItem.addActionListener(e -> actionFind());
         editMenu.add(findItem);
         bar.add(editMenu);
 
@@ -631,7 +698,7 @@ public class MainWindow extends JFrame {
         });
         windowMenu.add(windowLibraryItem);
 
-        windowScopeItem = new JCheckBoxMenuItem("Scope (Oscilloscope)", true);
+        windowScopeItem = new JCheckBoxMenuItem("Scope (Oscilloscope)", false);
         windowScopeItem.addActionListener(e -> {
             if (!windowScopeItem.isSelected() && scopeDock.isFloating()) {
                 scopeDock.closeSection();
@@ -663,7 +730,7 @@ public class MainWindow extends JFrame {
             if (scopeDock.isFloating()) scopeDock.redockToMainWindow();
             if (plcLogDock.isFloating()) plcLogDock.redockToMainWindow();
             windowLibraryItem.setSelected(true);
-            windowScopeItem.setSelected(true);
+            windowScopeItem.setSelected(false);
             windowPlcLogItem.setSelected(false);
             updateLibraryDockLayout();
             updateBottomDockLayout();
@@ -676,7 +743,7 @@ public class MainWindow extends JFrame {
         JMenuItem aboutItem = new JMenuItem("About Maraflow");
         aboutItem.addActionListener(e -> JOptionPane.showMessageDialog(
                 this,
-                "Maraflow V" + Project.VERSION + "\nFunctional IEC 61131-3 FBD & Ladder (LD) PLC Programming IDE\nTarget: STM32F407 + FreeRTOS Bytecode VM",
+                "Maraflow V" + Project.VERSION + "\nFBD, Ladder (LD) & Structured Text (ST) PLC IDE\nTarget: STM32F407 + FreeRTOS Bytecode VM",
                 "About Maraflow",
                 JOptionPane.INFORMATION_MESSAGE
         ));
@@ -699,6 +766,33 @@ public class MainWindow extends JFrame {
                 }
             }
         });
+
+        int menuMask = Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
+        Action findAct = new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                actionFind();
+            }
+        };
+
+        KeyStroke cmdF = KeyStroke.getKeyStroke(KeyEvent.VK_F, menuMask);
+        KeyStroke ctrlF = KeyStroke.getKeyStroke(KeyEvent.VK_F, KeyEvent.CTRL_DOWN_MASK);
+        KeyStroke metaF = KeyStroke.getKeyStroke(KeyEvent.VK_F, KeyEvent.META_DOWN_MASK);
+
+        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(cmdF, "globalFind");
+        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(ctrlF, "globalFind");
+        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(metaF, "globalFind");
+        getRootPane().getActionMap().put("globalFind", findAct);
+
+        fbdCanvas.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(cmdF, "globalFind");
+        fbdCanvas.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(ctrlF, "globalFind");
+        fbdCanvas.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(metaF, "globalFind");
+        fbdCanvas.getActionMap().put("globalFind", findAct);
+
+        ladderCanvas.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(cmdF, "globalFind");
+        ladderCanvas.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(ctrlF, "globalFind");
+        ladderCanvas.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(metaF, "globalFind");
+        ladderCanvas.getActionMap().put("globalFind", findAct);
     }
 
     private void updateLibraryDockLayout() {
@@ -865,8 +959,37 @@ public class MainWindow extends JFrame {
 
             @Override
             public void onFireInterruptPulse() {
-                simEngine.fireSimulatedInterruptPulse();
-                plcLogPanel.appendLog("Fired simulated hardware Interrupt pulse to all Main.Execution.Interrupt blocks.");
+                onFireInterruptPulse(null);
+            }
+
+            @Override
+            public void onFireInterruptPulse(String specificSource) {
+                simEngine.fireSimulatedInterruptPulse(specificSource);
+                if (specificSource != null) {
+                    plcLogPanel.appendLog("Fired simulated hardware Interrupt pulse for '" + specificSource + "'.");
+                } else {
+                    plcLogPanel.appendLog("Fired simulated hardware Interrupt pulse to all Main.Execution.Interrupt blocks.");
+                }
+            }
+
+            @Override
+            public List<String> getListeningInterruptSources() {
+                return SimulationEngine.getListeningInterruptSources(project);
+            }
+
+            @Override
+            public boolean isSafetyPlcEnabled() {
+                return project != null && project.getEStopConfig().isEnabled();
+            }
+
+            @Override
+            public void onToggleSafetyPlc(boolean enabled) {
+                if (project != null) {
+                    project.getEStopConfig().setEnabled(enabled);
+                    project.setDirty(true);
+                    editorToolbar.updateEStopButtonVisual(simEngine.isEStopActive());
+                    plcLogPanel.appendLog("Safety PLC mode is now " + (enabled ? "ENABLED" : "DISABLED") + ".");
+                }
             }
         };
     }
@@ -880,9 +1003,16 @@ public class MainWindow extends JFrame {
             public void onAfterPageEdit(String actionName, Page snapshotBefore, Page snapshotAfter) {
                 project.setDirty(true);
                 undoManager.recordPageAction(actionName, pageTabBar.getActivePageIndex(), snapshotBefore, snapshotAfter);
-                libraryTreePanel.rebuildTree();
+                if (actionName.contains("Macro") || actionName.contains("Rename")) {
+                    libraryTreePanel.rebuildTree();
+                }
                 refreshTitles();
                 editorToolbar.updateSimState(simEngine.getState());
+            }
+
+            @Override
+            public void onTriggerFind() {
+                actionFind();
             }
 
             @Override
@@ -914,6 +1044,10 @@ public class MainWindow extends JFrame {
     }
 
     private void performUndo(int count) {
+        if (isActivePageSt()) {
+            stEditorPanel.undo();
+            return;
+        }
         if (!undoManager.canUndo()) return;
         simEngine.stopSimulation(project);
         HistoryEntry last = undoManager.undoSteps(count, project.getPages());
@@ -928,6 +1062,10 @@ public class MainWindow extends JFrame {
     }
 
     private void performRedo(int count) {
+        if (isActivePageSt()) {
+            stEditorPanel.redo();
+            return;
+        }
         if (!undoManager.canRedo()) return;
         simEngine.stopSimulation(project);
         HistoryEntry last = undoManager.redoSteps(count, project.getPages());
@@ -1069,30 +1207,127 @@ public class MainWindow extends JFrame {
         }
     }
 
-    private void actionFindBlock() {
+    private Page getActivePage() {
+        if (project == null || project.getPages().isEmpty()) return null;
+        int idx = Math.clamp(pageTabBar.getActivePageIndex(), 0, project.getPages().size() - 1);
+        return project.getPages().get(idx);
+    }
+
+    private void actionFind() {
         if (!projectOpen) return;
-        Page page = fbdCanvas.getActivePage();
-        if (page == null || page.getAllBlockInstances().isEmpty()) return;
-        String q = JOptionPane.showInputDialog(this, "Enter Block Name to locate:", "");
-        if (q == null || q.isBlank()) return;
-        BlockInstance found = page.findBlockByName(q.trim());
-        if (found != null) {
-            if (!isActivePageLadder()) {
-                fbdCanvas.clearSelection();
-                int g = fbdCanvas.getGridUnitPx();
-                fbdCanvas.scrollRectToVisible(new java.awt.Rectangle(
-                        found.getGridX() * g - 50,
-                        found.getGridY() * g - 50,
-                        found.getGridWidth() * g + 100,
-                        found.getGridHeight() * g + 100
-                ));
-                fbdCanvas.repaint();
-            } else {
-                ladderCanvas.repaint();
-            }
-        } else {
-            JOptionPane.showMessageDialog(this, "Block '" + q.trim() + "' not found on active page.", "Find Block", JOptionPane.INFORMATION_MESSAGE);
+        Page page = getActivePage();
+        if (page == null) return;
+
+        if (page.getLanguage() == IecLanguage.ST) {
+            stEditorPanel.openFindBar(false);
+            return;
         }
+
+        if (page.getLanguage() == IecLanguage.LD) {
+            actionFindInLadder(page);
+            return;
+        }
+
+        actionFindInFbd(page);
+    }
+
+    private void actionFindInFbd(Page page) {
+        if (page.getBlocks().isEmpty()) {
+            JOptionPane.showMessageDialog(this, "The active page has no blocks to search.", "Find Block", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        String q = JOptionPane.showInputDialog(this, "Find Block in '" + page.getName() + "':\n(Matches name, type, pin name, or register)", "");
+        if (q == null || q.isBlank()) return;
+        String query = q.trim().toLowerCase();
+
+        List<BlockInstance> matches = new ArrayList<>();
+        for (BlockInstance b : page.getBlocks()) {
+            boolean matched = b.getName().toLowerCase().contains(query)
+                    || b.getTypeName().toLowerCase().contains(query)
+                    || b.getDefinitionId().toLowerCase().contains(query)
+                    || b.getCustomProperties().values().stream().anyMatch(v -> v.toLowerCase().contains(query))
+                    || b.getInputs().stream().anyMatch(p -> p.getShortName().toLowerCase().contains(query) || p.getFullName().toLowerCase().contains(query))
+                    || b.getOutputs().stream().anyMatch(p -> p.getShortName().toLowerCase().contains(query) || p.getFullName().toLowerCase().contains(query));
+            if (matched) {
+                matches.add(b);
+            }
+        }
+
+        if (matches.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "No blocks matching '" + q.trim() + "' found on active page.", "Find Block", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        BlockInstance first = matches.getFirst();
+        fbdCanvas.selectAndCenterBlock(first);
+        if (matches.size() == 1) {
+            plcLogPanel.appendLog("Found and focused block: " + first.getName() + " (" + first.getTypeName() + ")");
+        } else {
+            plcLogPanel.appendLog("Found " + matches.size() + " blocks matching '" + q.trim() + "'. Focused: " + first.getName());
+            showFindResultsDialog(matches);
+        }
+    }
+
+    private void showFindResultsDialog(List<BlockInstance> matches) {
+        String[] options = matches.stream()
+                .map(b -> b.getName() + "  [" + b.getTypeName() + "] (T:" + b.getThreadId() + ", O:" + b.getOrder() + ")")
+                .toArray(String[]::new);
+        JComboBox<String> combo = new JComboBox<>(options);
+        combo.addActionListener(e -> {
+            int sel = combo.getSelectedIndex();
+            if (sel >= 0 && sel < matches.size()) {
+                fbdCanvas.selectAndCenterBlock(matches.get(sel));
+            }
+        });
+        JPanel p = new JPanel(new BorderLayout(6, 6));
+        p.add(new JLabel("Multiple matching blocks found. Select one to focus:"), BorderLayout.NORTH);
+        p.add(combo, BorderLayout.CENTER);
+        JOptionPane.showMessageDialog(this, p, "Find Matches (" + matches.size() + ")", JOptionPane.PLAIN_MESSAGE);
+    }
+
+    private void actionFindInLadder(Page page) {
+        if (page.getRungs().isEmpty()) {
+            JOptionPane.showMessageDialog(this, "The active Ladder page has no rungs.", "Find in Ladder", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        String q = JOptionPane.showInputDialog(this, "Find in Ladder '" + page.getName() + "':\n(Matches operand, coil, contact, comment, or block)", "");
+        if (q == null || q.isBlank()) return;
+        String query = q.trim().toLowerCase();
+
+        List<Integer> matchingRungIndices = new ArrayList<>();
+        for (int i = 0; i < page.getRungs().size(); i++) {
+            LadderRung r = page.getRungs().get(i);
+            boolean match = r.getComment().toLowerCase().contains(query)
+                    || ("rung " + (i + 1)).contains(query)
+                    || r.getMainElements().stream().anyMatch(el -> elMatches(el, query))
+                    || r.getCoils().stream().anyMatch(el -> elMatches(el, query))
+                    || r.getParallelBranches().stream().anyMatch(br -> br.getElements().stream().anyMatch(el -> elMatches(el, query)));
+            if (match) {
+                matchingRungIndices.add(i);
+            }
+        }
+
+        if (matchingRungIndices.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "No ladder elements matching '" + q.trim() + "' found.", "Find in Ladder", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        int firstRung = matchingRungIndices.getFirst();
+        ladderCanvas.selectAndCenterRung(firstRung);
+        plcLogPanel.appendLog("Found match in Rung " + (firstRung + 1) + " for '" + q.trim() + "' (" + matchingRungIndices.size() + " matches total).");
+    }
+
+    private boolean elMatches(LadderElement el, String query) {
+        if (el == null) return false;
+        if (el.getOperand() != null && el.getOperand().toLowerCase().contains(query)) return true;
+        if (el.getSourceOperand() != null && el.getSourceOperand().toLowerCase().contains(query)) return true;
+        if (el.getBlockInstance() != null) {
+            BlockInstance b = el.getBlockInstance();
+            return b.getName().toLowerCase().contains(query)
+                    || b.getTypeName().toLowerCase().contains(query)
+                    || b.getInputs().stream().anyMatch(p -> p.getConstantValue() != null && p.getConstantValue().toLowerCase().contains(query));
+        }
+        return false;
     }
 
     private void actionSortGraphically() {

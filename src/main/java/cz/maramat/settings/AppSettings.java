@@ -35,6 +35,14 @@ public final class AppSettings {
     private String defaultBaudRate = "115200";
     private String defaultSerialPort = "/dev/ttyACM0";
 
+    // ST Editor & IntelliSense
+    private boolean stIntelliSenseEnabled = true;
+    private boolean stAutoPopup = true;
+    private int stPopupDelayMs = 150;
+    private boolean stRealtimeDiagnostics = true;
+    private boolean stGutterMarkers = true;
+    private boolean stSquigglyUnderlines = true;
+
     private final List<Runnable> listeners = new ArrayList<>();
 
     private AppSettings() {}
@@ -192,5 +200,53 @@ public final class AppSettings {
 
     public void setDefaultSerialPort(String defaultSerialPort) {
         this.defaultSerialPort = defaultSerialPort;
+    }
+
+    public boolean isStIntelliSenseEnabled() {
+        return stIntelliSenseEnabled;
+    }
+
+    public void setStIntelliSenseEnabled(boolean stIntelliSenseEnabled) {
+        this.stIntelliSenseEnabled = stIntelliSenseEnabled;
+    }
+
+    public boolean isStAutoPopup() {
+        return stAutoPopup;
+    }
+
+    public void setStAutoPopup(boolean stAutoPopup) {
+        this.stAutoPopup = stAutoPopup;
+    }
+
+    public int getStPopupDelayMs() {
+        return stPopupDelayMs;
+    }
+
+    public void setStPopupDelayMs(int stPopupDelayMs) {
+        this.stPopupDelayMs = Math.clamp(stPopupDelayMs, 50, 1000);
+    }
+
+    public boolean isStRealtimeDiagnostics() {
+        return stRealtimeDiagnostics;
+    }
+
+    public void setStRealtimeDiagnostics(boolean stRealtimeDiagnostics) {
+        this.stRealtimeDiagnostics = stRealtimeDiagnostics;
+    }
+
+    public boolean isStGutterMarkers() {
+        return stGutterMarkers;
+    }
+
+    public void setStGutterMarkers(boolean stGutterMarkers) {
+        this.stGutterMarkers = stGutterMarkers;
+    }
+
+    public boolean isStSquigglyUnderlines() {
+        return stSquigglyUnderlines;
+    }
+
+    public void setStSquigglyUnderlines(boolean stSquigglyUnderlines) {
+        this.stSquigglyUnderlines = stSquigglyUnderlines;
     }
 }

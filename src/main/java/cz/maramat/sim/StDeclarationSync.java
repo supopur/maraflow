@@ -52,6 +52,25 @@ public final class StDeclarationSync {
     }
 
     /**
+     * Replaces characters inside declaration blocks (VAR .. END_VAR) with spaces,
+     * preserving newlines so line numbers and column offsets in the executable body match the original code 1:1.
+     */
+    public static String maskDeclarations(String fullCode) {
+        if (fullCode == null) return "";
+        Matcher m = BLOCK_PATTERN.matcher(fullCode);
+        StringBuilder sb = new StringBuilder(fullCode);
+        while (m.find()) {
+            for (int i = m.start(); i < m.end(); i++) {
+                char c = fullCode.charAt(i);
+                if (c != '\n' && c != '\r') {
+                    sb.setCharAt(i, ' ');
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
      * Extracts variables from ST code declaration blocks.
      * If no declaration blocks are found, returns null (meaning code has no inline declarations).
      */
