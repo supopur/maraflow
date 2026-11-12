@@ -96,11 +96,13 @@ public final class StLanguageServer {
             "ROUND", "TRUNC", "MIN", "MAX", "LIMIT", "CLAMP", "SEL", "MUX",
             "AND", "OR", "XOR", "NOT", "NAND", "NOR", "XNOR",
             "ADD", "SUB", "MUL", "DIV", "MOD",
-            "EQ", "NE", "LT", "LE", "GT", "GE"
+            "EQ", "NE", "LT", "LE", "GT", "GE",
+            "RANDOM", "RND"
     );
 
     private static final Set<String> ST_STANDARD_FBS = Set.of(
-            "TON", "TOF", "TP", "CTU", "CTD", "CTUD", "SR", "RS", "R_TRIG", "F_TRIG"
+            "TON", "TOF", "TP", "CTU", "CTD", "CTUD", "SR", "RS", "R_TRIG", "F_TRIG",
+            "RANDOM", "RND"
     );
 
     private StLanguageServer() {}
@@ -448,7 +450,9 @@ public final class StLanguageServer {
                 {"COS", "COS(rad)", "REAL", "COS(X): Cosine of radians"},
                 {"TAN", "TAN(rad)", "REAL", "TAN(X): Tangent of radians"},
                 {"ROUND", "ROUND(in)", "DINT", "ROUND(X): Round to nearest integer"},
-                {"TRUNC", "TRUNC(in)", "DINT", "TRUNC(X): Truncate fractional part"}
+                {"TRUNC", "TRUNC(in)", "DINT", "TRUNC(X): Truncate fractional part"},
+                {"RANDOM", "RANDOM(min, max)", "REAL/DINT", "RANDOM([trig, ]min, max): Generates a random number between bounds"},
+                {"RND", "RND(min, max)", "REAL/DINT", "RND([trig, ]min, max): Short alias for RANDOM"}
         };
         for (Object[] row : fns) {
             String name = (String) row[0];
@@ -471,7 +475,9 @@ public final class StLanguageServer {
                 {"R_TRIG", "R_TRIG", "Edge", "Rising Edge Trigger: CLK (BOOL) -> Q (BOOL)"},
                 {"F_TRIG", "F_TRIG", "Edge", "Falling Edge Trigger: CLK (BOOL) -> Q (BOOL)"},
                 {"SR", "SR", "Bistable", "Set-Dominant Bistable Latch: S1 (BOOL), R (BOOL) -> Q1 (BOOL)"},
-                {"RS", "RS", "Bistable", "Reset-Dominant Bistable Latch: S (BOOL), R1 (BOOL) -> Q1 (BOOL)"}
+                {"RS", "RS", "Bistable", "Reset-Dominant Bistable Latch: S (BOOL), R1 (BOOL) -> Q1 (BOOL)"},
+                {"RANDOM", "RANDOM", "Math", "Random Value Generator: TRIG (BOOL), MIN (INT), MAX (INT) -> Y (INT/REAL)"},
+                {"RND", "RND", "Math", "Random Value Generator: TRIG (BOOL), MIN (INT), MAX (INT) -> Y (INT/REAL)"}
         };
         for (Object[] row : fbs) {
             String name = (String) row[0];

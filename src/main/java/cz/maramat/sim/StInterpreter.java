@@ -2,10 +2,7 @@ package cz.maramat.sim;
 
 import cz.maramat.model.StVariable;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
+import java.util.*;
 
 /**
  * Deterministic IEC 61131-3 Structured Text (ST) lexer, recursive-descent parser,
@@ -483,15 +480,245 @@ public final class StInterpreter {
     private record CallStmt(String targetName, List<CallArg> args) implements Stmt {
         @Override
         public void exec(EvalContext ctx) {
+            Map<String, Double> inVals = new HashMap<>();
+            List<CallArg> outArgs = new ArrayList<>();
+
+            String fbType = targetName.toUpperCase(Locale.ROOT);
+            if (fbType.contains(".")) {
+                fbType = fbType.substring(fbType.lastIndexOf('.') + 1);
+            }
+            if (fbType.startsWith("INST_")) {
+                fbType = fbType.substring(5);
+            } else {
+                for (String known : List.of("SR", "RS", "TON", "TOF", "TP", "CTU", "CTD", "CTUD", "R_TRIG", "F_TRIG", "RANDOM", "RND")) {
+                    if (fbType.endsWith("_" + known) || fbType.equals(known)) {
+                        fbType = known;
+                        break;
+                    }
+                }
+            }
+
+            List<String> posParamNames = switch (fbType) {
+                case "SR", "RS" -> List.of("S", "R");
+                case "TON", "TOF", "TP", "TIMER" -> List.of("IN", "PT");
+                case "CTU" -> List.of("CU", "RESET", "PV");
+                case "CTD" -> List.of("CD", "LOAD", "PV");
+                case "CTUD" -> List.of("CU", "CD", "RESET", "LOAD", "PV");
+                case "R_TRIG", "F_TRIG" -> List.of("CLK");
+                case "RANDOM", "RND" -> List.of("TRIG", "MIN", "MAX");
+                default -> List.of();
+            };
+
+            int posIdx = 0;
             for (CallArg arg : args) {
-                if (!arg.isOutput() && arg.expr() != null) {
+                if (arg.isOutput()) {
+                    outArgs.add(arg);
+                } else if (arg.expr() != null) {
                     double val = arg.expr().eval(ctx);
-                    if (arg.paramName() != null) {
-                        ctx.localVars.put(targetName + "." + arg.paramName(), val);
+                    String pName = arg.paramName();
+                    if (pName == null && posIdx < posParamNames.size()) {
+                        pName = posParamNames.get(posIdx++);
+                    }
+                    if (pName != null) {
+                        String pUp = pName.toUpperCase(Locale.ROOT);
+                        inVals.put(pUp, val);
+                        ctx.localVars.put(targetName + "." + pName, val);
+                    }
+                }
+            }
+
+            Map<String, Double> outVals = executeFunctionBlock(fbType, targetName, inVals, ctx);
+
+            for (Map.Entry<String, Double> entry : outVals.entrySet()) {
+                ctx.localVars.put(targetName + "." + entry.getKey(), entry.getValue());
+            }
+
+            for (CallArg outArg : outArgs) {
+                if (outArg.outputVarName() != null && outArg.paramName() != null) {
+                    String pUp = outArg.paramName().toUpperCase(Locale.ROOT);
+                    Double val = outVals.get(pUp);
+                    if (val != null) {
+                        ctx.write(outArg.outputVarName(), val);
                     }
                 }
             }
         }
+    }
+
+    private static Map<String, Double> executeFunctionBlock(
+            String fbType,
+            String instName,
+            Map<String, Double> inVals,
+            EvalContext ctx
+    ) {
+        Map<String, Double> out = new HashMap<>();
+        boolean en = inVals.getOrDefault("EN", 1.0) != 0.0;
+        if (!en) {
+            return out;
+        }
+
+        switch (fbType) {
+            case "SR" -> {
+                boolean s = inVals.getOrDefault("S", 0.0) != 0.0;
+                boolean r = inVals.getOrDefault("R", 0.0) != 0.0;
+                boolean q = ctx.localVars.getOrDefault(instName + "._q", 0.0) != 0.0;
+                if (s) q = true;
+                else if (r) q = false;
+                ctx.localVars.put(instName + "._q", q ? 1.0 : 0.0);
+                out.put("Q", q ? 1.0 : 0.0);
+                out.put("NQ", q ? 0.0 : 1.0);
+            }
+            case "RS" -> {
+                boolean s = inVals.getOrDefault("S", 0.0) != 0.0;
+                boolean r = inVals.getOrDefault("R", 0.0) != 0.0;
+                boolean q = ctx.localVars.getOrDefault(instName + "._q", 0.0) != 0.0;
+                if (r) q = false;
+                else if (s) q = true;
+                ctx.localVars.put(instName + "._q", q ? 1.0 : 0.0);
+                out.put("Q", q ? 1.0 : 0.0);
+                out.put("NQ", q ? 0.0 : 1.0);
+            }
+            case "R_TRIG" -> {
+                boolean clk = inVals.getOrDefault("CLK", inVals.getOrDefault("IN", 0.0)) != 0.0;
+                boolean prevClk = ctx.localVars.getOrDefault(instName + "._prevClk", 0.0) != 0.0;
+                boolean q = clk && !prevClk;
+                ctx.localVars.put(instName + "._prevClk", clk ? 1.0 : 0.0);
+                out.put("Q", q ? 1.0 : 0.0);
+            }
+            case "F_TRIG" -> {
+                boolean clk = inVals.getOrDefault("CLK", inVals.getOrDefault("IN", 0.0)) != 0.0;
+                boolean prevClk = ctx.localVars.getOrDefault(instName + "._prevClk", 0.0) != 0.0;
+                boolean q = !clk && prevClk;
+                ctx.localVars.put(instName + "._prevClk", clk ? 1.0 : 0.0);
+                out.put("Q", q ? 1.0 : 0.0);
+            }
+            case "TON", "TIMER" -> {
+                boolean in = inVals.getOrDefault("IN", 0.0) != 0.0;
+                double pt = inVals.getOrDefault("PT", 0.0);
+                double et = ctx.localVars.getOrDefault(instName + "._et", 0.0);
+                if (in) {
+                    et = Math.min(pt, et + 10.0);
+                } else {
+                    et = 0.0;
+                }
+                ctx.localVars.put(instName + "._et", et);
+                out.put("Q", (in && et >= pt) ? 1.0 : 0.0);
+                out.put("ET", et);
+            }
+            case "TOF" -> {
+                boolean in = inVals.getOrDefault("IN", 0.0) != 0.0;
+                double pt = inVals.getOrDefault("PT", 0.0);
+                double et = ctx.localVars.getOrDefault(instName + "._et", 0.0);
+                if (in) {
+                    et = 0.0;
+                } else if (et < pt) {
+                    et = Math.min(pt, et + 10.0);
+                }
+                ctx.localVars.put(instName + "._et", et);
+                out.put("Q", (in || et < pt) ? 1.0 : 0.0);
+                out.put("ET", et);
+            }
+            case "TP" -> {
+                boolean in = inVals.getOrDefault("IN", 0.0) != 0.0;
+                double pt = inVals.getOrDefault("PT", 0.0);
+                boolean prevIn = ctx.localVars.getOrDefault(instName + "._prevIn", 0.0) != 0.0;
+                double et = ctx.localVars.getOrDefault(instName + "._et", 0.0);
+                boolean active = ctx.localVars.getOrDefault(instName + "._active", 0.0) != 0.0;
+                if (!active && in && !prevIn) {
+                    active = true;
+                    et = 0.0;
+                }
+                if (active) {
+                    et += 10.0;
+                    if (et >= pt) {
+                        active = false;
+                        et = pt;
+                    }
+                }
+                ctx.localVars.put(instName + "._prevIn", in ? 1.0 : 0.0);
+                ctx.localVars.put(instName + "._active", active ? 1.0 : 0.0);
+                ctx.localVars.put(instName + "._et", et);
+                out.put("Q", active ? 1.0 : 0.0);
+                out.put("ET", et);
+            }
+            case "CTU" -> {
+                boolean cu = inVals.getOrDefault("CU", 0.0) != 0.0;
+                boolean rst = inVals.getOrDefault("RESET", inVals.getOrDefault("R", 0.0)) != 0.0;
+                double pv = inVals.getOrDefault("PV", 0.0);
+                double cv = ctx.localVars.getOrDefault(instName + "._cv", 0.0);
+                boolean prevCu = ctx.localVars.getOrDefault(instName + "._prevCu", 0.0) != 0.0;
+                if (rst) {
+                    cv = 0.0;
+                } else if (cu && !prevCu && cv < pv) {
+                    cv++;
+                }
+                ctx.localVars.put(instName + "._prevCu", cu ? 1.0 : 0.0);
+                ctx.localVars.put(instName + "._cv", cv);
+                out.put("Q", cv >= pv ? 1.0 : 0.0);
+                out.put("CV", cv);
+            }
+            case "CTD" -> {
+                boolean cd = inVals.getOrDefault("CD", 0.0) != 0.0;
+                boolean ld = inVals.getOrDefault("LOAD", inVals.getOrDefault("LD", 0.0)) != 0.0;
+                double pv = inVals.getOrDefault("PV", 0.0);
+                double cv = ctx.localVars.getOrDefault(instName + "._cv", pv);
+                boolean prevCd = ctx.localVars.getOrDefault(instName + "._prevCd", 0.0) != 0.0;
+                if (ld) {
+                    cv = pv;
+                } else if (cd && !prevCd && cv > 0) {
+                    cv--;
+                }
+                ctx.localVars.put(instName + "._prevCd", cd ? 1.0 : 0.0);
+                ctx.localVars.put(instName + "._cv", cv);
+                out.put("Q", cv <= 0 ? 1.0 : 0.0);
+                out.put("CV", cv);
+            }
+            case "CTUD" -> {
+                boolean cu = inVals.getOrDefault("CU", 0.0) != 0.0;
+                boolean cd = inVals.getOrDefault("CD", 0.0) != 0.0;
+                boolean rst = inVals.getOrDefault("RESET", inVals.getOrDefault("R", 0.0)) != 0.0;
+                boolean ld = inVals.getOrDefault("LOAD", inVals.getOrDefault("LD", 0.0)) != 0.0;
+                double pv = inVals.getOrDefault("PV", 0.0);
+                double cv = ctx.localVars.getOrDefault(instName + "._cv", 0.0);
+                boolean prevCu = ctx.localVars.getOrDefault(instName + "._prevCu", 0.0) != 0.0;
+                boolean prevCd = ctx.localVars.getOrDefault(instName + "._prevCd", 0.0) != 0.0;
+                if (rst) {
+                    cv = 0.0;
+                } else if (ld) {
+                    cv = pv;
+                } else {
+                    if (cu && !prevCu && cv < pv) cv++;
+                    if (cd && !prevCd && cv > 0) cv--;
+                }
+                ctx.localVars.put(instName + "._prevCu", cu ? 1.0 : 0.0);
+                ctx.localVars.put(instName + "._prevCd", cd ? 1.0 : 0.0);
+                ctx.localVars.put(instName + "._cv", cv);
+                out.put("QU", cv >= pv ? 1.0 : 0.0);
+                out.put("QD", cv <= 0 ? 1.0 : 0.0);
+                out.put("CV", cv);
+            }
+            case "RANDOM", "RND" -> {
+                double min = inVals.getOrDefault("MIN", 0.0);
+                double max = inVals.getOrDefault("MAX", 100.0);
+                double lo = Math.min(min, max);
+                double hi = Math.max(min, max);
+                boolean trig = inVals.getOrDefault("TRIG", 1.0) != 0.0;
+                boolean prevTrig = ctx.localVars.getOrDefault(instName + "._prevTrig", 0.0) != 0.0;
+                boolean sampled = ctx.localVars.getOrDefault(instName + "._sampled", 0.0) != 0.0;
+                double currentVal = ctx.localVars.getOrDefault(instName + "._val", lo);
+
+                boolean shouldSample = (trig && !prevTrig) || !sampled;
+                if (shouldSample) {
+                    currentVal = sampleRandom(lo, hi, true);
+                    ctx.localVars.put(instName + "._val", currentVal);
+                    ctx.localVars.put(instName + "._sampled", 1.0);
+                }
+                ctx.localVars.put(instName + "._prevTrig", trig ? 1.0 : 0.0);
+                out.put("Y", currentVal);
+            }
+            default -> {}
+        }
+        return out;
     }
 
     // =========================================================================
@@ -544,7 +771,7 @@ public final class StInterpreter {
                 return list;
             }
             do {
-                if (peek().type == TokType.IDENT && (lookahead().type == TokType.ASSIGN || lookahead().type == TokType.ARROW)) {
+                if ((peek().type == TokType.IDENT || isCallableKeyword(peek().type)) && (lookahead().type == TokType.ASSIGN || lookahead().type == TokType.ARROW)) {
                     Token nameTok = next();
                     if (match(TokType.ARROW)) {
                         Token outVar = expect(TokType.IDENT, "Expected output variable name after '=>'");
@@ -833,7 +1060,8 @@ public final class StInterpreter {
             if (match(TokType.PLUS)) {
                 return parseUnary();
             }
-            if (match(TokType.KW_NOT)) {
+            if (peek().type == TokType.KW_NOT && lookahead().type != TokType.LPAREN) {
+                next();
                 Expr e = parseUnary();
                 return ctx -> Math.abs(e.eval(ctx)) >= 0.5 ? 0.0 : 1.0;
             }
@@ -1119,6 +1347,85 @@ public final class StInterpreter {
                         return 0.0;
                     };
                 }
+                case "RANDOM", "RND" -> {
+                    Expr trigArg = null;
+                    Expr minArg = null;
+                    Expr maxArg = null;
+
+                    List<CallArg> positional = new ArrayList<>();
+                    for (CallArg arg : rawArgs) {
+                        if (arg.isOutput() || arg.expr() == null) continue;
+                        String pName = arg.paramName();
+                        if (pName != null) {
+                            String pUp = pName.toUpperCase(Locale.ROOT);
+                            if ("EN".equals(pUp)) {
+                                // Handled via enArg
+                            } else if ("TRIG".equals(pUp) || "CLK".equals(pUp)) {
+                                trigArg = arg.expr();
+                            } else if ("MIN".equals(pUp) || "LO".equals(pUp)) {
+                                minArg = arg.expr();
+                            } else if ("MAX".equals(pUp) || "HI".equals(pUp)) {
+                                maxArg = arg.expr();
+                            } else {
+                                throw new StSyntaxException(line, "Unknown parameter '" + pName + "' for function " + fnName);
+                            }
+                        } else {
+                            positional.add(arg);
+                        }
+                    }
+
+                    if (!positional.isEmpty()) {
+                        if (positional.size() == 1) {
+                            if (maxArg == null) maxArg = positional.get(0).expr();
+                            else if (minArg == null) minArg = positional.get(0).expr();
+                        } else if (positional.size() == 2) {
+                            if (minArg == null) minArg = positional.get(0).expr();
+                            if (maxArg == null) maxArg = positional.get(1).expr();
+                        } else if (positional.size() == 3) {
+                            if (trigArg == null) trigArg = positional.get(0).expr();
+                            if (minArg == null) minArg = positional.get(1).expr();
+                            if (maxArg == null) maxArg = positional.get(2).expr();
+                        } else {
+                            throw new StSyntaxException(line, fnName + "() accepts at most 3 positional arguments ([Trig, ]Min, Max)");
+                        }
+                    }
+
+                    final Expr fEn = (enArg != null) ? enArg.expr() : null;
+                    final Expr fTrig = trigArg;
+                    final Expr fMin = minArg;
+                    final Expr fMax = maxArg;
+                    final boolean hasExplicitBounds = (fMin != null || fMax != null);
+                    final String stateKey = "__rnd_line_" + line;
+
+                    yield ctx -> {
+                        if (fEn != null && Math.abs(fEn.eval(ctx)) < 0.5) {
+                            return 0.0;
+                        }
+
+                        double lo = (fMin != null) ? fMin.eval(ctx) : 0.0;
+                        double hi = (fMax != null) ? fMax.eval(ctx) : (hasExplicitBounds ? 100.0 : 1.0);
+                        double minVal = Math.min(lo, hi);
+                        double maxVal = Math.max(lo, hi);
+
+                        if (fTrig != null) {
+                            boolean trig = Math.abs(fTrig.eval(ctx)) >= 0.5;
+                            boolean prevTrig = ctx.localVars.getOrDefault(stateKey + "_prev", 0.0) >= 0.5;
+                            boolean sampled = ctx.localVars.getOrDefault(stateKey + "_init", 0.0) >= 0.5;
+                            double currentVal = ctx.localVars.getOrDefault(stateKey + "_val", minVal);
+
+                            boolean shouldSample = (trig && !prevTrig) || !sampled;
+                            if (shouldSample) {
+                                currentVal = sampleRandom(minVal, maxVal, hasExplicitBounds);
+                                ctx.localVars.put(stateKey + "_val", currentVal);
+                                ctx.localVars.put(stateKey + "_init", 1.0);
+                            }
+                            ctx.localVars.put(stateKey + "_prev", trig ? 1.0 : 0.0);
+                            return currentVal;
+                        } else {
+                            return sampleRandom(minVal, maxVal, hasExplicitBounds);
+                        }
+                    };
+                }
                 default -> throw new StSyntaxException(line, "Unknown ST function '" + fnName + "'");
             };
         }
@@ -1127,6 +1434,22 @@ public final class StInterpreter {
             if (args.size() != expected) {
                 throw new StSyntaxException(line, "Function " + fn + " expects " + expected + " argument(s), got " + args.size());
             }
+        }
+    }
+
+    private static double sampleRandom(double minVal, double maxVal, boolean hasExplicitBounds) {
+        if (!hasExplicitBounds) {
+            return Math.random();
+        }
+        if (minVal == Math.floor(minVal) && maxVal == Math.floor(maxVal)) {
+            long minI = (long) minVal;
+            long maxI = (long) maxVal;
+            if (maxI <= minI) {
+                return minI;
+            }
+            return minI + (long) (Math.random() * (maxI - minI + 1));
+        } else {
+            return minVal + Math.random() * (maxVal - minVal);
         }
     }
 }

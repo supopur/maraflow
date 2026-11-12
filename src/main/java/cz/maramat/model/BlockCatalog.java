@@ -95,6 +95,17 @@ public final class BlockCatalog {
                 3, 4, false, true, 0.20
         ));
         reg(new BlockDefinition(
+                "Math.Random", "Math", "Random", "Rnd",
+                List.of(
+                        enPin(),
+                        pin("Trig", "Generate Trigger Edge", DataType.BOOL, "1"),
+                        pin("Min", "Minimum Value", DataType.INT, "0"),
+                        pin("Max", "Maximum Value", DataType.INT, "100")
+                ),
+                List.of(pin("Y", "Random Value", DataType.INT, "0")),
+                3, 4, false, true, 0.25
+        ));
+        reg(new BlockDefinition(
                 "Math.Scale", "Math", "Scale", "Scale",
                 List.of(
                         enPin(),

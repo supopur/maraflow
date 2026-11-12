@@ -110,7 +110,8 @@ public class StEditorPanel extends JPanel {
     private static final Set<String> ST_FUNCTIONS = Set.of(
             "ABS", "SQRT", "SIN", "COS", "TAN", "TRUNC", "ROUND",
             "INT_TO_FLOAT", "INT_TO_REAL", "FLOAT_TO_INT", "REAL_TO_INT",
-            "BOOL_TO_INT", "INT_TO_BOOL", "MIN", "MAX", "LIMIT", "CLAMP", "SEL"
+            "BOOL_TO_INT", "INT_TO_BOOL", "MIN", "MAX", "LIMIT", "CLAMP", "SEL",
+            "RANDOM", "RND"
     );
 
     private static final Pattern TOKEN_PATTERN = Pattern.compile(
@@ -1361,7 +1362,9 @@ public class StEditorPanel extends JPanel {
             StringBuilder sb = new StringBuilder();
             sb.append("\n// Block: ").append(def.getId()).append("\n");
 
-            List<BlockDefinition.PinSpec> inputs = def.getDefaultInputs();
+            List<BlockDefinition.PinSpec> inputs = def.getDefaultInputs().stream()
+                    .filter(p -> !"En".equalsIgnoreCase(p.shortName()))
+                    .toList();
             List<BlockDefinition.PinSpec> outputs = def.getDefaultOutputs();
 
             if (outputs.size() == 1) {

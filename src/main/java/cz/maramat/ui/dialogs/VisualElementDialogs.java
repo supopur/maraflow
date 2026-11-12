@@ -391,8 +391,8 @@ public final class VisualElementDialogs {
             if (repaintCallback != null) repaintCallback.run();
         } else {
             // Slider GUI: exiting the slider sets the value
-            int min = parseIntSafe(xVarBlock.getCustomProperties().getOrDefault("SliderMin", "0"), 0);
-            int max = parseIntSafe(xVarBlock.getCustomProperties().getOrDefault("SliderMax", "100"), 100);
+            int min = parseIntSafe(xVarBlock.getCustomProperties().getOrDefault("ValA", xVarBlock.getCustomProperties().getOrDefault("SliderMin", "0")), 0);
+            int max = parseIntSafe(xVarBlock.getCustomProperties().getOrDefault("ValB", xVarBlock.getCustomProperties().getOrDefault("SliderMax", "100")), 100);
             if (max <= min) max = min + 100;
             int cur = Math.clamp((int) Math.round(outPin.getDataType().toNumericValue(curStr)), min, max);
 

@@ -196,6 +196,11 @@ public class ModulePropertiesDialog extends JDialog {
                     modeBox.setSelectedItem(v);
                     addRow(p, gbc, row++, "Input Mode:", modeBox);
                     specificControls.put(k, modeBox);
+                } else if (k.equals("SwitchMode")) {
+                    JComboBox<String> swBox = new JComboBox<>(new String[]{"Toggle", "Momentary"});
+                    swBox.setSelectedItem(v);
+                    addRow(p, gbc, row++, "Switch Mode:", swBox);
+                    specificControls.put(k, swBox);
                 } else if (k.equals("TimerMode")) {
                     JComboBox<String> tmBox = new JComboBox<>(new String[]{"TON (On-Delay)", "TOF (Off-Delay)", "TP (Pulse)"});
                     tmBox.setSelectedItem(v);

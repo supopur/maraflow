@@ -126,10 +126,9 @@ public class BlockInstance {
             customProperties.put("TimerMode", "TON (On-Delay)");
         } else if (definitionId.startsWith("Visual.Vars.")) {
             customProperties.put("InputType", definitionId.endsWith("BoolVar") ? "Switch" : "Slider");
+            customProperties.put("SwitchMode", "Toggle");
             customProperties.put("ValA", "0");
             customProperties.put("ValB", definitionId.endsWith("BoolVar") ? "1" : "100");
-            customProperties.put("SliderMin", "0");
-            customProperties.put("SliderMax", "100");
             customProperties.put("CurrentValue", "0");
         }
     }
@@ -158,6 +157,9 @@ public class BlockInstance {
     }
 
     public int getGridWidth() {
+        if (definitionId.startsWith("Visual.Vars.")) {
+            return courtyardGridWidth + 1;
+        }
         return PIN_COL_GRID_WIDTH + courtyardGridWidth + PIN_COL_GRID_WIDTH;
     }
 

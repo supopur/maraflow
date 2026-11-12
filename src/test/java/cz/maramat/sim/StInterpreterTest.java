@@ -156,4 +156,55 @@ public class StInterpreterTest {
         List<StLanguageServer.Diagnostic> diags = StLanguageServer.analyze(code, vars, null);
         assertTrue(diags.isEmpty(), "Expected no warnings/errors from StLanguageServer for FB with => output bindings, got: " + diags);
     }
+
+    @Test
+    void testRandomFunctionCall() {
+        String code = """
+                VAR
+                    Rnd_Out1 : INT;
+                    Rnd_Out2 : INT;
+                    Rnd_Out3 : REAL;
+                END_VAR
+
+                // Block: Math.Random dropped template
+                Rnd_Out1 := Random(
+                    Trig := 1,
+                    Min := 10,
+                    Max := 20
+                );
+
+                // Positional bounds
+                Rnd_Out2 := Rnd(5, 15);
+
+                // Zero-arg float
+                Rnd_Out3 := Random();
+                """;
+
+        List<StVariable> vars = List.of(
+                new StVariable(StVariable.Scope.VAR, "Rnd_Out1", DataType.INT, "0", ""),
+                new StVariable(StVariable.Scope.VAR, "Rnd_Out2", DataType.INT, "0", ""),
+                new StVariable(StVariable.Scope.VAR, "Rnd_Out3", DataType.FLOAT, "0.0", "")
+        );
+
+        List<StInterpreter.Diagnostic> parserDiags = StInterpreter.validate(code, vars);
+        assertTrue(parserDiags.isEmpty(), "Expected no parser diagnostics, got: " + parserDiags);
+
+        List<StLanguageServer.Diagnostic> diags = StLanguageServer.analyze(code, vars, null);
+        assertTrue(diags.isEmpty(), "Expected no language server diagnostics, got: " + diags);
+
+        Map<String, Double> localVars = new HashMap<>();
+        localVars.put("Rnd_Out1", 0.0);
+        localVars.put("Rnd_Out2", 0.0);
+        localVars.put("Rnd_Out3", 0.0);
+
+        StInterpreter.execute(code, localVars, null);
+
+        double val1 = localVars.get("Rnd_Out1");
+        double val2 = localVars.get("Rnd_Out2");
+        double val3 = localVars.get("Rnd_Out3");
+
+        assertTrue(val1 >= 10.0 && val1 <= 20.0, "val1 should be in [10, 20], got: " + val1);
+        assertTrue(val2 >= 5.0 && val2 <= 15.0, "val2 should be in [5, 15], got: " + val2);
+        assertTrue(val3 >= 0.0 && val3 <= 1.0, "val3 should be in [0.0, 1.0], got: " + val3);
+    }
 }

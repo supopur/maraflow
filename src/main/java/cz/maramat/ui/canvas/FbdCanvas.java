@@ -144,6 +144,8 @@ public class FbdCanvas extends JPanel {
 
     // Visual Button momentary press tracking
     private GraphicElement heldVisualButton = null;
+    // xVar momentary press tracking
+    private BlockInstance heldMomentaryXVar = null;
     private long lastPopupTimestamp = 0;
 
     private static boolean isCanvasPopupTrigger(MouseEvent e) {
@@ -665,10 +667,44 @@ public class FbdCanvas extends JPanel {
                 // 2. Check if clicking a Block
                 BlockInstance hitBlock = findBlockAtPixel(page, mx, my);
                 if (hitBlock != null) {
+                    if (hitBlock.getDefinitionId().startsWith("Visual.Vars.") && simEngine.isShowingLiveOutputs()) {
+                        String inputType = hitBlock.getCustomProperties().getOrDefault("InputType", "Switch");
+                        if ("Switch".equalsIgnoreCase(inputType)) {
+                            String swMode = hitBlock.getCustomProperties().getOrDefault("SwitchMode", "Toggle");
+                            String valA = hitBlock.getCustomProperties().getOrDefault("ValA", "0");
+                            String valB = hitBlock.getCustomProperties().getOrDefault("ValB", "1");
+                            PinInstance outPin = hitBlock.getOutputs().getFirst();
+
+                            if ("Momentary".equalsIgnoreCase(swMode)) {
+                                hitBlock.getCustomProperties().put("CurrentValue", valB);
+                                outPin.setRuntimeValue(outPin.getDataType().toNumericValue(valB));
+                                heldMomentaryXVar = hitBlock;
+                            } else {
+                                String cur = hitBlock.getCustomProperties().getOrDefault("CurrentValue", "0");
+                                String next = cur.equals(valA) ? valB : valA;
+                                hitBlock.getCustomProperties().put("CurrentValue", next);
+                                outPin.setRuntimeValue(outPin.getDataType().toNumericValue(next));
+                            }
+                            repaint();
+                            return;
+                        } else {
+                            // Slider single click
+                            Frame owner = (Frame) SwingUtilities.getWindowAncestor(FbdCanvas.this);
+                            VisualElementDialogs.triggerXVarAction(owner, hitBlock, FbdCanvas.this::repaint);
+                            return;
+                        }
+                    }
+
                     if (e.getClickCount() == 2) {
                         onBlockDoubleClicked(page, hitBlock);
                         return;
                     }
+
+                    // During simulation or watch, prevent moving xVar blocks
+                    if (hitBlock.getDefinitionId().startsWith("Visual.Vars.") && simEngine.isShowingLiveOutputs()) {
+                        return;
+                    }
+
                     boolean ctrlDown = (e.getModifiersEx() & (KeyEvent.CTRL_DOWN_MASK | KeyEvent.META_DOWN_MASK)) != 0;
                     if (ctrlDown) {
                         if (selectedBlockIds.contains(hitBlock.getId())) {
@@ -864,6 +900,15 @@ public class FbdCanvas extends JPanel {
                 if (heldVisualButton != null) {
                     heldVisualButton.setActiveState(false);
                     heldVisualButton = null;
+                    repaint();
+                }
+
+                if (heldMomentaryXVar != null) {
+                    String valA = heldMomentaryXVar.getCustomProperties().getOrDefault("ValA", "0");
+                    heldMomentaryXVar.getCustomProperties().put("CurrentValue", valA);
+                    PinInstance outPin = heldMomentaryXVar.getOutputs().getFirst();
+                    outPin.setRuntimeValue(outPin.getDataType().toNumericValue(valA));
+                    heldMomentaryXVar = null;
                     repaint();
                 }
 
@@ -1068,7 +1113,7 @@ public class FbdCanvas extends JPanel {
     private void onBlockDoubleClicked(Page page, BlockInstance block) {
         Frame owner = (Frame) SwingUtilities.getWindowAncestor(this);
         if (block.getDefinitionId().startsWith("Visual.Vars.") && simEngine.isShowingLiveOutputs()) {
-            VisualElementDialogs.triggerXVarAction(owner, block, this::repaint);
+            // During simulation or watch, properties modal is blocked to prevent accidental stop
             return;
         }
         if (block.getDefinitionId().startsWith("Macro.User.") && simEngine.isShowingLiveOutputs()) {
@@ -1196,6 +1241,9 @@ public class FbdCanvas extends JPanel {
         JMenuItem propsItem = new JMenuItem("Properties... (Double-Click)");
         propsItem.setFont(new Font(propsItem.getFont().getName(), Font.BOLD, propsItem.getFont().getSize()));
         propsItem.addActionListener(e -> onBlockDoubleClicked(page, block));
+        if (block.getDefinitionId().startsWith("Visual.Vars.") && simEngine.isShowingLiveOutputs()) {
+            propsItem.setEnabled(false);
+        }
         menu.add(propsItem);
 
         JMenuItem renameItem = new JMenuItem("Rename Block...");
@@ -1437,7 +1485,8 @@ public class FbdCanvas extends JPanel {
             int bx = b.getGridX() * g;
             int by = b.getGridY() * g;
             int bw = b.getGridWidth() * g;
-            int pinW = BlockInstance.PIN_COL_GRID_WIDTH * g;
+            boolean isXVar = b.getDefinitionId().startsWith("Visual.Vars.");
+            int pinW = isXVar ? g : BlockInstance.PIN_COL_GRID_WIDTH * g;
             int headerH = BlockInstance.HEADER_GRID_HEIGHT * g;
 
             for (int i = 0; i < b.getInputs().size(); i++) {
@@ -2123,7 +2172,8 @@ public class FbdCanvas extends JPanel {
             int bw = b.getGridWidth() * g;
             int bh = b.getGridHeight() * g;
             int headerH = BlockInstance.HEADER_GRID_HEIGHT * g;
-            int pinW = BlockInstance.PIN_COL_GRID_WIDTH * g;
+            boolean isXVar = b.getDefinitionId().startsWith("Visual.Vars.");
+            int pinW = isXVar ? g : BlockInstance.PIN_COL_GRID_WIDTH * g;
             int bodyY = by + headerH;
             int bodyH = bh - headerH;
 
@@ -2205,6 +2255,18 @@ public class FbdCanvas extends JPanel {
                 paintValueCourtyard(g2, b, courtyardX, bodyY, courtyardW + pinW, bodyH, g, showLiveOutputs);
             } else if (b.getDefinitionId().startsWith("Visual.Vars.")) {
                 paintXVarCourtyard(g2, b, bx, bodyY, bw - pinW, bodyH, g);
+                if (showExecutionInfo) {
+                    g2.setFont(metaFont);
+                    FontMetrics metaFm = g2.getFontMetrics();
+                    g2.setColor(Color.BLACK);
+                    String tStr = "T:" + b.getThreadId();
+                    String oStr = "O:" + b.getOrder();
+                    int tx = bx + ((bw - pinW) - metaFm.stringWidth(tStr)) / 2;
+                    int ox = bx + ((bw - pinW) - metaFm.stringWidth(oStr)) / 2;
+                    int bottomY = by + bh - 2;
+                    g2.drawString(tStr, tx, bottomY - g);
+                    g2.drawString(oStr, ox, bottomY);
+                }
             } else {
                 String badge = null;
                 if (b.getDefinitionId().startsWith("Main.Execution.")) {
@@ -2271,14 +2333,13 @@ public class FbdCanvas extends JPanel {
         g2.setColor(Color.WHITE);
         g2.fillRect(x, y, w, h);
 
-        int padX = Math.max(4, w / 5);
-        int padY = Math.max(4, h / 8);
+        int padX = Math.max(4, w / 6);
+        int padY = Math.max(4, h / 10);
         int sx = x + padX;
         int sy = y + padY;
-        int sw = w - 2 * padX - Math.max(3, g / 2);
+        int sw = w - 2 * padX - Math.max(6, g);
         int sh = h - 2 * padY;
-        int midY = sy + sh / 2;
-        int thick = Math.max(2, g / 3);
+        int thick = Math.max(3, (int) Math.round(sw * 0.22));
 
         boolean[] segOn = new boolean[8];
         for (int i = 0; i < Math.min(8, b.getInputs().size()); i++) {
@@ -2286,29 +2347,63 @@ public class FbdCanvas extends JPanel {
         }
 
         Color activeColor = new Color(0x22, 0x22, 0x22);
-        Color inactiveColor = new Color(0xE0, 0xE0, 0xE0);
+        Color inactiveColor = new Color(0xC0, 0xC0, 0xC0);
 
-        drawSegmentBar(g2, sx + thick, sy, sw - 2 * thick, thick, segOn[0], activeColor, inactiveColor);
-        drawSegmentBar(g2, sx + sw - thick, sy + thick, thick, sh / 2 - thick, segOn[1], activeColor, inactiveColor);
-        drawSegmentBar(g2, sx + sw - thick, midY + thick / 2, thick, sh / 2 - thick, segOn[2], activeColor, inactiveColor);
-        drawSegmentBar(g2, sx + thick, sy + sh - thick, sw - 2 * thick, thick, segOn[3], activeColor, inactiveColor);
-        drawSegmentBar(g2, sx, midY + thick / 2, thick, sh / 2 - thick, segOn[4], activeColor, inactiveColor);
-        drawSegmentBar(g2, sx, sy + thick, thick, sh / 2 - thick, segOn[5], activeColor, inactiveColor);
-        drawSegmentBar(g2, sx + thick, midY - thick / 2, sw - 2 * thick, thick, segOn[6], activeColor, inactiveColor);
+        int horizW = sw - thick;
+        int vertH = (sh - thick) / 2;
+        int gap = 1;
 
-        int dpX = sx + sw + 2;
-        int dpY = sy + sh - thick - 1;
+        // A (Top)
+        drawHexSegment(g2, sx + thick / 2, sy, horizW, thick, true, segOn[0], activeColor, inactiveColor);
+        // B (Top-Right)
+        drawHexSegment(g2, sx + sw - thick, sy + thick / 2 + gap, thick, vertH - gap, false, segOn[1], activeColor, inactiveColor);
+        // C (Bottom-Right)
+        drawHexSegment(g2, sx + sw - thick, sy + sh / 2 + gap, thick, vertH - gap, false, segOn[2], activeColor, inactiveColor);
+        // D (Bottom)
+        drawHexSegment(g2, sx + thick / 2, sy + sh - thick, horizW, thick, true, segOn[3], activeColor, inactiveColor);
+        // E (Bottom-Left)
+        drawHexSegment(g2, sx, sy + sh / 2 + gap, thick, vertH - gap, false, segOn[4], activeColor, inactiveColor);
+        // F (Top-Left)
+        drawHexSegment(g2, sx, sy + thick / 2 + gap, thick, vertH - gap, false, segOn[5], activeColor, inactiveColor);
+        // G (Middle)
+        drawHexSegment(g2, sx + thick / 2, sy + (sh - thick) / 2, horizW, thick, true, segOn[6], activeColor, inactiveColor);
+
+        // Decimal Point (Circle)
+        int dpDiameter = Math.max(4, thick - 1);
+        int dpX = sx + sw + Math.max(1, g / 5);
+        int dpY = sy + sh - dpDiameter;
         g2.setColor(segOn[7] ? activeColor : inactiveColor);
-        g2.fillRect(dpX, dpY, thick + 1, thick + 1);
-        g2.setColor(new Color(0x88, 0x88, 0x88));
-        g2.drawRect(dpX, dpY, thick + 1, thick + 1);
+        g2.fillOval(dpX, dpY, dpDiameter, dpDiameter);
+        g2.setColor(Color.BLACK);
+        g2.drawOval(dpX, dpY, dpDiameter, dpDiameter);
     }
 
-    private void drawSegmentBar(Graphics2D g2, int x, int y, int w, int h, boolean on, Color onCol, Color offCol) {
+    private void drawHexSegment(Graphics2D g2, int x, int y, int w, int h, boolean horizontal, boolean on, Color onCol, Color offCol) {
+        Polygon poly = new Polygon();
+        if (horizontal) {
+            int cap = Math.min(w / 3, h / 2);
+            int midY = y + h / 2;
+            poly.addPoint(x, midY);
+            poly.addPoint(x + cap, y);
+            poly.addPoint(x + w - cap, y);
+            poly.addPoint(x + w, midY);
+            poly.addPoint(x + w - cap, y + h);
+            poly.addPoint(x + cap, y + h);
+        } else {
+            int cap = Math.min(h / 3, w / 2);
+            int midX = x + w / 2;
+            poly.addPoint(midX, y);
+            poly.addPoint(x + w, y + cap);
+            poly.addPoint(x + w, y + h - cap);
+            poly.addPoint(midX, y + h);
+            poly.addPoint(x, y + h - cap);
+            poly.addPoint(x, y + cap);
+        }
+
         g2.setColor(on ? onCol : offCol);
-        g2.fillRect(x, y, w, h);
-        g2.setColor(new Color(0x77, 0x77, 0x77));
-        g2.drawRect(x, y, w, h);
+        g2.fillPolygon(poly);
+        g2.setColor(Color.BLACK);
+        g2.drawPolygon(poly);
     }
 
     private void paintValueCourtyard(Graphics2D g2, BlockInstance b, int x, int y, int w, int h, int g, boolean live) {
@@ -2327,17 +2422,8 @@ public class FbdCanvas extends JPanel {
     }
 
     private void paintXVarCourtyard(Graphics2D g2, BlockInstance b, int x, int y, int w, int h, int g) {
-        g2.setColor(new Color(0xF8, 0xFA, 0xFC));
+        g2.setColor(new Color(0xC0, 0xC0, 0xC0));
         g2.fillRect(x, y, w, h);
-        String mode = b.getCustomProperties().getOrDefault("InputType", "Switch");
-        String curVal = b.getCustomProperties().getOrDefault("CurrentValue", "0");
-        g2.setColor(new Color(0x11, 0x11, 0x11));
-        g2.setFont(new Font("Monospaced", Font.BOLD, Math.max(8, g - 1)));
-        FontMetrics fm = g2.getFontMetrics();
-        String str = mode.substring(0, Math.min(3, mode.length())) + ":" + curVal;
-        int tx = x + (w - fm.stringWidth(str)) / 2;
-        int ty = y + (h + fm.getAscent() - fm.getDescent()) / 2;
-        g2.drawString(str, tx, ty);
     }
 
     public void updateCanvasPreferredSize() {

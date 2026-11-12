@@ -904,6 +904,36 @@ public class SimulationEngine {
                 double hi = ins.get(3).getRuntimeValue();
                 outs.getFirst().setRuntimeValue(Math.clamp(v, Math.min(lo, hi), Math.max(lo, hi)));
             }
+            case "Math.Random" -> {
+                boolean trig = ins.get(1).getRuntimeValue() != 0.0;
+                boolean prevTrig = b.isPrevTriggerState();
+                b.setPrevTriggerState(trig);
+
+                double lo = ins.get(2).getRuntimeValue();
+                double hi = ins.get(3).getRuntimeValue();
+                double minVal = Math.min(lo, hi);
+                double maxVal = Math.max(lo, hi);
+
+                boolean shouldSample = (trig && !prevTrig) || (b.getInternalState2() < 0.5);
+                if (shouldSample) {
+                    double r;
+                    if (outs.getFirst().getDataType() == DataType.FLOAT) {
+                        r = minVal + Math.random() * (maxVal - minVal);
+                    } else {
+                        long minI = (long) Math.floor(minVal);
+                        long maxI = (long) Math.floor(maxVal);
+                        if (maxI <= minI) {
+                            r = minI;
+                        } else {
+                            r = minI + (long) (Math.random() * (maxI - minI + 1));
+                        }
+                    }
+                    b.setInternalState1(r);
+                    b.setInternalState2(1.0); // Marks that initial sample occurred
+                }
+                double currentVal = b.getInternalState1();
+                outs.getFirst().setRuntimeValue(DataType.convertValue(currentVal, DataType.FLOAT, outs.getFirst().getDataType()));
+            }
             case "Math.Scale" -> {
                 double inVal = ins.get(1).getRuntimeValue();
                 double iLo = ins.get(2).getRuntimeValue();
