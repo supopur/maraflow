@@ -3,6 +3,7 @@ package cz.maramat.io;
 import cz.maramat.model.BlockCatalog;
 import cz.maramat.model.BlockDefinition;
 import cz.maramat.model.BlockInstance;
+import cz.maramat.model.Bus;
 import cz.maramat.model.DataType;
 import cz.maramat.model.EStopConfig;
 import cz.maramat.model.GraphicElement;
@@ -117,6 +118,25 @@ public final class MflProjectSerializer {
                     }
                 }
                 props.setProperty(wp + "points", pts.toString());
+            }
+
+            props.setProperty(pfx + "busCount", Integer.toString(page.getBusses().size()));
+            for (int bi2 = 0; bi2 < page.getBusses().size(); bi2++) {
+                Bus bus = page.getBusses().get(bi2);
+                String bp = pfx + "bus." + bi2 + ".";
+                props.setProperty(bp + "name", bus.getName());
+                props.setProperty(bp + "userEditedRoute", Boolean.toString(bus.isUserEditedRoute()));
+                StringBuilder pts = new StringBuilder();
+                for (int k = 0; k < bus.getGridPoints().size(); k++) {
+                    if (k > 0) pts.append(";");
+                    Point2D.Double pt = bus.getGridPoints().get(k);
+                    if (pt.x == Math.floor(pt.x) && pt.y == Math.floor(pt.y)) {
+                        pts.append((long) pt.x).append(",").append((long) pt.y);
+                    } else {
+                        pts.append(pt.x).append(",").append(pt.y);
+                    }
+                }
+                props.setProperty(bp + "points", pts.toString());
             }
 
             props.setProperty(pfx + "graphicCount", Integer.toString(page.getGraphics().size()));
@@ -346,6 +366,26 @@ public final class MflProjectSerializer {
                     }
                 }
                 page.getWires().add(w);
+            }
+
+            int busCount = Integer.parseInt(props.getProperty(pfx + "busCount", "0"));
+            for (int bi2 = 0; bi2 < busCount; bi2++) {
+                String bp = pfx + "bus." + bi2 + ".";
+                String busName = props.getProperty(bp + "name", "");
+                if (busName.isEmpty()) continue;
+                Bus bus = new Bus(busName, new Point2D.Double(0, 0), new Point2D.Double(1, 0));
+                bus.setUserEditedRoute(Boolean.parseBoolean(props.getProperty(bp + "userEditedRoute", "false")));
+                String ptsStr = props.getProperty(bp + "points", "");
+                if (!ptsStr.isEmpty()) {
+                    bus.getGridPoints().clear();
+                    for (String tok : ptsStr.split(";")) {
+                        String[] xy = tok.split(",");
+                        if (xy.length == 2) {
+                            bus.getGridPoints().add(new Point2D.Double(Double.parseDouble(xy[0]), Double.parseDouble(xy[1])));
+                        }
+                    }
+                }
+                page.getBusses().add(bus);
             }
 
             int graphicCount = Integer.parseInt(props.getProperty(pfx + "graphicCount", "0"));

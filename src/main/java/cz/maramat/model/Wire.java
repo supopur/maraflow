@@ -69,8 +69,12 @@ public class Wire {
      * Starts and ends at pin vertical centers (offset by 0.5 from grid dots).
      */
     public void routeShortest(Point2D.Double start, Point2D.Double end) {
-        gridPoints.clear();
         userEditedRoute = false;
+        routeShortestPoints(gridPoints, start, end);
+    }
+
+    public static void routeShortestPoints(List<Point2D.Double> pts, Point2D.Double start, Point2D.Double end) {
+        pts.clear();
         double x1 = start.x;
         double y1 = start.y;
         double x2 = end.x;
@@ -78,25 +82,25 @@ public class Wire {
 
         if (x2 > x1) {
             if (Math.abs(y1 - y2) < 0.001) {
-                gridPoints.add(new Point2D.Double(x1, y1));
-                gridPoints.add(new Point2D.Double(x2, y2));
+                pts.add(new Point2D.Double(x1, y1));
+                pts.add(new Point2D.Double(x2, y2));
             } else {
                 double midX = Math.round((x1 + x2) / 2.0);
-                gridPoints.add(new Point2D.Double(x1, y1));
-                gridPoints.add(new Point2D.Double(midX, y1));
-                gridPoints.add(new Point2D.Double(midX, y2));
-                gridPoints.add(new Point2D.Double(x2, y2));
+                pts.add(new Point2D.Double(x1, y1));
+                pts.add(new Point2D.Double(midX, y1));
+                pts.add(new Point2D.Double(midX, y2));
+                pts.add(new Point2D.Double(x2, y2));
             }
         } else {
             double stepOut = 1.0;
             double midY = Math.round((y1 + y2) / 2.0);
             if (Math.abs(midY - y1) < 0.001) midY = y1 - 3.0;
-            gridPoints.add(new Point2D.Double(x1, y1));
-            gridPoints.add(new Point2D.Double(x1 + stepOut, y1));
-            gridPoints.add(new Point2D.Double(x1 + stepOut, midY));
-            gridPoints.add(new Point2D.Double(x2 - stepOut, midY));
-            gridPoints.add(new Point2D.Double(x2 - stepOut, y2));
-            gridPoints.add(new Point2D.Double(x2, y2));
+            pts.add(new Point2D.Double(x1, y1));
+            pts.add(new Point2D.Double(x1 + stepOut, y1));
+            pts.add(new Point2D.Double(x1 + stepOut, midY));
+            pts.add(new Point2D.Double(x2 - stepOut, midY));
+            pts.add(new Point2D.Double(x2 - stepOut, y2));
+            pts.add(new Point2D.Double(x2, y2));
         }
     }
 
@@ -109,9 +113,13 @@ public class Wire {
             routeShortest(newStart, newEnd);
             return;
         }
+        updateEndpointPoints(gridPoints, newStart, newEnd);
+    }
+
+    public static void updateEndpointPoints(List<Point2D.Double> pts, Point2D.Double newStart, Point2D.Double newEnd) {
         // Preserve intermediate user-edited edges while anchoring start and end
-        Point2D.Double p0 = gridPoints.get(0);
-        Point2D.Double p1 = gridPoints.get(1);
+        Point2D.Double p0 = pts.get(0);
+        Point2D.Double p1 = pts.get(1);
         boolean firstHorizontal = (Math.abs(p0.y - p1.y) < 0.001);
         p0.setLocation(newStart);
         if (firstHorizontal) {
@@ -120,9 +128,9 @@ public class Wire {
             p1.x = newStart.x;
         }
 
-        int n = gridPoints.size();
-        Point2D.Double pLast = gridPoints.get(n - 1);
-        Point2D.Double pPrev = gridPoints.get(n - 2);
+        int n = pts.size();
+        Point2D.Double pLast = pts.get(n - 1);
+        Point2D.Double pPrev = pts.get(n - 2);
         boolean lastHorizontal = (Math.abs(pLast.y - pPrev.y) < 0.001);
         pLast.setLocation(newEnd);
         if (lastHorizontal) {
@@ -140,20 +148,26 @@ public class Wire {
      * Splits segment [segmentIndex -> segmentIndex+1] at splitGrid so the user can drag a new edge (Blender style).
      */
     public void addPointOnSegment(int segmentIndex, Point2D.Double splitGrid) {
-        if (segmentIndex < 0 || segmentIndex >= gridPoints.size() - 1) return;
-        Point2D.Double a = gridPoints.get(segmentIndex);
-        Point2D.Double b = gridPoints.get(segmentIndex + 1);
+        if (addPointOnSegmentPoints(gridPoints, segmentIndex, splitGrid)) {
+            userEditedRoute = true;
+        }
+    }
+
+    public static boolean addPointOnSegmentPoints(List<Point2D.Double> pts, int segmentIndex, Point2D.Double splitGrid) {
+        if (segmentIndex < 0 || segmentIndex >= pts.size() - 1) return false;
+        Point2D.Double a = pts.get(segmentIndex);
+        Point2D.Double b = pts.get(segmentIndex + 1);
         boolean horizontal = (Math.abs(a.y - b.y) < 0.001);
         if (horizontal) {
             double sx = Math.clamp(splitGrid.x, Math.min(a.x, b.x), Math.max(a.x, b.x));
-            gridPoints.add(segmentIndex + 1, new Point2D.Double(sx, a.y));
-            gridPoints.add(segmentIndex + 2, new Point2D.Double(sx, a.y));
+            pts.add(segmentIndex + 1, new Point2D.Double(sx, a.y));
+            pts.add(segmentIndex + 2, new Point2D.Double(sx, a.y));
         } else {
             double sy = Math.clamp(splitGrid.y, Math.min(a.y, b.y), Math.max(a.y, b.y));
-            gridPoints.add(segmentIndex + 1, new Point2D.Double(a.x, sy));
-            gridPoints.add(segmentIndex + 2, new Point2D.Double(a.x, sy));
+            pts.add(segmentIndex + 1, new Point2D.Double(a.x, sy));
+            pts.add(segmentIndex + 2, new Point2D.Double(a.x, sy));
         }
-        userEditedRoute = true;
+        return true;
     }
 
     public void addPointOnSegment(int segmentIndex, Point splitGrid) {
@@ -167,15 +181,20 @@ public class Wire {
     public int moveSegmentEdge(int segmentIndex, double targetGridCoord) {
         if (segmentIndex < 0 || segmentIndex >= gridPoints.size() - 1) return segmentIndex;
         userEditedRoute = true;
+        return moveSegmentEdgePoints(gridPoints, segmentIndex, targetGridCoord);
+    }
 
-        Point2D.Double a = gridPoints.get(segmentIndex);
-        Point2D.Double b = gridPoints.get(segmentIndex + 1);
+    public static int moveSegmentEdgePoints(List<Point2D.Double> pts, int segmentIndex, double targetGridCoord) {
+        if (segmentIndex < 0 || segmentIndex >= pts.size() - 1) return segmentIndex;
+
+        Point2D.Double a = pts.get(segmentIndex);
+        Point2D.Double b = pts.get(segmentIndex + 1);
         boolean horizontal = (Math.abs(a.y - b.y) < 0.001 && Math.abs(a.x - b.x) >= 0.001);
         boolean vertical = (Math.abs(a.x - b.x) < 0.001 && Math.abs(a.y - b.y) >= 0.001);
         if (!horizontal && !vertical) {
             // Zero-length bridge: infer orientation from neighbors
             if (segmentIndex > 0) {
-                Point2D.Double prev = gridPoints.get(segmentIndex - 1);
+                Point2D.Double prev = pts.get(segmentIndex - 1);
                 horizontal = (Math.abs(prev.x - a.x) < 0.001);
                 vertical = !horizontal;
             } else {
@@ -189,35 +208,35 @@ public class Wire {
                 Point2D.Double pin = new Point2D.Double(a.x, a.y);
                 double stubX = a.x + 1.0;
                 a.x = stubX;
-                gridPoints.add(0, new Point2D.Double(stubX, pin.y));
-                gridPoints.add(0, pin);
+                pts.add(0, new Point2D.Double(stubX, pin.y));
+                pts.add(0, pin);
                 segmentIndex += 2;
-                a = gridPoints.get(segmentIndex);
-                b = gridPoints.get(segmentIndex + 1);
+                a = pts.get(segmentIndex);
+                b = pts.get(segmentIndex + 1);
             }
             // If dragging the last segment attached directly to end pin, insert an orthogonal stub
-            if (segmentIndex == gridPoints.size() - 2) {
+            if (segmentIndex == pts.size() - 2) {
                 Point2D.Double pin = new Point2D.Double(b.x, b.y);
                 double stubX = b.x - 1.0;
                 b.x = stubX;
-                gridPoints.add(new Point2D.Double(stubX, pin.y));
-                gridPoints.add(pin);
+                pts.add(new Point2D.Double(stubX, pin.y));
+                pts.add(pin);
             }
             a.y = targetGridCoord;
             b.y = targetGridCoord;
         } else if (vertical) {
             if (segmentIndex == 0) {
                 Point2D.Double pin = new Point2D.Double(a.x, a.y);
-                gridPoints.add(0, new Point2D.Double(a.x, a.y));
-                gridPoints.add(0, pin);
+                pts.add(0, new Point2D.Double(a.x, a.y));
+                pts.add(0, pin);
                 segmentIndex += 2;
-                a = gridPoints.get(segmentIndex);
-                b = gridPoints.get(segmentIndex + 1);
+                a = pts.get(segmentIndex);
+                b = pts.get(segmentIndex + 1);
             }
-            if (segmentIndex == gridPoints.size() - 2) {
+            if (segmentIndex == pts.size() - 2) {
                 Point2D.Double pin = new Point2D.Double(b.x, b.y);
-                gridPoints.add(new Point2D.Double(b.x, b.y));
-                gridPoints.add(pin);
+                pts.add(new Point2D.Double(b.x, b.y));
+                pts.add(pin);
             }
             a.x = targetGridCoord;
             b.x = targetGridCoord;

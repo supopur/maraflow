@@ -239,5 +239,86 @@ public class Page {
                 }
             }
         }
+        updateBussesForBlock(block);
+    }
+
+    public Bus findBusByName(String busName) {
+        if (busName == null) return null;
+        for (Bus b : busses) {
+            if (busName.equals(b.getName())) {
+                return b;
+            }
+        }
+        return null;
+    }
+
+    public Bus getOrCreateBusForBundle(String busId, Point2D.Double startGrid, Point2D.Double endGrid) {
+        Bus existing = findBusByName(busId);
+        if (existing != null) {
+            if (!existing.isUserEditedRoute()) {
+                existing.routeShortest(startGrid, endGrid);
+            }
+            return existing;
+        }
+        Bus created = new Bus(busId, startGrid, endGrid);
+        busses.add(created);
+        return created;
+    }
+
+    public Point2D.Double[] computeBusTrunkEndpoints(List<Wire> bundle) {
+        if (bundle == null || bundle.isEmpty()) return null;
+        Wire first = bundle.getFirst();
+        BlockInstance src = findBlockById(first.getSourceBlockId());
+        BlockInstance dst = findBlockById(first.getTargetBlockId());
+        if (src == null || dst == null) return null;
+
+        double srcCollectorX = src.getGridX() + src.getGridWidth() + 2.0;
+        double dstDistributorX = dst.getGridX() - 2.0;
+
+        double minSrcJoinY = Double.MAX_VALUE;
+        double maxSrcJoinY = -Double.MAX_VALUE;
+        double minDstJoinY = Double.MAX_VALUE;
+        double maxDstJoinY = -Double.MAX_VALUE;
+
+        for (Wire w : bundle) {
+            if (w.getSourcePinIndex() >= src.getOutputs().size() || w.getTargetPinIndex() >= dst.getInputs().size()) {
+                continue;
+            }
+            double srcJoinY = src.getOutputPinAnchorGrid(w.getSourcePinIndex()).y + 1.0;
+            double dstJoinY = dst.getInputPinAnchorGrid(w.getTargetPinIndex()).y + 1.0;
+            minSrcJoinY = Math.min(minSrcJoinY, srcJoinY);
+            maxSrcJoinY = Math.max(maxSrcJoinY, srcJoinY);
+            minDstJoinY = Math.min(minDstJoinY, dstJoinY);
+            maxDstJoinY = Math.max(maxDstJoinY, dstJoinY);
+        }
+        if (minSrcJoinY == Double.MAX_VALUE) return null;
+
+        double trunkY = Math.floor((minSrcJoinY + maxSrcJoinY) / 2.0);
+        double dstTrunkY = Math.floor((minDstJoinY + maxDstJoinY) / 2.0);
+        return new Point2D.Double[]{
+                new Point2D.Double(srcCollectorX, trunkY),
+                new Point2D.Double(dstDistributorX, dstTrunkY)
+        };
+    }
+
+    private void updateBussesForBlock(BlockInstance block) {
+        for (Bus b : busses) {
+            List<Wire> bundle = new ArrayList<>();
+            boolean touchesBlock = false;
+            for (Wire w : wires) {
+                if (!w.isHidden() && b.getName().equals(w.getBusId())) {
+                    bundle.add(w);
+                    if (w.getSourceBlockId().equals(block.getId()) || w.getTargetBlockId().equals(block.getId())) {
+                        touchesBlock = true;
+                    }
+                }
+            }
+            if (touchesBlock && !bundle.isEmpty()) {
+                Point2D.Double[] ends = computeBusTrunkEndpoints(bundle);
+                if (ends != null) {
+                    b.updateEndpoints(ends[0], ends[1]);
+                }
+            }
+        }
     }
 }

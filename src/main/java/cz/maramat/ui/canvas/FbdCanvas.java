@@ -3,6 +3,7 @@ package cz.maramat.ui.canvas;
 import cz.maramat.model.BlockCatalog;
 import cz.maramat.model.BlockDefinition;
 import cz.maramat.model.BlockInstance;
+import cz.maramat.model.Bus;
 import cz.maramat.model.DataType;
 import cz.maramat.model.GraphicElement;
 import cz.maramat.model.HeaderColor;
@@ -125,9 +126,12 @@ public class FbdCanvas extends JPanel {
     private Point wireCurrentPixel = null;
     private long lastWireDragRepaintMs = 0L;
 
-    // Blender-style wire edge dragging state
+    // Blender-style wire & bus edge dragging state
     private Wire draggingWire = null;
     private int draggingWireSegmentIndex = -1;
+    private Bus draggingBus = null;
+    private int draggingBusSegmentIndex = -1;
+    private String selectedBusId = null;
     private Page wireEditBeforeSnapshot = null;
 
     // Shape creation drag state
@@ -830,15 +834,23 @@ public class FbdCanvas extends JPanel {
                     return;
                 }
 
-                // 4. Check if clicking a Wire Segment for Blender-style Edge Dragging
+                // 4. Check if clicking a Wire or Bus Segment for Blender-style Edge Dragging
                 WireHit wireHit = findWireOrFlagAtPixel(page, mx, my);
                 if (wireHit != null && !wireHit.wire.isHidden() && wireHit.segmentIndex >= 0) {
                     exitSimOrWatchBeforeStructuralEdit();
                     selectedBlockIds.clear();
                     selectedGraphicIds.clear();
-                    selectedWireId = wireHit.wire.getId();
-                    draggingWire = wireHit.wire;
-                    draggingWireSegmentIndex = wireHit.segmentIndex;
+                    if (wireHit.bus != null) {
+                        selectedWireId = null;
+                        selectedBusId = wireHit.bus.getName();
+                        draggingBus = wireHit.bus;
+                        draggingBusSegmentIndex = wireHit.segmentIndex;
+                    } else {
+                        selectedBusId = null;
+                        selectedWireId = wireHit.wire.getId();
+                        draggingWire = wireHit.wire;
+                        draggingWireSegmentIndex = wireHit.segmentIndex;
+                    }
                     wireEditBeforeSnapshot = page.copy();
                     repaint();
                     return;
@@ -849,6 +861,7 @@ public class FbdCanvas extends JPanel {
                     selectedBlockIds.clear();
                     selectedGraphicIds.clear();
                     selectedWireId = null;
+                    selectedBusId = null;
                 }
                 marqueeStartPixel = new Point(mx, my);
                 marqueePixelRect = new Rectangle(mx, my, 0, 0);
@@ -944,6 +957,19 @@ public class FbdCanvas extends JPanel {
                         boolean horizontal = (Math.abs(a.y - b.y) < 0.001 && Math.abs(a.x - b.x) >= 0.001);
                         double targetCoord = horizontal ? (gy + 0.5) : gx;
                         draggingWireSegmentIndex = draggingWire.moveSegmentEdge(draggingWireSegmentIndex, targetCoord);
+                        repaint();
+                    }
+                    return;
+                }
+
+                if (draggingBus != null && draggingBusSegmentIndex >= 0) {
+                    List<Point2D.Double> pts = draggingBus.getGridPoints();
+                    if (draggingBusSegmentIndex < pts.size() - 1) {
+                        Point2D.Double a = pts.get(draggingBusSegmentIndex);
+                        Point2D.Double b = pts.get(draggingBusSegmentIndex + 1);
+                        boolean horizontal = (Math.abs(a.y - b.y) < 0.001 && Math.abs(a.x - b.x) >= 0.001);
+                        double targetCoord = horizontal ? gy : gx;
+                        draggingBusSegmentIndex = draggingBus.moveSegmentEdge(draggingBusSegmentIndex, targetCoord);
                         repaint();
                     }
                     return;
@@ -1116,6 +1142,15 @@ public class FbdCanvas extends JPanel {
                     return;
                 }
 
+                if (draggingBus != null) {
+                    String bName = draggingBus.getName();
+                    draggingBus = null;
+                    draggingBusSegmentIndex = -1;
+                    editListener.onAfterPageEdit("Move Bus Edge " + bName, wireEditBeforeSnapshot, page);
+                    repaint();
+                    return;
+                }
+
                 if (draggingSelection) {
                     draggingSelection = false;
                     boolean moved = false;
@@ -1162,12 +1197,16 @@ public class FbdCanvas extends JPanel {
                     return;
                 }
                 WireHit hit = findWireOrFlagAtPixel(page, e.getX(), e.getY());
-                if (hit != null && !hit.wire.isHidden() && hit.wire.getBusId() == null && hit.segmentIndex >= 0) {
-                    List<Point2D.Double> pts = hit.wire.getGridPoints();
-                    Point2D.Double a = pts.get(hit.segmentIndex);
-                    Point2D.Double b = pts.get(hit.segmentIndex + 1);
-                    boolean horizontal = (Math.abs(a.y - b.y) < 0.001);
-                    setCursor(Cursor.getPredefinedCursor(horizontal ? Cursor.N_RESIZE_CURSOR : Cursor.E_RESIZE_CURSOR));
+                if (hit != null && !hit.wire.isHidden() && hit.segmentIndex >= 0) {
+                    List<Point2D.Double> pts = hit.bus != null ? hit.bus.getGridPoints() : hit.wire.getGridPoints();
+                    if (hit.segmentIndex < pts.size() - 1) {
+                        Point2D.Double a = pts.get(hit.segmentIndex);
+                        Point2D.Double b = pts.get(hit.segmentIndex + 1);
+                        boolean horizontal = (Math.abs(a.y - b.y) < 0.001);
+                        setCursor(Cursor.getPredefinedCursor(horizontal ? Cursor.N_RESIZE_CURSOR : Cursor.E_RESIZE_CURSOR));
+                    } else {
+                        setCursor(Cursor.getDefaultCursor());
+                    }
                 } else {
                     setCursor(Cursor.getDefaultCursor());
                 }
@@ -1650,16 +1689,34 @@ public class FbdCanvas extends JPanel {
     private void showWireContextMenu(Page page, Wire wire, int segmentIndex, Point2D.Double clickGrid, int mx, int my) {
         JPopupMenu menu = new JPopupMenu();
 
-        if (!wire.isHidden() && wire.getBusId() == null && segmentIndex >= 0) {
-            JMenuItem addPtItem = new JMenuItem("Add Point");
+        Bus hitBus = (!wire.isHidden() && wire.getBusId() != null) ? page.findBusByName(wire.getBusId()) : null;
+        if (!wire.isHidden() && segmentIndex >= 0) {
+            JMenuItem addPtItem = new JMenuItem(hitBus != null ? "Add Point to Bus" : "Add Point");
             addPtItem.addActionListener(e -> {
                 exitSimOrWatchBeforeStructuralEdit();
                 Page before = page.copy();
-                wire.addPointOnSegment(segmentIndex, clickGrid);
-                editListener.onAfterPageEdit("Add Point to Wire " + wire.getNetName(), before, page);
+                if (hitBus != null) {
+                    hitBus.addPointOnSegment(segmentIndex, new Point2D.Double(Math.round(clickGrid.x), Math.round(clickGrid.y)));
+                    editListener.onAfterPageEdit("Add Point to Bus", before, page);
+                } else {
+                    wire.addPointOnSegment(segmentIndex, clickGrid);
+                    editListener.onAfterPageEdit("Add Point to Wire " + wire.getNetName(), before, page);
+                }
                 repaint();
             });
             menu.add(addPtItem);
+
+            if (hitBus != null && hitBus.isUserEditedRoute()) {
+                JMenuItem resetBusItem = new JMenuItem("Reset Bus Route");
+                resetBusItem.addActionListener(e -> {
+                    exitSimOrWatchBeforeStructuralEdit();
+                    Page before = page.copy();
+                    hitBus.setUserEditedRoute(false);
+                    editListener.onAfterPageEdit("Reset Bus Route", before, page);
+                    repaint();
+                });
+                menu.add(resetBusItem);
+            }
         }
 
         JMenuItem hideToggleItem = new JMenuItem(wire.isHidden() ? "Show Connection (Unhide)" : "Hide Connection");
@@ -1728,7 +1785,11 @@ public class FbdCanvas extends JPanel {
     // =========================================================================
 
     private record PinHit(BlockInstance block, int pinIndex, boolean isInput) {}
-    private record WireHit(Wire wire, int segmentIndex) {}
+    private record WireHit(Wire wire, Bus bus, int segmentIndex) {
+        WireHit(Wire wire, int segmentIndex) {
+            this(wire, null, segmentIndex);
+        }
+    }
 
     private PinHit findPinAtPixel(Page page, int px, int py) {
         int g = getGridUnitPx();
@@ -1885,15 +1946,17 @@ public class FbdCanvas extends JPanel {
             }
 
             if (w.getBusId() != null) {
-                // Hit-test bus trunk and tap stubs
-                Point2D.Double pOut = src.getOutputPinAnchorGrid(w.getSourcePinIndex());
-                Point2D.Double pIn = dst.getInputPinAnchorGrid(w.getTargetPinIndex());
-                double x1 = pOut.x * g;
-                double y1 = pOut.y * g;
-                double x2 = pIn.x * g;
-                double y2 = pIn.y * g;
-                if (Line2D.ptSegDist(x1, y1, x2, y2, px, py) <= tolerance * 2) {
-                    return new WireHit(w, 0);
+                Bus bus = page.findBusByName(w.getBusId());
+                if (bus != null && bus.getGridPoints().size() >= 2) {
+                    List<Point2D.Double> bPts = bus.getGridPoints();
+                    for (int i = 0; i < bPts.size() - 1; i++) {
+                        Point2D.Double a = bPts.get(i);
+                        Point2D.Double b = bPts.get(i + 1);
+                        double dist = Line2D.ptSegDist(a.x * g, a.y * g, b.x * g, b.y * g, px, py);
+                        if (dist <= tolerance + 2.0) {
+                            return new WireHit(w, bus, i);
+                        }
+                    }
                 }
                 continue;
             }
@@ -2584,15 +2647,21 @@ public class FbdCanvas extends JPanel {
         if (minSrcJoinY == Integer.MAX_VALUE) return;
 
         // 2. Draw the thick Navy Blue Bus Spine & Trunk connecting source collector to destination distributor
-        int trunkY = ((minSrcJoinY + maxSrcJoinY) / (2 * g)) * g;
-        int dstTrunkY = ((minDstJoinY + maxDstJoinY) / (2 * g)) * g;
+        Point2D.Double[] trunkEnds = page.computeBusTrunkEndpoints(bundle);
+        if (trunkEnds == null) return;
+
+        int trunkY = (int) Math.round(trunkEnds[0].y * g);
+        int dstTrunkY = (int) Math.round(trunkEnds[1].y * g);
 
         int srcSpineTop = Math.min(minSrcJoinY, trunkY);
         int srcSpineBot = Math.max(maxSrcJoinY, trunkY);
         int dstSpineTop = Math.min(minDstJoinY, dstTrunkY);
         int dstSpineBot = Math.max(maxDstJoinY, dstTrunkY);
 
-        g2.setColor(new Color(0x00, 0x33, 0x99));
+        Bus bus = page.getOrCreateBusForBundle(first.getBusId(), trunkEnds[0], trunkEnds[1]);
+        boolean busSelected = !exporting && bus.getName().equals(selectedBusId);
+
+        g2.setColor(busSelected ? new Color(0x00, 0x55, 0xE5) : new Color(0x00, 0x33, 0x99));
         g2.setStroke(new BasicStroke(Math.max(3.0f, g * 0.32f), BasicStroke.CAP_SQUARE, BasicStroke.JOIN_MITER));
 
         // Source vertical collector spine
@@ -2600,14 +2669,12 @@ public class FbdCanvas extends JPanel {
         // Destination vertical distributor spine
         g2.drawLine(dstDistributorX, dstSpineTop, dstDistributorX, dstSpineBot);
 
-        // Single orthogonal Bus trunk across the middle span
-        if (trunkY == dstTrunkY) {
-            g2.drawLine(srcCollectorX, trunkY, dstDistributorX, dstTrunkY);
-        } else {
-            int midX = (((srcCollectorX + dstDistributorX) / 2) / g) * g;
-            g2.drawLine(srcCollectorX, trunkY, midX, trunkY);
-            g2.drawLine(midX, trunkY, midX, dstTrunkY);
-            g2.drawLine(midX, dstTrunkY, dstDistributorX, dstTrunkY);
+        // Routable orthogonal Bus trunk across the middle span
+        List<Point2D.Double> busPts = bus.getGridPoints();
+        for (int i = 0; i < busPts.size() - 1; i++) {
+            Point2D.Double p1 = busPts.get(i);
+            Point2D.Double p2 = busPts.get(i + 1);
+            g2.draw(new Line2D.Double(p1.x * g, p1.y * g, p2.x * g, p2.y * g));
         }
         g2.setStroke(new BasicStroke(1.0f));
     }
