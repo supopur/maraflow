@@ -490,7 +490,7 @@ public final class StInterpreter {
             if (fbType.startsWith("INST_")) {
                 fbType = fbType.substring(5);
             } else {
-                for (String known : List.of("SR", "RS", "TON", "TOF", "TP", "CTU", "CTD", "CTUD", "R_TRIG", "F_TRIG", "RANDOM", "RND")) {
+                for (String known : List.of("SR", "RS", "TON", "TOF", "TP", "CTU", "CTD", "CTUD", "R_TRIG", "F_TRIG", "RANDOM", "RND", "SINGLEPULSE", "ONESHOT", "COUNTER", "CNTR")) {
                     if (fbType.endsWith("_" + known) || fbType.equals(known)) {
                         fbType = known;
                         break;
@@ -503,8 +503,8 @@ public final class StInterpreter {
                 case "TON", "TOF", "TP", "TIMER" -> List.of("IN", "PT");
                 case "CTU" -> List.of("CU", "RESET", "PV");
                 case "CTD" -> List.of("CD", "LOAD", "PV");
-                case "CTUD" -> List.of("CU", "CD", "RESET", "LOAD", "PV");
-                case "R_TRIG", "F_TRIG" -> List.of("CLK");
+                case "CTUD", "COUNTER", "CNTR" -> List.of("CU", "CD", "RESET", "LOAD", "PV");
+                case "R_TRIG", "F_TRIG", "SINGLEPULSE", "ONESHOT" -> List.of("CLK");
                 case "RANDOM", "RND" -> List.of("TRIG", "MIN", "MAX");
                 default -> List.of();
             };
@@ -578,7 +578,7 @@ public final class StInterpreter {
                 out.put("Q", q ? 1.0 : 0.0);
                 out.put("NQ", q ? 0.0 : 1.0);
             }
-            case "R_TRIG" -> {
+            case "R_TRIG", "SINGLEPULSE", "ONESHOT" -> {
                 boolean clk = inVals.getOrDefault("CLK", inVals.getOrDefault("IN", 0.0)) != 0.0;
                 boolean prevClk = ctx.localVars.getOrDefault(instName + "._prevClk", 0.0) != 0.0;
                 boolean q = clk && !prevClk;
@@ -673,12 +673,12 @@ public final class StInterpreter {
                 out.put("Q", cv <= 0 ? 1.0 : 0.0);
                 out.put("CV", cv);
             }
-            case "CTUD" -> {
+            case "CTUD", "COUNTER", "CNTR" -> {
                 boolean cu = inVals.getOrDefault("CU", 0.0) != 0.0;
                 boolean cd = inVals.getOrDefault("CD", 0.0) != 0.0;
                 boolean rst = inVals.getOrDefault("RESET", inVals.getOrDefault("R", 0.0)) != 0.0;
                 boolean ld = inVals.getOrDefault("LOAD", inVals.getOrDefault("LD", 0.0)) != 0.0;
-                double pv = inVals.getOrDefault("PV", 0.0);
+                double pv = inVals.getOrDefault("PV", 10.0);
                 double cv = ctx.localVars.getOrDefault(instName + "._cv", 0.0);
                 boolean prevCu = ctx.localVars.getOrDefault(instName + "._prevCu", 0.0) != 0.0;
                 boolean prevCd = ctx.localVars.getOrDefault(instName + "._prevCd", 0.0) != 0.0;
@@ -687,12 +687,13 @@ public final class StInterpreter {
                 } else if (ld) {
                     cv = pv;
                 } else {
-                    if (cu && !prevCu && cv < pv) cv++;
+                    if (cu && !prevCu) cv++;
                     if (cd && !prevCd && cv > 0) cv--;
                 }
                 ctx.localVars.put(instName + "._prevCu", cu ? 1.0 : 0.0);
                 ctx.localVars.put(instName + "._prevCd", cd ? 1.0 : 0.0);
                 ctx.localVars.put(instName + "._cv", cv);
+                out.put("Q", cv >= pv ? 1.0 : 0.0);
                 out.put("QU", cv >= pv ? 1.0 : 0.0);
                 out.put("QD", cv <= 0 ? 1.0 : 0.0);
                 out.put("CV", cv);
@@ -1424,6 +1425,31 @@ public final class StInterpreter {
                         } else {
                             return sampleRandom(minVal, maxVal, hasExplicitBounds);
                         }
+                    };
+                }
+                case "SINGLEPULSE", "ONESHOT" -> {
+                    Expr inExpr = null;
+                    for (CallArg arg : rawArgs) {
+                        if (arg.isOutput() || arg.expr() == null) continue;
+                        String pName = arg.paramName();
+                        if (pName == null || "IN".equalsIgnoreCase(pName) || "CLK".equalsIgnoreCase(pName)) {
+                            inExpr = arg.expr();
+                        }
+                    }
+                    if (inExpr == null && !inputExprs.isEmpty()) inExpr = inputExprs.getFirst();
+                    if (inExpr == null) throw new StSyntaxException(line, fnName + "() requires an input argument");
+                    final Expr fIn = inExpr;
+                    final Expr fEn = (enArg != null) ? enArg.expr() : null;
+                    final String stateKey = "__pulse_line_" + line;
+                    yield ctx -> {
+                        if (fEn != null && Math.abs(fEn.eval(ctx)) < 0.5) {
+                            ctx.localVars.put(stateKey + "_prev", 0.0);
+                            return 0.0;
+                        }
+                        boolean in = Math.abs(fIn.eval(ctx)) >= 0.5;
+                        boolean prev = ctx.localVars.getOrDefault(stateKey + "_prev", 0.0) >= 0.5;
+                        ctx.localVars.put(stateKey + "_prev", in ? 1.0 : 0.0);
+                        return (in && !prev) ? 1.0 : 0.0;
                     };
                 }
                 default -> throw new StSyntaxException(line, "Unknown ST function '" + fnName + "'");

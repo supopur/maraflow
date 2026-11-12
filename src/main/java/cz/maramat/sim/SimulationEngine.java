@@ -352,6 +352,12 @@ public class SimulationEngine {
         }
     }
 
+    void stepOnceForTesting(Project project, double dtMs) {
+        for (int t = 0; t < 6; t++) {
+            executeThreadScan(project, t, dtMs, 0.0);
+        }
+    }
+
     private void executeThreadScan(Project project, int threadId, double dtMs, double simTimeSeconds) {
         updateEStopSupervision(project);
         EStopConfig cfg = project.getEStopConfig();
@@ -737,6 +743,12 @@ public class SimulationEngine {
         }
 
         if (!enHigh) {
+            if ("Main.Timers.SinglePulse".equals(defId)) {
+                b.setPrevTriggerState(false);
+                if (!b.getOutputs().isEmpty()) {
+                    b.getOutputs().getFirst().setRuntimeValue(0.0);
+                }
+            }
             return;
         }
 
@@ -983,11 +995,59 @@ public class SimulationEngine {
                 b.setInternalState1(pos);
                 outs.getFirst().setRuntimeValue(pos < tHi ? 1.0 : 0.0);
             }
+            case "Main.Timers.PulseLen" -> {
+                boolean in = ins.get(1).getRuntimeValue() != 0.0;
+                double len = Math.max(0.0, ins.get(2).getRuntimeValue());
+                boolean prevIn = b.isPrevTriggerState();
+                b.setPrevTriggerState(in);
+                double et = b.getInternalState1();
+                boolean active = b.getInternalState2() != 0.0;
+
+                if (!active && in && !prevIn) {
+                    active = true;
+                    et = 0.0;
+                }
+                if (active) {
+                    et += dtMs;
+                    if (et >= len) {
+                        active = false;
+                        et = len;
+                    }
+                }
+                b.setInternalState1(et);
+                b.setInternalState2(active ? 1.0 : 0.0);
+                outs.getFirst().setRuntimeValue(active ? 1.0 : 0.0);
+            }
             case "Main.Timers.SinglePulse" -> {
                 boolean in = ins.get(1).getRuntimeValue() != 0.0;
                 boolean prev = b.isPrevTriggerState();
                 b.setPrevTriggerState(in);
                 outs.getFirst().setRuntimeValue((in && !prev) ? 1.0 : 0.0);
+            }
+            case "Main.Timers.Counter" -> {
+                boolean cu = ins.get(1).getRuntimeValue() != 0.0;
+                boolean cd = ins.get(2).getRuntimeValue() != 0.0;
+                boolean rst = ins.get(3).getRuntimeValue() != 0.0;
+                double pv = ins.get(4).getRuntimeValue();
+
+                int prevFlags = (int) b.getInternalState2();
+                boolean prevCu = (prevFlags & 1) != 0;
+                boolean prevCd = (prevFlags & 2) != 0;
+
+                double cv = b.getInternalState1();
+                if (rst) {
+                    cv = 0.0;
+                } else {
+                    if (cu && !prevCu) cv++;
+                    if (cd && !prevCd && cv > 0) cv--;
+                }
+
+                int newFlags = (cu ? 1 : 0) | (cd ? 2 : 0);
+                b.setInternalState1(cv);
+                b.setInternalState2(newFlags);
+
+                outs.get(0).setRuntimeValue(cv >= pv ? 1.0 : 0.0);
+                outs.get(1).setRuntimeValue(DataType.convertValue(cv, DataType.INT, outs.get(1).getDataType()));
             }
             case "Main.Timers.DateTime" -> {
                 outs.getFirst().setRuntimeValue((double) (System.currentTimeMillis() / 1000L));

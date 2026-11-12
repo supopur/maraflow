@@ -97,12 +97,12 @@ public final class StLanguageServer {
             "AND", "OR", "XOR", "NOT", "NAND", "NOR", "XNOR",
             "ADD", "SUB", "MUL", "DIV", "MOD",
             "EQ", "NE", "LT", "LE", "GT", "GE",
-            "RANDOM", "RND"
+            "RANDOM", "RND", "SINGLEPULSE", "ONESHOT"
     );
 
     private static final Set<String> ST_STANDARD_FBS = Set.of(
             "TON", "TOF", "TP", "CTU", "CTD", "CTUD", "SR", "RS", "R_TRIG", "F_TRIG",
-            "RANDOM", "RND"
+            "RANDOM", "RND", "SINGLEPULSE", "ONESHOT", "COUNTER", "CNTR"
     );
 
     private StLanguageServer() {}
@@ -294,75 +294,92 @@ public final class StLanguageServer {
         return s;
     }
 
+    private static volatile List<CompletionItem> staticCompletions;
+    private static volatile String[] staticCompletionKeys;
+
+    private static void ensureStaticCompletions() {
+        if (staticCompletions != null) return;
+        synchronized (StLanguageServer.class) {
+            if (staticCompletions != null) return;
+            List<CompletionItem> all = new ArrayList<>();
+            addHardwareIoCompletions(all, "");
+            addFunctionCompletions(all, "");
+            addFunctionBlockCompletions(all, "");
+            for (String kw : ST_KEYWORDS) {
+                all.add(new CompletionItem(kw, kw, CompletionKind.KEYWORD, "Keyword", "IEC Structured Text keyword: " + kw));
+            }
+            addSnippetCompletions(all, "");
+            Collections.sort(all);
+            String[] keys = new String[all.size()];
+            for (int i = 0; i < keys.length; i++) keys[i] = all.get(i).label().toLowerCase(Locale.ROOT);
+            staticCompletionKeys = keys;
+            staticCompletions = List.copyOf(all);
+        }
+    }
+
+    /** Pre-builds the static completion tables (call from a background thread). */
+    public static void warmUp() {
+        ensureStaticCompletions();
+    }
+
     /**
      * Computes completion items based on current caret offset and prefix typed.
+     * Static tables are cached; only the (cheap) filter runs per call.
      */
     public static List<CompletionItem> getCompletions(String code, int caretOffset, List<StVariable> vars, Project project) {
-        List<CompletionItem> items = new ArrayList<>();
-
+        ensureStaticCompletions();
         String prefix = extractPrefix(code, caretOffset).toLowerCase(Locale.ROOT);
 
-        // 1. Declared Variables
+        List<CompletionItem> startsWith = new ArrayList<>();
+        List<CompletionItem> contains = new ArrayList<>();
+
         if (vars != null) {
             for (StVariable v : vars) {
                 String name = v.getName();
-                if (matchesPrefix(name, prefix)) {
-                    items.add(new CompletionItem(
-                            name,
-                            name,
-                            CompletionKind.VARIABLE,
-                            v.getScope() + " " + v.getDataType() + " := " + v.getInitialValue(),
-                            v.getDescription() != null && !v.getDescription().isBlank() ? v.getDescription() : "Declared variable"
-                    ));
-                }
+                int m = matchRank(name.toLowerCase(Locale.ROOT), prefix);
+                if (m < 0) continue;
+                CompletionItem it = new CompletionItem(
+                        name, name, CompletionKind.VARIABLE,
+                        v.getScope() + " " + v.getDataType() + " := " + v.getInitialValue(),
+                        v.getDescription() != null && !v.getDescription().isBlank() ? v.getDescription() : "Declared variable");
+                (m == 0 ? startsWith : contains).add(it);
             }
         }
-
-        // 2. Hardware I/O and Registers
-        addHardwareIoCompletions(items, prefix);
-
-        // 3. Built-in Math & Logic Functions
-        addFunctionCompletions(items, prefix);
-
-        // 4. Function Blocks (Timers, Counters, Triggers)
-        addFunctionBlockCompletions(items, prefix);
-
-        // 5. Language Keywords
-        for (String kw : ST_KEYWORDS) {
-            if (matchesPrefix(kw, prefix)) {
-                items.add(new CompletionItem(
-                        kw,
-                        kw,
-                        CompletionKind.KEYWORD,
-                        "Keyword",
-                        "IEC Structured Text keyword: " + kw
-                ));
-            }
-        }
-
-        // 6. Snippets
-        addSnippetCompletions(items, prefix);
-
-        // 7. Project Macros
         if (project != null) {
             for (Page p : project.getPages()) {
-                if (p.isMacro()) {
-                    String mName = p.getCleanName();
-                    if (matchesPrefix(mName, prefix)) {
-                        items.add(new CompletionItem(
-                                mName,
-                                mName,
-                                CompletionKind.FUNCTION_BLOCK,
-                                "Macro (" + p.getLanguage().getShortCode() + ")",
-                                "Project Macro Function Block: " + p.getName()
-                        ));
-                    }
-                }
+                if (!p.isMacro()) continue;
+                String mName = p.getCleanName();
+                int m = matchRank(mName.toLowerCase(Locale.ROOT), prefix);
+                if (m < 0) continue;
+                CompletionItem it = new CompletionItem(mName, mName, CompletionKind.FUNCTION_BLOCK,
+                        "Macro (" + p.getLanguage().getShortCode() + ")", "Project Macro Function Block: " + p.getName());
+                (m == 0 ? startsWith : contains).add(it);
             }
         }
+        Collections.sort(startsWith);
+        Collections.sort(contains);
 
-        Collections.sort(items);
-        return items;
+        List<CompletionItem> sItems = staticCompletions;
+        String[] keys = staticCompletionKeys;
+        for (int i = 0; i < keys.length; i++) {
+            int m = matchRank(keys[i], prefix);
+            if (m < 0) continue;
+            (m == 0 ? startsWith : contains).add(sItems.get(i)); // static list already sorted
+        }
+        // Dynamic entries were sorted separately; keep kind order stable within each group
+        startsWith.sort(null);
+        contains.sort(null);
+        List<CompletionItem> result = new ArrayList<>(startsWith.size() + contains.size());
+        result.addAll(startsWith);
+        result.addAll(contains);
+        return result;
+    }
+
+    /** 0 = prefix match, 1 = substring match (prefix >= 2 chars), -1 = no match. */
+    private static int matchRank(String lowerText, String prefix) {
+        if (prefix.isEmpty() || lowerText.startsWith(prefix)) return 0;
+        if (prefix.length() >= 2 && lowerText.contains(prefix)) return 1;
+        return -1;
     }
 
     private static boolean matchesPrefix(String text, String prefix) {
@@ -452,7 +469,9 @@ public final class StLanguageServer {
                 {"ROUND", "ROUND(in)", "DINT", "ROUND(X): Round to nearest integer"},
                 {"TRUNC", "TRUNC(in)", "DINT", "TRUNC(X): Truncate fractional part"},
                 {"RANDOM", "RANDOM(min, max)", "REAL/DINT", "RANDOM([trig, ]min, max): Generates a random number between bounds"},
-                {"RND", "RND(min, max)", "REAL/DINT", "RND([trig, ]min, max): Short alias for RANDOM"}
+                {"RND", "RND(min, max)", "REAL/DINT", "RND([trig, ]min, max): Short alias for RANDOM"},
+                {"SINGLEPULSE", "SINGLEPULSE(in)", "BOOL", "SINGLEPULSE(IN): 1-cycle edge pulse output on rising edge of IN"},
+                {"ONESHOT", "ONESHOT(in)", "BOOL", "ONESHOT(IN): 1-cycle edge pulse output on rising edge of IN"}
         };
         for (Object[] row : fns) {
             String name = (String) row[0];
@@ -477,7 +496,11 @@ public final class StLanguageServer {
                 {"SR", "SR", "Bistable", "Set-Dominant Bistable Latch: S1 (BOOL), R (BOOL) -> Q1 (BOOL)"},
                 {"RS", "RS", "Bistable", "Reset-Dominant Bistable Latch: S (BOOL), R1 (BOOL) -> Q1 (BOOL)"},
                 {"RANDOM", "RANDOM", "Math", "Random Value Generator: TRIG (BOOL), MIN (INT), MAX (INT) -> Y (INT/REAL)"},
-                {"RND", "RND", "Math", "Random Value Generator: TRIG (BOOL), MIN (INT), MAX (INT) -> Y (INT/REAL)"}
+                {"RND", "RND", "Math", "Random Value Generator: TRIG (BOOL), MIN (INT), MAX (INT) -> Y (INT/REAL)"},
+                {"COUNTER", "COUNTER", "Timers", "Up/Down Counter: CU (BOOL), CD (BOOL), R (BOOL), PV (INT) -> Q (BOOL), CV (INT)"},
+                {"CNTR", "CNTR", "Timers", "Up/Down Counter: CU (BOOL), CD (BOOL), R (BOOL), PV (INT) -> Q (BOOL), CV (INT)"},
+                {"SINGLEPULSE", "SINGLEPULSE", "Timers", "Single Cycle Pulse Generator: IN (BOOL) -> Q (BOOL)"},
+                {"ONESHOT", "ONESHOT", "Timers", "Single Cycle Pulse Generator: IN (BOOL) -> Q (BOOL)"}
         };
         for (Object[] row : fbs) {
             String name = (String) row[0];

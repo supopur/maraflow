@@ -26,6 +26,7 @@ import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
+import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JSplitPane;
@@ -111,8 +112,10 @@ public class StEditorPanel extends JPanel {
             "ABS", "SQRT", "SIN", "COS", "TAN", "TRUNC", "ROUND",
             "INT_TO_FLOAT", "INT_TO_REAL", "FLOAT_TO_INT", "REAL_TO_INT",
             "BOOL_TO_INT", "INT_TO_BOOL", "MIN", "MAX", "LIMIT", "CLAMP", "SEL",
-            "RANDOM", "RND"
+            "RANDOM", "RND", "SINGLEPULSE", "ONESHOT", "COUNTER", "CNTR"
     );
+
+    private static final Pattern HW_IO_PATTERN = Pattern.compile("(?:DI|DO|AI|AO|PWM|M)\\d+|REG_\\d+");
 
     private static final Pattern TOKEN_PATTERN = Pattern.compile(
             "(//[^\\n]*)|(\\(\\*[\\s\\S]*?\\*\\))|(/\\*[\\s\\S]*?\\*/)|(\\b(?:16#[0-9A-Fa-f_]+|2#[01_]+|\\d+(?:\\.\\d+)?)\\b)|(\\b[A-Za-z_][A-Za-z0-9_]*\\b)"
@@ -302,6 +305,21 @@ public class StEditorPanel extends JPanel {
         codePane.getActionMap().put("format", formatAction);
 
         completionDebounce.setRepeats(false);
+        // Close suggestions whenever the editor stops being visible (tab switch ST -> FBD/LD) or loses focus
+        addHierarchyListener(ev -> {
+            if ((ev.getChangeFlags() & java.awt.event.HierarchyEvent.SHOWING_CHANGED) != 0 && !isShowing()) {
+                hideCompletionPopup();
+            }
+        });
+        codePane.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override
+            public void focusLost(java.awt.event.FocusEvent ev) {
+                hideCompletionPopup();
+            }
+        });
+        Thread warm = new Thread(StLanguageServer::warmUp, "st-completion-warmup");
+        warm.setDaemon(true);
+        warm.start();
 
         codePane.addKeyListener(new KeyAdapter() {
             @Override
@@ -309,6 +327,9 @@ public class StEditorPanel extends JPanel {
                 if (completionWindow != null && completionWindow.isVisible()) {
                     if (e.getKeyCode() == KeyEvent.VK_DOWN) {
                         if (completionModel != null && !completionModel.isEmpty()) {
+                            if (completionList.getSelectedIndex() >= completionModel.size() - 1) {
+                                loadMoreCompletions(COMPLETION_CHUNK);
+                            }
                             int idx = (completionList.getSelectedIndex() + 1) % completionModel.size();
                             completionList.setSelectedIndex(idx);
                             completionList.ensureIndexIsVisible(idx);
@@ -317,6 +338,9 @@ public class StEditorPanel extends JPanel {
                         return;
                     } else if (e.getKeyCode() == KeyEvent.VK_UP) {
                         if (completionModel != null && !completionModel.isEmpty()) {
+                            if (completionList.getSelectedIndex() <= 0) {
+                                loadMoreCompletions(Integer.MAX_VALUE); // wrap to the very end
+                            }
                             int idx = (completionList.getSelectedIndex() - 1 + completionModel.size()) % completionModel.size();
                             completionList.setSelectedIndex(idx);
                             completionList.ensureIndexIsVisible(idx);
@@ -883,6 +907,8 @@ public class StEditorPanel extends JPanel {
     }
 
     public void setPage(Project project, Page page) {
+        completionDebounce.stop();
+        hideCompletionPopup();
         this.project = project;
         this.page = page;
         stUndoManager.discardAllEdits();
@@ -1073,7 +1099,7 @@ public class StEditorPanel extends JPanel {
                             doc.setCharacterAttributes(start, len, styleKeyword, true);
                         } else if (ST_FUNCTIONS.contains(word)) {
                             doc.setCharacterAttributes(start, len, styleFunction, true);
-                        } else if (word.matches("(?:DI|DO|AI|AO|PWM|M)\\d+|REG_\\d+")) {
+                        } else if (HW_IO_PATTERN.matcher(word).matches()) {
                             doc.setCharacterAttributes(start, len, styleHardwareIo, true);
                         }
                     }
@@ -1164,16 +1190,37 @@ public class StEditorPanel extends JPanel {
         }
     }
 
+    private static final int COMPLETION_CHUNK = 30;
+    private List<StLanguageServer.CompletionItem> completionAll = List.of();
+    private int completionLoaded = 0;
+
     private void triggerCompletion() {
-        if (page == null || !AppSettings.get().isStIntelliSenseEnabled()) return;
+        if (page == null || !AppSettings.get().isStIntelliSenseEnabled() || !isShowing()) return;
         int caret = codePane.getCaretPosition();
-        String code = codePane.getText();
-        List<StLanguageServer.CompletionItem> items = StLanguageServer.getCompletions(code, caret, page.getStVariables(), project);
+        String upToCaret;
+        try {
+            // Only the text up to the caret is needed for the prefix; avoids copying the whole document.
+            int from = Math.max(0, caret - 64);
+            upToCaret = codePane.getDocument().getText(from, caret - from);
+            caret = upToCaret.length();
+        } catch (BadLocationException ex) {
+            hideCompletionPopup();
+            return;
+        }
+        List<StLanguageServer.CompletionItem> items = StLanguageServer.getCompletions(upToCaret, caret, page.getStVariables(), project);
         if (items.isEmpty()) {
             hideCompletionPopup();
             return;
         }
-        showCompletionPopup(items, caret);
+        showCompletionPopup(items, codePane.getCaretPosition());
+    }
+
+    private void loadMoreCompletions(int count) {
+        if (completionModel == null || completionLoaded >= completionAll.size()) return;
+        int end = Math.min(completionAll.size(), completionLoaded + count);
+        List<StLanguageServer.CompletionItem> chunk = completionAll.subList(completionLoaded, end);
+        completionModel.addAll(chunk);
+        completionLoaded = end;
     }
 
     private void showCompletionPopup(List<StLanguageServer.CompletionItem> items, int caret) {
@@ -1185,6 +1232,7 @@ public class StEditorPanel extends JPanel {
         Window owner = SwingUtilities.getWindowAncestor(this);
         if (owner == null) return;
 
+        int rowHeight = AppFonts.scaled(20);
         if (completionWindow == null) {
             completionWindow = new JWindow(owner);
             completionWindow.setType(Window.Type.POPUP);
@@ -1196,6 +1244,7 @@ public class StEditorPanel extends JPanel {
             completionList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
             completionList.setFont(AppFonts.canvasMono(12f));
             completionList.setCellRenderer(new CompletionCellRenderer());
+            completionList.setFixedCellHeight(rowHeight); // no per-row measuring
 
             completionList.addMouseListener(new MouseAdapter() {
                 @Override
@@ -1208,25 +1257,39 @@ public class StEditorPanel extends JPanel {
 
             completionScroll = new JScrollPane(completionList);
             completionScroll.setBorder(BorderFactory.createLineBorder(new Color(0x60, 0x75, 0x90), 1));
+            completionScroll.getVerticalScrollBar().addAdjustmentListener(ev -> {
+                JScrollBar sb = completionScroll.getVerticalScrollBar();
+                if (sb.getValue() + sb.getVisibleAmount() >= sb.getMaximum() - rowHeight * 3) {
+                    loadMoreCompletions(COMPLETION_CHUNK);
+                }
+            });
             completionWindow.setContentPane(completionScroll);
         }
 
+        // Lazy: only the first chunk goes into the model
+        completionAll = items;
+        completionLoaded = 0;
         completionModel.clear();
+        loadMoreCompletions(COMPLETION_CHUNK);
+
         int maxLen = 0;
-        for (StLanguageServer.CompletionItem item : items) {
-            completionModel.addElement(item);
-            int len = item.label().length() + item.detail().length();
+        for (int i = 0; i < completionLoaded; i++) {
+            StLanguageServer.CompletionItem item = completionAll.get(i);
+            int len = item.label().length() + item.detail().length() + 10;
             if (len > maxLen) maxLen = len;
         }
         completionList.setSelectedIndex(0);
+        completionList.ensureIndexIsVisible(0);
 
-        // Dynamic height based on content!
         int visibleRows = Math.clamp(items.size(), 1, 8);
-        int rowHeight = AppFonts.scaled(22);
         int popupH = visibleRows * rowHeight + 4;
-        int popupW = Math.max(AppFonts.scaled(280), Math.min(AppFonts.scaled(480), maxLen * 8 + AppFonts.scaled(80)));
-        completionScroll.setPreferredSize(new Dimension(popupW, popupH));
-        completionWindow.pack();
+        int popupW = Math.max(AppFonts.scaled(280), Math.min(AppFonts.scaled(520), maxLen * 8 + AppFonts.scaled(40)));
+        completionList.setFixedCellWidth(popupW - 20);
+        Dimension size = new Dimension(popupW, popupH);
+        if (!size.equals(completionScroll.getPreferredSize())) {
+            completionScroll.setPreferredSize(size);
+            completionWindow.pack();
+        }
 
         try {
             Rectangle2D r = codePane.modelToView2D(caret);
@@ -1234,12 +1297,13 @@ public class StEditorPanel extends JPanel {
                 Point screenPt = new Point((int) r.getX(), (int) (r.getY() + r.getHeight() + 2));
                 SwingUtilities.convertPointToScreen(screenPt, codePane);
                 completionWindow.setLocation(screenPt);
-                completionWindow.setVisible(true);
+                if (!completionWindow.isVisible()) completionWindow.setVisible(true);
             }
         } catch (Exception ignored) {}
     }
 
     private void hideCompletionPopup() {
+        completionDebounce.stop();
         if (completionWindow != null && completionWindow.isVisible()) {
             completionWindow.setVisible(false);
         }
@@ -1605,19 +1669,25 @@ public class StEditorPanel extends JPanel {
     }
 
     private static final class CompletionCellRenderer extends DefaultListCellRenderer {
+        private static final Color VAR = new Color(0x6A1B9A), IO = new Color(0xD84315), FN = new Color(0x00695C),
+                FB = new Color(0x1565C0), KW = new Color(0x0D47A1), SNIP = new Color(0x2E7D32);
+
         @Override
         public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean isSelected, boolean cellHasFocus) {
             super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
             if (value instanceof StLanguageServer.CompletionItem item) {
-                String kindBadge = switch (item.kind()) {
-                    case VARIABLE -> "<font color='#6A1B9A'><b>[VAR]</b></font>";
-                    case HARDWARE_IO -> "<font color='#D84315'><b>[I/O]</b></font>";
-                    case FUNCTION -> "<font color='#00695C'><b>[FN]</b></font>";
-                    case FUNCTION_BLOCK -> "<font color='#1565C0'><b>[FB]</b></font>";
-                    case KEYWORD -> "<font color='#0D47A1'><b>[KW]</b></font>";
-                    case SNIPPET -> "<font color='#2E7D32'><b>[SNIP]</b></font>";
-                };
-                setText("<html>" + kindBadge + " <b>" + item.label() + "</b> <font color='#666666'>&mdash; " + item.detail() + "</font></html>");
+                String badge;
+                Color c;
+                switch (item.kind()) {
+                    case VARIABLE -> { badge = "[VAR]"; c = VAR; }
+                    case HARDWARE_IO -> { badge = "[I/O]"; c = IO; }
+                    case FUNCTION -> { badge = "[FN]"; c = FN; }
+                    case FUNCTION_BLOCK -> { badge = "[FB]"; c = FB; }
+                    case KEYWORD -> { badge = "[KW]"; c = KW; }
+                    default -> { badge = "[SNIP]"; c = SNIP; }
+                }
+                setText(badge + " " + item.label() + "  \u2014 " + item.detail());
+                if (!isSelected) setForeground(c);
             }
             return this;
         }
