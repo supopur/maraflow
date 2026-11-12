@@ -63,6 +63,8 @@ import java.awt.Point;
 import java.awt.Toolkit;
 import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.util.ArrayList;
@@ -120,9 +122,16 @@ public class MainWindow extends JFrame {
         this.simEngine = new SimulationEngine(this::onSimulationTickUiUpdate);
         this.simEngine.addScopeListener(scopePanel::recordSample);
 
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                attemptExitApplication();
+            }
+        });
         setSize(1360, 840);
         setLayout(new BorderLayout());
+        AppIcon.apply(this);
 
         // 0. Build Homescreen Panel
         homeScreenPanel = new HomeScreenPanel(new HomeScreenPanel.HomeScreenListener() {
@@ -173,6 +182,11 @@ public class MainWindow extends JFrame {
         fbdCanvas = new FbdCanvas(project, simEngine, editListener);
         ladderCanvas = new LadderCanvas(project, simEngine, editListener);
         stEditorPanel = new StEditorPanel(project, project.getPages().getFirst(), () -> {
+            if (simEngine.getState() != SimulationEngine.State.STOPPED) {
+                simEngine.stopSimulation(project);
+                editorToolbar.updateSimState(simEngine.getState());
+                plcLogPanel.appendLog("Simulation / Watch stopped due to ST edit.");
+            }
             libraryTreePanel.rebuildTree();
             refreshTitles();
         });
@@ -456,9 +470,17 @@ public class MainWindow extends JFrame {
         importPageItem.addActionListener(e -> actionImportPageOrMacro());
         fileMenu.add(importPageItem);
 
-        JMenuItem exportPdfItem = new JMenuItem("Export Page to PDF / Image...");
-        exportPdfItem.addActionListener(e -> actionExportPage());
+        JMenuItem exportPdfItem = new JMenuItem("Export Project to PDF...");
+        exportPdfItem.addActionListener(e -> actionExportPdf());
         fileMenu.add(exportPdfItem);
+
+        JMenuItem exportSvgItem = new JMenuItem("Export All Pages to SVG...");
+        exportSvgItem.addActionListener(e -> actionExportAllSvg());
+        fileMenu.add(exportSvgItem);
+
+        JMenuItem exportPngItem = new JMenuItem("Export All Pages to PNG...");
+        exportPngItem.addActionListener(e -> actionExportAllPng());
+        fileMenu.add(exportPngItem);
 
         fileMenu.addSeparator();
 
@@ -467,7 +489,7 @@ public class MainWindow extends JFrame {
         fileMenu.add(closeProjItem);
 
         JMenuItem exitItem = new JMenuItem("Exit");
-        exitItem.addActionListener(e -> System.exit(0));
+        exitItem.addActionListener(e -> attemptExitApplication());
         fileMenu.add(exitItem);
         bar.add(fileMenu);
 
@@ -1116,15 +1138,43 @@ public class MainWindow extends JFrame {
         }
     }
 
-    private void actionSaveProject(boolean saveAs) {
-        if (!projectOpen) return;
+    private void attemptExitApplication() {
+        if (projectOpen && project != null && project.isDirty()) {
+            Object[] options = {"Save", "Exit", "Cancel"};
+            int choice = JOptionPane.showOptionDialog(
+                    this,
+                    "You have unsaved changes in '" + project.getProjectName() + "'.\nAre you sure you want to exit?",
+                    "Unsaved Changes",
+                    JOptionPane.YES_NO_CANCEL_OPTION,
+                    JOptionPane.WARNING_MESSAGE,
+                    null,
+                    options,
+                    options[0]
+            );
+            if (choice == 0) {
+                if (!actionSaveProject(false)) {
+                    return;
+                }
+            } else if (choice != 1) {
+                return;
+            }
+        }
+        if (simEngine != null && project != null) {
+            simEngine.stopSimulation(project);
+        }
+        dispose();
+        System.exit(0);
+    }
+
+    private boolean actionSaveProject(boolean saveAs) {
+        if (!projectOpen) return false;
         File target = project.getProjectFile();
         if (saveAs || target == null) {
             JFileChooser fc = new JFileChooser();
             fc.setFileFilter(new FileNameExtensionFilter("Maraflow Project (*.mfl)", "mfl"));
             fc.setSelectedFile(new File(project.getProjectName() + ".mfl"));
             if (fc.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
-                return;
+                return false;
             }
             target = fc.getSelectedFile();
             if (!target.getName().toLowerCase().endsWith(".mfl")) {
@@ -1137,8 +1187,10 @@ public class MainWindow extends JFrame {
             refreshTitles();
             pageTabBar.rebuildTabs();
             plcLogPanel.appendLog("Saved project to " + target.getAbsolutePath());
+            return true;
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(this, "Failed to save project:\n" + ex.getMessage(), "Save Error", JOptionPane.ERROR_MESSAGE);
+            return false;
         }
     }
 
@@ -1183,26 +1235,59 @@ public class MainWindow extends JFrame {
         }
     }
 
-    private void actionExportPage() {
-        if (!projectOpen) return;
-        JComponent activeCanvas = isActivePageLadder() ? ladderCanvas : fbdCanvas;
-        Page activePage = isActivePageLadder() ? ladderCanvas.getActivePage() : fbdCanvas.getActivePage();
-        if (activePage == null) return;
-
+    private void actionExportPdf() {
+        if (!projectOpen || project == null) return;
         JFileChooser fc = new JFileChooser();
-        fc.setDialogTitle("Export Active Page");
-        fc.setSelectedFile(new File(project.getProjectName() + "_" + activePage.getName().replace('*', '_') + ".png"));
+        fc.setDialogTitle("Export Project to PDF");
+        fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("PDF Documents (*.pdf)", "pdf"));
+        fc.setSelectedFile(new File(project.getProjectName() + ".pdf"));
         if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File out = fc.getSelectedFile();
+            if (!out.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".pdf")) {
+                out = new File(out.getParentFile(), out.getName() + ".pdf");
+            }
             try {
-                File out = fc.getSelectedFile();
-                BufferedImage img = new BufferedImage(activeCanvas.getWidth(), activeCanvas.getHeight(), BufferedImage.TYPE_INT_RGB);
-                Graphics2D g2 = img.createGraphics();
-                activeCanvas.paint(g2);
-                g2.dispose();
-                ImageIO.write(img, "png", out);
-                plcLogPanel.appendLog("Exported page snapshot to " + out.getAbsolutePath());
+                cz.maramat.io.ProjectExporter.exportProjectToPdf(project, fbdCanvas, ladderCanvas, out);
+                plcLogPanel.appendLog("Exported project PDF to " + out.getAbsolutePath());
+                JOptionPane.showMessageDialog(this, "Exported PDF:\n" + out.getAbsolutePath(), "Export Complete", JOptionPane.INFORMATION_MESSAGE);
             } catch (Exception ex) {
-                JOptionPane.showMessageDialog(this, "Export failed:\n" + ex.getMessage(), "Export Error", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, "PDF export failed:\n" + ex.getMessage(), "Export Error", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+
+    private void actionExportAllSvg() {
+        if (!projectOpen || project == null) return;
+        JFileChooser fc = new JFileChooser();
+        fc.setDialogTitle("Select Folder for SVG Export");
+        fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File dir = fc.getSelectedFile();
+            try {
+                java.util.List<File> files = cz.maramat.io.ProjectExporter.exportAllPagesToSvg(project, fbdCanvas, ladderCanvas, dir);
+                plcLogPanel.appendLog("Exported " + files.size() + " SVG sheet(s) to " + dir.getAbsolutePath());
+                JOptionPane.showMessageDialog(this, "Exported " + files.size() + " SVG sheet(s) to:\n" + dir.getAbsolutePath(),
+                        "Export Complete", JOptionPane.INFORMATION_MESSAGE);
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, "SVG export failed:\n" + ex.getMessage(), "Export Error", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+
+    private void actionExportAllPng() {
+        if (!projectOpen || project == null) return;
+        JFileChooser fc = new JFileChooser();
+        fc.setDialogTitle("Select Folder for PNG Export");
+        fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File dir = fc.getSelectedFile();
+            try {
+                java.util.List<File> files = cz.maramat.io.ProjectExporter.exportAllPagesToPng(project, fbdCanvas, ladderCanvas, dir);
+                plcLogPanel.appendLog("Exported " + files.size() + " PNG sheet(s) to " + dir.getAbsolutePath());
+                JOptionPane.showMessageDialog(this, "Exported " + files.size() + " PNG sheet(s) to:\n" + dir.getAbsolutePath(),
+                        "Export Complete", JOptionPane.INFORMATION_MESSAGE);
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, "PNG export failed:\n" + ex.getMessage(), "Export Error", JOptionPane.ERROR_MESSAGE);
             }
         }
     }

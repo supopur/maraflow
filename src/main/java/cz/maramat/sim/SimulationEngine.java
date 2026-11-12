@@ -36,7 +36,7 @@ public class SimulationEngine {
         PAUSED,
         WATCH_MODE
     }
-
+    
     private volatile State state = State.STOPPED;
     private volatile double speedMultiplier = 1.0;
     private volatile boolean manualEStopButtonPressed = false;
@@ -260,6 +260,9 @@ public class SimulationEngine {
             }
             for (StVariable v : page.getStVariables()) {
                 v.resetRuntimeState();
+            }
+            for (GraphicElement ge : page.getGraphics()) {
+                ge.setActiveState(false);
             }
         }
     }

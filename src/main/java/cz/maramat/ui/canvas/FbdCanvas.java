@@ -134,6 +134,22 @@ public class FbdCanvas extends JPanel {
     private GraphicElement creatingGraphic = null;
     private Page graphicBeforeSnapshot = null;
 
+    // Shape resize state
+    private enum ResizeHandle {
+        NW, N, NE, E, SE, S, SW, W, LINE_START, LINE_END
+    }
+
+    private record GraphicResizeHit(GraphicElement elem, ResizeHandle handle) {}
+
+    private enum ZOrderAction {
+        SEND_TO_FOREGROUND, MOVE_UP, MOVE_DOWN, SEND_TO_BACKGROUND
+    }
+
+    private GraphicElement resizingGraphic = null;
+    private ResizeHandle resizingHandle = null;
+    private Page resizeBeforeSnapshot = null;
+    private int resizeOrigX1, resizeOrigY1, resizeOrigX2, resizeOrigY2;
+
     // Middle-mouse panning state
     private boolean panningWithMmb = false;
     private Point panStartScreenPoint = null;
@@ -664,6 +680,31 @@ public class FbdCanvas extends JPanel {
                     return;
                 }
 
+                // 1b. Check if clicking a resize handle of an already-selected GraphicElement
+                GraphicResizeHit resizeHit = findGraphicResizeHandle(page, mx, my);
+                if (resizeHit != null) {
+                    exitSimOrWatchBeforeStructuralEdit();
+                    resizingGraphic = resizeHit.elem();
+                    resizingHandle = resizeHit.handle();
+                    resizeBeforeSnapshot = page.copy();
+                    if (resizingGraphic.getKind() == GraphicElement.Kind.LINE) {
+                        resizeOrigX1 = resizingGraphic.getGridX();
+                        resizeOrigY1 = resizingGraphic.getGridY();
+                        resizeOrigX2 = resizingGraphic.getGridX() + resizingGraphic.getGridW();
+                        resizeOrigY2 = resizingGraphic.getGridY() + resizingGraphic.getGridH();
+                    } else {
+                        int x1 = Math.min(resizingGraphic.getGridX(), resizingGraphic.getGridX() + resizingGraphic.getGridW());
+                        int y1 = Math.min(resizingGraphic.getGridY(), resizingGraphic.getGridY() + resizingGraphic.getGridH());
+                        int x2 = Math.max(x1 + 1, Math.max(resizingGraphic.getGridX(), resizingGraphic.getGridX() + resizingGraphic.getGridW()));
+                        int y2 = Math.max(y1 + 1, Math.max(resizingGraphic.getGridY(), resizingGraphic.getGridY() + resizingGraphic.getGridH()));
+                        resizeOrigX1 = x1;
+                        resizeOrigY1 = y1;
+                        resizeOrigX2 = x2;
+                        resizeOrigY2 = y2;
+                    }
+                    return;
+                }
+
                 // 2. Check if clicking a Block
                 BlockInstance hitBlock = findBlockAtPixel(page, mx, my);
                 if (hitBlock != null) {
@@ -817,6 +858,48 @@ public class FbdCanvas extends JPanel {
                     return;
                 }
 
+                if (resizingGraphic != null && resizingHandle != null) {
+                    exitSimOrWatchBeforeStructuralEdit();
+                    if (resizingHandle == ResizeHandle.LINE_START) {
+                        int nx1 = Math.max(1, gx);
+                        int ny1 = Math.max(1, gy);
+                        resizingGraphic.setGridX(nx1);
+                        resizingGraphic.setGridY(ny1);
+                        resizingGraphic.setGridW(resizeOrigX2 - nx1);
+                        resizingGraphic.setGridH(resizeOrigY2 - ny1);
+                    } else if (resizingHandle == ResizeHandle.LINE_END) {
+                        int nx2 = Math.max(1, gx);
+                        int ny2 = Math.max(1, gy);
+                        resizingGraphic.setGridX(resizeOrigX1);
+                        resizingGraphic.setGridY(resizeOrigY1);
+                        resizingGraphic.setGridW(nx2 - resizeOrigX1);
+                        resizingGraphic.setGridH(ny2 - resizeOrigY1);
+                    } else {
+                        int nx1 = resizeOrigX1;
+                        int ny1 = resizeOrigY1;
+                        int nx2 = resizeOrigX2;
+                        int ny2 = resizeOrigY2;
+                        if (resizingHandle == ResizeHandle.NW || resizingHandle == ResizeHandle.W || resizingHandle == ResizeHandle.SW) {
+                            nx1 = Math.max(1, Math.min(gx, resizeOrigX2 - 1));
+                        }
+                        if (resizingHandle == ResizeHandle.NE || resizingHandle == ResizeHandle.E || resizingHandle == ResizeHandle.SE) {
+                            nx2 = Math.max(resizeOrigX1 + 1, gx);
+                        }
+                        if (resizingHandle == ResizeHandle.NW || resizingHandle == ResizeHandle.N || resizingHandle == ResizeHandle.NE) {
+                            ny1 = Math.max(1, Math.min(gy, resizeOrigY2 - 1));
+                        }
+                        if (resizingHandle == ResizeHandle.SW || resizingHandle == ResizeHandle.S || resizingHandle == ResizeHandle.SE) {
+                            ny2 = Math.max(resizeOrigY1 + 1, gy);
+                        }
+                        resizingGraphic.setGridX(nx1);
+                        resizingGraphic.setGridY(ny1);
+                        resizingGraphic.setGridW(nx2 - nx1);
+                        resizingGraphic.setGridH(ny2 - ny1);
+                    }
+                    repaint();
+                    return;
+                }
+
                 if (creatingWire) {
                     wireCurrentPixel = new Point(mx, my);
                     long now = System.currentTimeMillis();
@@ -943,6 +1026,19 @@ public class FbdCanvas extends JPanel {
                     return;
                 }
 
+                if (resizingGraphic != null) {
+                    String kindName = resizingGraphic.getKind().getDisplayName();
+                    resizingGraphic = null;
+                    resizingHandle = null;
+                    if (resizeBeforeSnapshot != null) {
+                        editListener.onAfterPageEdit("Resize " + kindName, resizeBeforeSnapshot, page);
+                        resizeBeforeSnapshot = null;
+                    }
+                    updateCanvasPreferredSize();
+                    repaint();
+                    return;
+                }
+
                 if (creatingWire) {
                     creatingWire = false;
                     PinHit endHit = findPinAtPixel(page, e.getX(), e.getY());
@@ -1034,6 +1130,11 @@ public class FbdCanvas extends JPanel {
                 if (currentToolMode != ToolMode.CURSOR) return;
                 Page page = getActivePage();
                 if (page == null) return;
+                GraphicResizeHit resizeHit = findGraphicResizeHandle(page, e.getX(), e.getY());
+                if (resizeHit != null) {
+                    setCursor(cursorForResizeHandle(resizeHit.handle()));
+                    return;
+                }
                 WireHit hit = findWireOrFlagAtPixel(page, e.getX(), e.getY());
                 if (hit != null && !hit.wire.isHidden() && hit.wire.getBusId() == null && hit.segmentIndex >= 0) {
                     List<Point2D.Double> pts = hit.wire.getGridPoints();
@@ -1232,6 +1333,18 @@ public class FbdCanvas extends JPanel {
             showBlockContextMenu(page, hitBlock, mx, my);
             return;
         }
+        GraphicElement hitGraphic = findGraphicAtPixel(page, mx, my);
+        if (hitGraphic != null) {
+            if (!selectedGraphicIds.contains(hitGraphic.getId())) {
+                selectedBlockIds.clear();
+                selectedGraphicIds.clear();
+                selectedWireId = null;
+                selectedGraphicIds.add(hitGraphic.getId());
+                repaint();
+            }
+            showGraphicContextMenu(page, hitGraphic, mx, my);
+            return;
+        }
         showCanvasContextMenu(page, gx, gy, mx, my);
     }
 
@@ -1364,6 +1477,111 @@ public class FbdCanvas extends JPanel {
             editListener.onAfterPageEdit("Edit Execution Properties " + block.getName(), before, page);
             repaint();
         }
+    }
+
+    private void showGraphicContextMenu(Page page, GraphicElement elem, int mx, int my) {
+        JPopupMenu menu = new JPopupMenu();
+
+        JMenuItem propsItem = new JMenuItem("Properties... (Double-Click)");
+        propsItem.setFont(new Font(propsItem.getFont().getName(), Font.BOLD, propsItem.getFont().getSize()));
+        propsItem.addActionListener(e -> {
+            exitSimOrWatchBeforeStructuralEdit();
+            Page before = page.copy();
+            Frame owner = (Frame) SwingUtilities.getWindowAncestor(FbdCanvas.this);
+            boolean changed = (elem.getKind() == GraphicElement.Kind.VISUAL_BUTTON)
+                    ? VisualElementDialogs.showVisualButtonDialog(owner, page, elem)
+                    : VisualElementDialogs.showGraphicPropertiesDialog(owner, page, elem);
+            if (changed) {
+                editListener.onAfterPageEdit("Edit Graphic Properties", before, page);
+                repaint();
+            }
+        });
+        menu.add(propsItem);
+
+        menu.addSeparator();
+
+        List<GraphicElement> graphics = page.getGraphics();
+        int idx = graphics.indexOf(elem);
+        boolean canGoUp = idx >= 0 && idx < graphics.size() - 1;
+        boolean canGoDown = idx > 0;
+
+        JMenuItem toFrontItem = new JMenuItem("Send to Foreground");
+        toFrontItem.setEnabled(canGoUp);
+        toFrontItem.addActionListener(e -> reorderGraphicElement(page, elem, ZOrderAction.SEND_TO_FOREGROUND));
+        menu.add(toFrontItem);
+
+        JMenuItem moveUpItem = new JMenuItem("Move Up");
+        moveUpItem.setEnabled(canGoUp);
+        moveUpItem.addActionListener(e -> reorderGraphicElement(page, elem, ZOrderAction.MOVE_UP));
+        menu.add(moveUpItem);
+
+        JMenuItem moveDownItem = new JMenuItem("Move Down");
+        moveDownItem.setEnabled(canGoDown);
+        moveDownItem.addActionListener(e -> reorderGraphicElement(page, elem, ZOrderAction.MOVE_DOWN));
+        menu.add(moveDownItem);
+
+        JMenuItem toBackItem = new JMenuItem("Send to Background");
+        toBackItem.setEnabled(canGoDown);
+        toBackItem.addActionListener(e -> reorderGraphicElement(page, elem, ZOrderAction.SEND_TO_BACKGROUND));
+        menu.add(toBackItem);
+
+        menu.addSeparator();
+
+        JMenuItem dupItem = new JMenuItem("Duplicate (Ctrl+D / Cmd+D)");
+        dupItem.addActionListener(e -> {
+            exitSimOrWatchBeforeStructuralEdit();
+            duplicateSelection();
+        });
+        menu.add(dupItem);
+
+        JMenuItem delItem = new JMenuItem("Delete (Delete / Backspace)");
+        delItem.addActionListener(e -> {
+            exitSimOrWatchBeforeStructuralEdit();
+            Page before = page.copy();
+            page.getGraphics().remove(elem);
+            selectedGraphicIds.remove(elem.getId());
+            editListener.onAfterPageEdit("Delete " + elem.getKind().getDisplayName(), before, page);
+            repaint();
+        });
+        menu.add(delItem);
+
+        menu.show(this, mx, my);
+    }
+
+    private void reorderGraphicElement(Page page, GraphicElement elem, ZOrderAction action) {
+        List<GraphicElement> graphics = page.getGraphics();
+        int idx = graphics.indexOf(elem);
+        if (idx < 0) return;
+
+        int targetIdx = switch (action) {
+            case SEND_TO_FOREGROUND -> graphics.size() - 1;
+            case MOVE_UP -> Math.min(graphics.size() - 1, idx + 1);
+            case MOVE_DOWN -> Math.max(0, idx - 1);
+            case SEND_TO_BACKGROUND -> 0;
+        };
+        if (targetIdx == idx) return;
+
+        exitSimOrWatchBeforeStructuralEdit();
+        Page before = page.copy();
+        int liveIdx = -1;
+        for (int i = 0; i < graphics.size(); i++) {
+            if (graphics.get(i).getId().equals(elem.getId())) {
+                liveIdx = i;
+                break;
+            }
+        }
+        if (liveIdx < 0) return;
+        GraphicElement moved = graphics.remove(liveIdx);
+        graphics.add(targetIdx, moved);
+
+        String label = switch (action) {
+            case SEND_TO_FOREGROUND -> "Send to Foreground";
+            case MOVE_UP -> "Move Up";
+            case MOVE_DOWN -> "Move Down";
+            case SEND_TO_BACKGROUND -> "Send to Background";
+        };
+        editListener.onAfterPageEdit(label + " (" + elem.getKind().getDisplayName() + ")", before, page);
+        repaint();
     }
 
     private void showCanvasContextMenu(Page page, int gx, int gy, int mx, int my) {
@@ -1529,6 +1747,70 @@ public class FbdCanvas extends JPanel {
         return null;
     }
 
+    private List<Map.Entry<ResizeHandle, Point>> getGraphicHandlePoints(GraphicElement elem, int g) {
+        if (elem.getKind() == GraphicElement.Kind.TEXT) {
+            return List.of();
+        }
+        if (elem.getKind() == GraphicElement.Kind.LINE) {
+            int x1 = elem.getGridX() * g;
+            int y1 = elem.getGridY() * g;
+            int x2 = (elem.getGridX() + elem.getGridW()) * g;
+            int y2 = (elem.getGridY() + elem.getGridH()) * g;
+            return List.of(
+                    Map.entry(ResizeHandle.LINE_START, new Point(x1, y1)),
+                    Map.entry(ResizeHandle.LINE_END, new Point(x2, y2))
+            );
+        }
+        Rectangle r = getGraphicPixelBounds(elem, g);
+        int x0 = r.x;
+        int y0 = r.y;
+        int xm = r.x + r.width / 2;
+        int ym = r.y + r.height / 2;
+        int x1 = r.x + r.width;
+        int y1 = r.y + r.height;
+        return List.of(
+                Map.entry(ResizeHandle.NW, new Point(x0, y0)),
+                Map.entry(ResizeHandle.N, new Point(xm, y0)),
+                Map.entry(ResizeHandle.NE, new Point(x1, y0)),
+                Map.entry(ResizeHandle.E, new Point(x1, ym)),
+                Map.entry(ResizeHandle.SE, new Point(x1, y1)),
+                Map.entry(ResizeHandle.S, new Point(xm, y1)),
+                Map.entry(ResizeHandle.SW, new Point(x0, y1)),
+                Map.entry(ResizeHandle.W, new Point(x0, ym))
+        );
+    }
+
+    private GraphicResizeHit findGraphicResizeHandle(Page page, int px, int py) {
+        if (selectedGraphicIds.isEmpty()) return null;
+        int g = getGridUnitPx();
+        int tol = 5;
+        for (int i = page.getGraphics().size() - 1; i >= 0; i--) {
+            GraphicElement ge = page.getGraphics().get(i);
+            if (!selectedGraphicIds.contains(ge.getId())) continue;
+            for (Map.Entry<ResizeHandle, Point> entry : getGraphicHandlePoints(ge, g)) {
+                Point p = entry.getValue();
+                if (Math.abs(px - p.x) <= tol && Math.abs(py - p.y) <= tol) {
+                    return new GraphicResizeHit(ge, entry.getKey());
+                }
+            }
+        }
+        return null;
+    }
+
+    private static Cursor cursorForResizeHandle(ResizeHandle h) {
+        return Cursor.getPredefinedCursor(switch (h) {
+            case NW -> Cursor.NW_RESIZE_CURSOR;
+            case N -> Cursor.N_RESIZE_CURSOR;
+            case NE -> Cursor.NE_RESIZE_CURSOR;
+            case E -> Cursor.E_RESIZE_CURSOR;
+            case SE -> Cursor.SE_RESIZE_CURSOR;
+            case S -> Cursor.S_RESIZE_CURSOR;
+            case SW -> Cursor.SW_RESIZE_CURSOR;
+            case W -> Cursor.W_RESIZE_CURSOR;
+            case LINE_START, LINE_END -> Cursor.CROSSHAIR_CURSOR;
+        });
+    }
+
     private WireHit findWireOrFlagAtPixel(Page page, int px, int py) {
         int g = getGridUnitPx();
         double tolerance = Math.max(4.0, g * 0.45);
@@ -1625,6 +1907,75 @@ public class FbdCanvas extends JPanel {
     // =========================================================================
     // Rendering Pipeline (Strict Non-Antialiased Geometry + Antialiased Text Only)
     // =========================================================================
+
+    private boolean exporting = false;
+
+    /**
+     * Computes tight pixel bounds of all blocks, wires, and graphic elements on {@code page}
+     * at grid unit {@code g}, ignoring empty workspace margins around the content.
+     */
+    public Rectangle computeExportBounds(Page page, int g) {
+        if (page == null) return new Rectangle(0, 0, 200, 120);
+        int minX = Integer.MAX_VALUE;
+        int minY = Integer.MAX_VALUE;
+        int maxX = Integer.MIN_VALUE;
+        int maxY = Integer.MIN_VALUE;
+        boolean hasAny = false;
+
+        for (BlockInstance b : page.getBlocks()) {
+            hasAny = true;
+            int bx = b.getGridX() * g;
+            int by = b.getGridY() * g;
+            int bw = b.getGridWidth() * g;
+            int bh = b.getGridHeight() * g;
+            minX = Math.min(minX, bx - 3 * g);
+            minY = Math.min(minY, by - g);
+            maxX = Math.max(maxX, bx + bw + 3 * g);
+            maxY = Math.max(maxY, by + bh + g);
+        }
+        for (Wire w : page.getWires()) {
+            for (Point2D.Double pt : w.getGridPoints()) {
+                hasAny = true;
+                int px = (int) Math.round(pt.x * g);
+                int py = (int) Math.round(pt.y * g);
+                minX = Math.min(minX, px - g);
+                minY = Math.min(minY, py - g);
+                maxX = Math.max(maxX, px + g);
+                maxY = Math.max(maxY, py + g);
+            }
+        }
+        for (GraphicElement ge : page.getGraphics()) {
+            hasAny = true;
+            Rectangle r = getGraphicPixelBounds(ge, g);
+            minX = Math.min(minX, r.x - g);
+            minY = Math.min(minY, r.y - g);
+            maxX = Math.max(maxX, r.x + r.width + g);
+            maxY = Math.max(maxY, r.y + r.height + g);
+        }
+        if (!hasAny) {
+            return new Rectangle(0, 0, 240, 140);
+        }
+        return new Rectangle(minX, minY, Math.max(60, maxX - minX), Math.max(60, maxY - minY));
+    }
+
+    /**
+     * Renders {@code page} onto {@code g2} for SVG/PDF/PNG export (no background grid or selection UI).
+     */
+    public void paintPageForExport(Graphics2D g2, Page page, int g) {
+        if (page == null) return;
+        syncVisualValuePinDataTypes(page);
+        boolean prevExporting = this.exporting;
+        this.exporting = true;
+        try {
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            paintGraphicElements(g2, page, g);
+            paintBussesAndWires(g2, page, g);
+            paintBlocks(g2, page, g);
+        } finally {
+            this.exporting = prevExporting;
+        }
+    }
 
     @Override
     protected void paintComponent(Graphics g) {
@@ -1823,10 +2174,19 @@ public class FbdCanvas extends JPanel {
                 }
             }
 
-            if (selectedGraphicIds.contains(elem.getId())) {
+            if (!exporting && selectedGraphicIds.contains(elem.getId())) {
                 g2.setColor(new Color(0x00, 0x66, 0xCC));
                 g2.setStroke(new BasicStroke(1.0f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[]{2f, 2f}, 0f));
                 g2.drawRect(rx - 1, ry - 1, rw + 2, rh + 2);
+
+                g2.setStroke(new BasicStroke(1.0f));
+                for (Map.Entry<ResizeHandle, Point> hp : getGraphicHandlePoints(elem, g)) {
+                    Point p = hp.getValue();
+                    g2.setColor(Color.WHITE);
+                    g2.fillRect(p.x - 3, p.y - 3, 6, 6);
+                    g2.setColor(new Color(0x00, 0x66, 0xCC));
+                    g2.drawRect(p.x - 3, p.y - 3, 6, 6);
+                }
             }
         }
         g2.setStroke(new BasicStroke(1.0f));
@@ -1953,7 +2313,7 @@ public class FbdCanvas extends JPanel {
                     dstWidth = Math.max(3.0f, g * 0.4f);
                 }
             }
-            if (w.getId().equals(selectedWireId)) {
+            if (!exporting && w.getId().equals(selectedWireId)) {
                 srcWidth = Math.max(srcWidth, 2.0f);
                 dstWidth = Math.max(dstWidth, 2.0f);
             }
@@ -2319,7 +2679,7 @@ public class FbdCanvas extends JPanel {
             }
 
             // Selection Highlight
-            if (selectedBlockIds.contains(b.getId())) {
+            if (!exporting && selectedBlockIds.contains(b.getId())) {
                 g2.setColor(new Color(0x00, 0x55, 0xE5));
                 Stroke oldStroke = g2.getStroke();
                 g2.setStroke(new BasicStroke(1.0f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[]{3f, 2f}, 0f));

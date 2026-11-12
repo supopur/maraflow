@@ -22,6 +22,11 @@
             <version>3.5.4</version>
         </dependency>
         <dependency>
+            <groupId>com.github.librepdf</groupId>
+            <artifactId>openpdf</artifactId>
+            <version>2.0.3</version>
+        </dependency>
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <version>5.10.2</version>
@@ -63,4 +68,53 @@
         </plugins>
     </build>
 
+    <profiles>
+        <profile>
+            <id>bundle-mac</id>
+            <activation><os><family>mac</family></os></activation>
+            <properties><app.icon>${project.basedir}/src/main/resources/icons/MaraFlow.icns</app.icon></properties>
+        </profile>
+        <profile>
+            <id>bundle-windows</id>
+            <activation><os><family>windows</family></os></activation>
+            <properties><app.icon>${project.basedir}/src/main/resources/icons/MaraFlow.ico</app.icon></properties>
+        </profile>
+        <profile>
+            <id>bundle-linux</id>
+            <activation><os><name>Linux</name></os></activation>
+            <properties><app.icon>${project.basedir}/src/main/resources/icons/MaraFlow.png</app.icon></properties>
+        </profile>
+        <profile>
+            <id>native-bundle</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.6.4</version>
+                        <executions>
+                            <execution>
+                                <id>jpackage-app-image</id>
+                                <phase>package</phase>
+                                <goals><goal>exec</goal></goals>
+                                <configuration>
+                                    <executable>jpackage</executable>
+                                    <arguments>
+                                        <argument>--type</argument><argument>app-image</argument>
+                                        <argument>--name</argument><argument>MaraFlow</argument>
+                                        <argument>--app-version</argument><argument>1.0.0</argument>
+                                        <argument>--input</argument><argument>${project.build.directory}</argument>
+                                        <argument>--main-jar</argument><argument>${project.build.finalName}.jar</argument>
+                                        <argument>--main-class</argument><argument>cz.maramat.Main</argument>
+                                        <argument>--icon</argument><argument>${app.icon}</argument>
+                                        <argument>--dest</argument><argument>${project.build.directory}/dist</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

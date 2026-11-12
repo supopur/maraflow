@@ -107,9 +107,9 @@ public class EditorToolbar extends JToolBar {
     private JButton redoMainBtn;
     private JButton redoDropBtn;
 
-    private JButton playBtn;
-    private JButton pauseBtn;
+    private JButton playPauseBtn;
     private JButton stopBtn;
+    private SimulationEngine.State currentSimState = SimulationEngine.State.STOPPED;
     private JToggleButton eStopBtn;
     private JButton watchBtn;
     private JComboBox<PlcThread> threadCombo;
@@ -293,14 +293,16 @@ public class EditorToolbar extends JToolBar {
 
         addToolbarSplitter();
 
-        // 9. Simulation Tools: Play, Pause, Halt/Stop, Sim Speed Multiplier Dropdown
-        playBtn = createActionBtn(VectorIcons.playIcon(), "Play Simulation");
-        playBtn.addActionListener(e -> listener.onSimPlay());
-        add(playBtn);
-
-        pauseBtn = createActionBtn(VectorIcons.pauseIcon(), "Pause Simulation");
-        pauseBtn.addActionListener(e -> listener.onSimPause());
-        add(pauseBtn);
+        // 9. Simulation Tools: Play/Pause, Halt/Stop, Sim Speed Multiplier Dropdown
+        playPauseBtn = createActionBtn(VectorIcons.playIcon(), "Play Simulation");
+        playPauseBtn.addActionListener(e -> {
+            if (currentSimState == SimulationEngine.State.RUNNING) {
+                listener.onSimPause();
+            } else {
+                listener.onSimPlay();
+            }
+        });
+        add(playPauseBtn);
 
         stopBtn = createActionBtn(VectorIcons.stopIcon(), "Halt / Stop Simulation");
         stopBtn.addActionListener(e -> listener.onSimStop());
@@ -478,6 +480,7 @@ public class EditorToolbar extends JToolBar {
 
         // Push everything strictly to the left
         add(Box.createHorizontalGlue());
+        updateSimState(SimulationEngine.State.STOPPED);
     }
 
     public void setActivePageLanguage(IecLanguage language) {
@@ -643,10 +646,18 @@ public class EditorToolbar extends JToolBar {
     }
 
     public void updateSimState(SimulationEngine.State state) {
+        this.currentSimState = state;
         boolean watching = (state == SimulationEngine.State.WATCH_MODE);
+        boolean running = (state == SimulationEngine.State.RUNNING);
         watchBtn.setBackground(watching ? new Color(0xB8, 0xE6, 0xC8) : null);
-        playBtn.setEnabled(!watching && state != SimulationEngine.State.RUNNING);
-        pauseBtn.setEnabled(!watching && state == SimulationEngine.State.RUNNING);
+        playPauseBtn.setEnabled(!watching);
+        if (running) {
+            playPauseBtn.setIcon(VectorIcons.pauseIcon());
+            playPauseBtn.setToolTipText("Pause Simulation");
+        } else {
+            playPauseBtn.setIcon(VectorIcons.playIcon());
+            playPauseBtn.setToolTipText(state == SimulationEngine.State.PAUSED ? "Resume Simulation" : "Play Simulation");
+        }
         stopBtn.setEnabled(state != SimulationEngine.State.STOPPED);
     }
 

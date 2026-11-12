@@ -1092,6 +1092,89 @@ public class LadderCanvas extends JPanel {
     // Rendering (Zero geometric AA, Text-Only AA ON)
     // =========================================================================
 
+    private boolean exporting = false;
+
+    private int computeExportRightRailX(Page page) {
+        int maxContentX = 460;
+        int leftRailX = 48;
+        int startColX = leftRailX + 28;
+        for (LadderRung rung : page.getRungs()) {
+            int curX = startColX;
+            for (LadderElement el : rung.getMainElements()) {
+                int elW = (el.getKind() == LadderElement.Kind.FUNCTION_BLOCK) ? 186 : 88;
+                curX += 16 + elW + 16;
+            }
+            for (LadderBranch br : rung.getParallelBranches()) {
+                int brX = startColX + 16;
+                for (LadderElement el : br.getElements()) {
+                    int elW = (el.getKind() == LadderElement.Kind.FUNCTION_BLOCK) ? 186 : 88;
+                    brX += 16 + elW + 16;
+                }
+                curX = Math.max(curX, brX + 10);
+            }
+            maxContentX = Math.max(maxContentX, curX + 190);
+        }
+        return Math.max(640, maxContentX);
+    }
+
+    /**
+     * Computes tight pixel bounds for exporting a Ladder {@code page}.
+     */
+    public Rectangle computeExportBounds(Page page) {
+        if (page == null || page.getRungs().isEmpty()) {
+            return new Rectangle(0, 0, 680, 180);
+        }
+        int rightRailX = computeExportRightRailX(page);
+        int curY = 20;
+        for (LadderRung rung : page.getRungs()) {
+            curY += computeRungHeight(rung) + 12;
+        }
+        int railBottom = curY + 14;
+        return new Rectangle(8, 0, rightRailX + 36, railBottom + 14);
+    }
+
+    /**
+     * Renders a Ladder {@code page} onto {@code g2} for SVG/PDF/PNG export (no selection highlights).
+     */
+    public void paintPageForExport(Graphics2D g2, Page page) {
+        if (page == null) return;
+        boolean prevExporting = this.exporting;
+        this.exporting = true;
+        try {
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+
+            int leftRailX = 48;
+            int rightRailX = computeExportRightRailX(page);
+            int curY = 20;
+            boolean liveSim = simEngine.isShowingLiveOutputs();
+
+            for (int ri = 0; ri < page.getRungs().size(); ri++) {
+                LadderRung rung = page.getRungs().get(ri);
+                int rungHeight = computeRungHeight(rung);
+                drawRung(g2, ri, rung, leftRailX, rightRailX, curY, rungHeight, liveSim);
+                curY += rungHeight + 12;
+            }
+
+            int railBottom = Math.max(curY + 14, 120);
+            Stroke oldStroke = g2.getStroke();
+            g2.setStroke(new BasicStroke(3f));
+            g2.setColor(liveSim ? COLOR_POWER_ON : COLOR_RAIL);
+            g2.drawLine(leftRailX, 14, leftRailX, railBottom);
+            g2.setColor(COLOR_RAIL);
+            g2.drawLine(rightRailX, 14, rightRailX, railBottom);
+            g2.setStroke(oldStroke);
+
+            g2.setFont(AppFonts.ui(Font.BOLD, 11));
+            g2.setColor(liveSim ? COLOR_POWER_ON : COLOR_RAIL);
+            g2.drawString("L+ (24VDC)", leftRailX - 24, 12);
+            g2.setColor(COLOR_RAIL);
+            g2.drawString("L- (0V)", rightRailX - 18, 12);
+        } finally {
+            this.exporting = prevExporting;
+        }
+    }
+
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
@@ -1172,7 +1255,7 @@ public class LadderCanvas extends JPanel {
 
     private void drawRung(Graphics2D g2, int ri, LadderRung rung, int leftRailX, int rightRailX,
                           int topY, int rungHeight, boolean liveSim) {
-        boolean isRungSelected = (ri == getSelectedRungIndex());
+        boolean isRungSelected = !exporting && (ri == getSelectedRungIndex());
 
         if (isRungSelected) {
             g2.setColor(new Color(0xF6, 0xFA, 0xFF));
@@ -1303,7 +1386,7 @@ public class LadderCanvas extends JPanel {
         int topY = wireY - h / 2;
         Rectangle bounds = new Rectangle(x, topY, width, h);
 
-        boolean selected = (el == selectedElement);
+        boolean selected = !exporting && (el == selectedElement);
         boolean energized = liveSim && el.isEnergizedOut();
         boolean opHigh = liveSim && el.isOperandState();
 
@@ -1367,7 +1450,7 @@ public class LadderCanvas extends JPanel {
         int topY = wireY - h / 2;
         Rectangle bounds = new Rectangle(x, topY, width, h);
 
-        boolean selected = (coil == selectedElement);
+        boolean selected = !exporting && (coil == selectedElement);
         boolean energized = liveSim && coil.isEnergizedOut();
         boolean opHigh = liveSim && coil.isOperandState();
 
@@ -1499,7 +1582,7 @@ public class LadderCanvas extends JPanel {
         int blockW = width - 88;
 
         Rectangle bounds = new Rectangle(blockX, topY, blockW, totalH);
-        boolean selected = (el == selectedElement);
+        boolean selected = !exporting && (el == selectedElement);
 
         drawPowerLine(g2, x, wireY, blockX, wireY, liveSim && el.isEnergizedIn());
         drawPowerLine(g2, blockX + blockW, wireY, x + width, wireY, liveSim && el.isEnergizedOut());

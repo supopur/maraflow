@@ -1,6 +1,7 @@
 package cz.maramat;
 
 import com.formdev.flatlaf.FlatLightLaf;
+import cz.maramat.ui.AppIcon;
 import cz.maramat.ui.MainWindow;
 
 import javax.swing.SwingUtilities;
@@ -12,6 +13,8 @@ import java.awt.Insets;
 public class Main {
 
     public static void main(String[] args) {
+        System.setProperty("apple.awt.application.name", "MaraFlow");
+        AppIcon.applyDockIcon();
         FlatLightLaf.setup();
 
         // Utilitarian Win95 / Win7 crossover CAD / PLC engineering look-and-feel

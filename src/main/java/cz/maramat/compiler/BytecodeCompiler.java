@@ -110,7 +110,8 @@ public final class BytecodeCompiler {
                             ladderContactCoilCount++;
                             totalModules++;
                             expandedModules++;
-                            ramByType.put(DataType.BOOL, ramByType.get(DataType.BOOL) + 1);
+                            DataType ldType = el.getKind() == LadderElement.Kind.ANALOG_COIL ? DataType.INT : DataType.BOOL;
+                            ramByType.put(ldType, ramByType.get(ldType) + (ldType == DataType.INT ? 4 : 1));
                             flashBytes += 6;
                             threadUs[tid] += 0.06;
                         }
@@ -122,7 +123,8 @@ public final class BytecodeCompiler {
                                 ladderContactCoilCount++;
                                 totalModules++;
                                 expandedModules++;
-                                ramByType.put(DataType.BOOL, ramByType.get(DataType.BOOL) + 1);
+                                DataType ldType = el.getKind() == LadderElement.Kind.ANALOG_COIL ? DataType.INT : DataType.BOOL;
+                                ramByType.put(ldType, ramByType.get(ldType) + (ldType == DataType.INT ? 4 : 1));
                                 flashBytes += 6;
                                 threadUs[tid] += 0.06;
                             }
@@ -132,7 +134,8 @@ public final class BytecodeCompiler {
                         ladderContactCoilCount++;
                         totalModules++;
                         expandedModules++;
-                        ramByType.put(DataType.BOOL, ramByType.get(DataType.BOOL) + 1);
+                        DataType ldType = coil.getKind() == LadderElement.Kind.ANALOG_COIL ? DataType.INT : DataType.BOOL;
+                        ramByType.put(ldType, ramByType.get(ldType) + (ldType == DataType.INT ? 4 : 1));
                         flashBytes += 6;
                         threadUs[tid] += 0.06;
                     }

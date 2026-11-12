@@ -38,6 +38,33 @@ public final class VectorIcons {
 
         @Override
         public void paintIcon(Component c, Graphics g, int x, int y) {
+            if (c != null && !c.isEnabled()) {
+                int w = Math.max(1, getIconWidth());
+                int h = Math.max(1, getIconHeight());
+                java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+                Graphics2D ig = img.createGraphics();
+                float s = AppSettings.get().getScaleFactor();
+                ig.scale(s, s);
+                ig.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                paintLogical(c, ig);
+                ig.dispose();
+                for (int py = 0; py < h; py++) {
+                    for (int px = 0; px < w; px++) {
+                        int argb = img.getRGB(px, py);
+                        int a = (argb >>> 24) & 0xFF;
+                        if (a == 0) continue;
+                        int r = (argb >>> 16) & 0xFF;
+                        int gr = (argb >>> 8) & 0xFF;
+                        int b = argb & 0xFF;
+                        int lum = (int) (0.299 * r + 0.587 * gr + 0.114 * b);
+                        int gray = 120 + (lum / 4);
+                        int na = (int) (a * 0.55);
+                        img.setRGB(px, py, (na << 24) | (gray << 16) | (gray << 8) | gray);
+                    }
+                }
+                g.drawImage(img, x, y, null);
+                return;
+            }
             Graphics2D g2 = (Graphics2D) g.create();
             g2.translate(x, y);
             float s = AppSettings.get().getScaleFactor();

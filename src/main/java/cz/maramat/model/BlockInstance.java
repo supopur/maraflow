@@ -395,7 +395,9 @@ public class BlockInstance {
         }
         for (PinInstance p : outputs) {
             if (definitionId.startsWith("Visual.Vars.")) {
-                double v = p.getDataType().toNumericValue(customProperties.getOrDefault("CurrentValue", "0"));
+                String defaultVal = customProperties.getOrDefault("ValA", "0");
+                customProperties.put("CurrentValue", defaultVal);
+                double v = p.getDataType().toNumericValue(defaultVal);
                 p.setRuntimeValue(v);
             } else {
                 p.setRuntimeValue(0.0);
