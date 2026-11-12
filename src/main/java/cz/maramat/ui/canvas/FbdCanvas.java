@@ -266,7 +266,11 @@ public class FbdCanvas extends JPanel {
         selectedBlockIds.clear();
         selectedGraphicIds.clear();
         for (BlockInstance b : page.getBlocks()) selectedBlockIds.add(b.getId());
-        for (GraphicElement g : page.getGraphics()) selectedGraphicIds.add(g.getId());
+        for (GraphicElement g : page.getGraphics()) {
+            if (!isVisualButtonLockedInLiveMode(g)) {
+                selectedGraphicIds.add(g.getId());
+            }
+        }
         repaint();
     }
 
@@ -348,6 +352,12 @@ public class FbdCanvas extends JPanel {
         }
     }
 
+    private boolean isVisualButtonLockedInLiveMode(GraphicElement elem) {
+        return elem != null
+                && elem.getKind() == GraphicElement.Kind.VISUAL_BUTTON
+                && simEngine.isShowingLiveOutputs();
+    }
+
     // =========================================================================
     // Copy / Cut / Paste / Duplicate / Delete Operations
     // =========================================================================
@@ -370,13 +380,18 @@ public class FbdCanvas extends JPanel {
             }
         }
         for (GraphicElement g : page.getGraphics()) {
-            if (selectedGraphicIds.contains(g.getId())) {
+            if (selectedGraphicIds.contains(g.getId()) && !isVisualButtonLockedInLiveMode(g)) {
                 clipboardGraphics.add(g.copy());
             }
         }
     }
 
     public void cutSelection() {
+        Page page = getActivePage();
+        if (page == null) return;
+        boolean hasCuttable = !selectedBlockIds.isEmpty() || selectedWireId != null || page.getGraphics().stream()
+                .anyMatch(g -> selectedGraphicIds.contains(g.getId()) && !isVisualButtonLockedInLiveMode(g));
+        if (!hasCuttable) return;
         copySelection();
         deleteSelection();
     }
@@ -438,6 +453,11 @@ public class FbdCanvas extends JPanel {
     }
 
     public void duplicateSelection() {
+        Page page = getActivePage();
+        if (page == null) return;
+        boolean hasDuplicable = !selectedBlockIds.isEmpty() || page.getGraphics().stream()
+                .anyMatch(g -> selectedGraphicIds.contains(g.getId()) && !isVisualButtonLockedInLiveMode(g));
+        if (!hasDuplicable) return;
         copySelection();
         pasteClipboard();
     }
@@ -445,7 +465,13 @@ public class FbdCanvas extends JPanel {
     public void deleteSelection() {
         Page page = getActivePage();
         if (page == null) return;
-        if (selectedBlockIds.isEmpty() && selectedGraphicIds.isEmpty() && selectedWireId == null) return;
+        Set<String> deletableGraphicIds = new HashSet<>();
+        for (GraphicElement g : page.getGraphics()) {
+            if (selectedGraphicIds.contains(g.getId()) && !isVisualButtonLockedInLiveMode(g)) {
+                deletableGraphicIds.add(g.getId());
+            }
+        }
+        if (selectedBlockIds.isEmpty() && deletableGraphicIds.isEmpty() && selectedWireId == null) return;
 
         exitSimOrWatchBeforeStructuralEdit();
         Page before = page.copy();
@@ -460,9 +486,9 @@ public class FbdCanvas extends JPanel {
                     || selectedBlockIds.contains(w.getTargetBlockId()));
             selectedBlockIds.clear();
         }
-        if (!selectedGraphicIds.isEmpty()) {
-            page.getGraphics().removeIf(g -> selectedGraphicIds.contains(g.getId()));
-            selectedGraphicIds.clear();
+        if (!deletableGraphicIds.isEmpty()) {
+            page.getGraphics().removeIf(g -> deletableGraphicIds.contains(g.getId()));
+            selectedGraphicIds.removeAll(deletableGraphicIds);
         }
 
         if (page.isMacro()) {
@@ -768,6 +794,17 @@ public class FbdCanvas extends JPanel {
                 // 3. Check if clicking a Visual Button or Decorative Graphic Element
                 GraphicElement hitGraphic = findGraphicAtPixel(page, mx, my);
                 if (hitGraphic != null) {
+                    if (isVisualButtonLockedInLiveMode(hitGraphic)) {
+                        if (hitGraphic.isToggleButton()) {
+                            hitGraphic.setActiveState(!hitGraphic.isActiveState());
+                        } else {
+                            hitGraphic.setActiveState(true);
+                            heldVisualButton = hitGraphic;
+                        }
+                        repaint();
+                        return;
+                    }
+
                     if (e.getClickCount() == 2) {
                         exitSimOrWatchBeforeStructuralEdit();
                         Page before = page.copy();
@@ -779,17 +816,6 @@ public class FbdCanvas extends JPanel {
                             editListener.onAfterPageEdit("Edit Graphic Properties", before, page);
                             repaint();
                         }
-                        return;
-                    }
-
-                    if (hitGraphic.getKind() == GraphicElement.Kind.VISUAL_BUTTON && simEngine.isShowingLiveOutputs()) {
-                        if (hitGraphic.isToggleButton()) {
-                            hitGraphic.setActiveState(!hitGraphic.isActiveState());
-                        } else {
-                            hitGraphic.setActiveState(true);
-                            heldVisualButton = hitGraphic;
-                        }
-                        repaint();
                         return;
                     }
 
@@ -962,7 +988,7 @@ public class FbdCanvas extends JPanel {
                         }
                     }
                     for (GraphicElement ge : page.getGraphics()) {
-                        if (marqueePixelRect.intersects(getGraphicPixelBounds(ge, g))) {
+                        if (!isVisualButtonLockedInLiveMode(ge) && marqueePixelRect.intersects(getGraphicPixelBounds(ge, g))) {
                             selectedGraphicIds.add(ge.getId());
                         }
                     }
@@ -1205,7 +1231,7 @@ public class FbdCanvas extends JPanel {
             }
         }
         for (GraphicElement ge : page.getGraphics()) {
-            if (selectedGraphicIds.contains(ge.getId())) {
+            if (selectedGraphicIds.contains(ge.getId()) && !isVisualButtonLockedInLiveMode(ge)) {
                 initialGraphicPositions.put(ge.getId(), new Point(ge.getGridX(), ge.getGridY()));
             }
         }
@@ -1335,7 +1361,7 @@ public class FbdCanvas extends JPanel {
         }
         GraphicElement hitGraphic = findGraphicAtPixel(page, mx, my);
         if (hitGraphic != null) {
-            if (!selectedGraphicIds.contains(hitGraphic.getId())) {
+            if (!isVisualButtonLockedInLiveMode(hitGraphic) && !selectedGraphicIds.contains(hitGraphic.getId())) {
                 selectedBlockIds.clear();
                 selectedGraphicIds.clear();
                 selectedWireId = null;
@@ -1481,10 +1507,13 @@ public class FbdCanvas extends JPanel {
 
     private void showGraphicContextMenu(Page page, GraphicElement elem, int mx, int my) {
         JPopupMenu menu = new JPopupMenu();
+        boolean lockedInSim = isVisualButtonLockedInLiveMode(elem);
 
         JMenuItem propsItem = new JMenuItem("Properties... (Double-Click)");
         propsItem.setFont(new Font(propsItem.getFont().getName(), Font.BOLD, propsItem.getFont().getSize()));
+        propsItem.setEnabled(!lockedInSim);
         propsItem.addActionListener(e -> {
+            if (isVisualButtonLockedInLiveMode(elem)) return;
             exitSimOrWatchBeforeStructuralEdit();
             Page before = page.copy();
             Frame owner = (Frame) SwingUtilities.getWindowAncestor(FbdCanvas.this);
@@ -1502,8 +1531,8 @@ public class FbdCanvas extends JPanel {
 
         List<GraphicElement> graphics = page.getGraphics();
         int idx = graphics.indexOf(elem);
-        boolean canGoUp = idx >= 0 && idx < graphics.size() - 1;
-        boolean canGoDown = idx > 0;
+        boolean canGoUp = !lockedInSim && idx >= 0 && idx < graphics.size() - 1;
+        boolean canGoDown = !lockedInSim && idx > 0;
 
         JMenuItem toFrontItem = new JMenuItem("Send to Foreground");
         toFrontItem.setEnabled(canGoUp);
@@ -1528,14 +1557,18 @@ public class FbdCanvas extends JPanel {
         menu.addSeparator();
 
         JMenuItem dupItem = new JMenuItem("Duplicate (Ctrl+D / Cmd+D)");
+        dupItem.setEnabled(!lockedInSim);
         dupItem.addActionListener(e -> {
+            if (isVisualButtonLockedInLiveMode(elem)) return;
             exitSimOrWatchBeforeStructuralEdit();
             duplicateSelection();
         });
         menu.add(dupItem);
 
         JMenuItem delItem = new JMenuItem("Delete (Delete / Backspace)");
+        delItem.setEnabled(!lockedInSim);
         delItem.addActionListener(e -> {
+            if (isVisualButtonLockedInLiveMode(elem)) return;
             exitSimOrWatchBeforeStructuralEdit();
             Page before = page.copy();
             page.getGraphics().remove(elem);
@@ -1549,6 +1582,7 @@ public class FbdCanvas extends JPanel {
     }
 
     private void reorderGraphicElement(Page page, GraphicElement elem, ZOrderAction action) {
+        if (isVisualButtonLockedInLiveMode(elem)) return;
         List<GraphicElement> graphics = page.getGraphics();
         int idx = graphics.indexOf(elem);
         if (idx < 0) return;
@@ -1703,6 +1737,20 @@ public class FbdCanvas extends JPanel {
             int bx = b.getGridX() * g;
             int by = b.getGridY() * g;
             int bw = b.getGridWidth() * g;
+            if (b.isIoRef()) {
+                if (b.isInputRef() && !b.getOutputs().isEmpty()) {
+                    Rectangle pinRect = new Rectangle(bx + bw - g, by, g + 2, g);
+                    if (pinRect.contains(px, py)) {
+                        return new PinHit(b, 0, false);
+                    }
+                } else if (b.isOutputRef() && !b.getInputs().isEmpty()) {
+                    Rectangle pinRect = new Rectangle(bx - 2, by, g + 2, g);
+                    if (pinRect.contains(px, py)) {
+                        return new PinHit(b, 0, true);
+                    }
+                }
+                continue;
+            }
             boolean isXVar = b.getDefinitionId().startsWith("Visual.Vars.");
             int pinW = isXVar ? g : BlockInstance.PIN_COL_GRID_WIDTH * g;
             int headerH = BlockInstance.HEADER_GRID_HEIGHT * g;
@@ -1787,6 +1835,7 @@ public class FbdCanvas extends JPanel {
         for (int i = page.getGraphics().size() - 1; i >= 0; i--) {
             GraphicElement ge = page.getGraphics().get(i);
             if (!selectedGraphicIds.contains(ge.getId())) continue;
+            if (isVisualButtonLockedInLiveMode(ge)) continue;
             for (Map.Entry<ResizeHandle, Point> entry : getGraphicHandlePoints(ge, g)) {
                 Point p = entry.getValue();
                 if (Math.abs(px - p.x) <= tol && Math.abs(py - p.y) <= tol) {
@@ -2174,7 +2223,7 @@ public class FbdCanvas extends JPanel {
                 }
             }
 
-            if (!exporting && selectedGraphicIds.contains(elem.getId())) {
+            if (!exporting && selectedGraphicIds.contains(elem.getId()) && !isVisualButtonLockedInLiveMode(elem)) {
                 g2.setColor(new Color(0x00, 0x66, 0xCC));
                 g2.setStroke(new BasicStroke(1.0f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[]{2f, 2f}, 0f));
                 g2.drawRect(rx - 1, ry - 1, rw + 2, rh + 2);
@@ -2299,7 +2348,7 @@ public class FbdCanvas extends JPanel {
             Color dstColor = dstPin.getDataType().getWireColor();
 
             if (w.isHidden()) {
-                paintKiCadHiddenFlags(g2, src, w.getSourcePinIndex(), dst, w.getTargetPinIndex(), w.getNetName(), srcPin.getDataType(), dstPin.getDataType(), g);
+                paintKiCadHiddenFlags(g2, src, w.getSourcePinIndex(), dst, w.getTargetPinIndex(), w.getNetName(), srcPin, dstPin, liveMode, g);
                 continue;
             }
 
@@ -2360,25 +2409,115 @@ public class FbdCanvas extends JPanel {
             }
         }
 
-        // 3. Draw Fan-Out Junction Dots where multiple wires from the same output pin branch
+        // 3. Draw Fan-Out Junction Dots at true branch/T-junction points (degree >= 3)
         g2.setStroke(new BasicStroke(1.0f));
         for (List<Wire> group : wiresBySourcePin.values()) {
-            if (group.size() > 1) {
-                Wire first = group.getFirst();
-                List<Point2D.Double> pts = first.getGridPoints();
-                if (pts.size() >= 2) {
-                    Point2D.Double branchPt = pts.get(1);
-                    BlockInstance src = page.findBlockById(first.getSourceBlockId());
-                    if (src != null && first.getSourcePinIndex() < src.getOutputs().size()) {
-                        g2.setColor(src.getOutputs().get(first.getSourcePinIndex()).getDataType().getWireColor());
-                        int r = Math.max(2, g / 3);
-                        int bx = (int) Math.round(branchPt.x * g);
-                        int by = (int) Math.round(branchPt.y * g);
-                        g2.fillOval(bx - r, by - r, r * 2, r * 2);
+            List<Wire> visibleGroup = group.stream()
+                    .filter(w -> !w.isHidden() && w.getBusId() == null && w.getGridPoints().size() >= 2)
+                    .toList();
+            if (visibleGroup.size() <= 1) continue;
+
+            Wire first = visibleGroup.getFirst();
+            BlockInstance src = page.findBlockById(first.getSourceBlockId());
+            if (src == null || first.getSourcePinIndex() >= src.getOutputs().size()) continue;
+
+            List<Point2D.Double> junctions = findBranchJunctionPoints(visibleGroup);
+            if (junctions.isEmpty()) continue;
+
+            g2.setColor(src.getOutputs().get(first.getSourcePinIndex()).getDataType().getWireColor());
+            int r = Math.max(2, g / 4);
+            for (Point2D.Double branchPt : junctions) {
+                int bx = (int) Math.round(branchPt.x * g);
+                int by = (int) Math.round(branchPt.y * g);
+                g2.fillOval(bx - r, by - r, r * 2, r * 2);
+            }
+        }
+    }
+
+    private List<Point2D.Double> findBranchJunctionPoints(List<Wire> wires) {
+        final double eps = 1e-4;
+        record GridPt(long qx, long qy) {
+            static GridPt of(double x, double y) {
+                return new GridPt(Math.round(x * 1000.0), Math.round(y * 1000.0));
+            }
+            double x() { return qx / 1000.0; }
+            double y() { return qy / 1000.0; }
+        }
+        record GridSeg(GridPt a, GridPt b) {
+            static GridSeg normalized(GridPt p1, GridPt p2) {
+                if (p1.qx < p2.qx || (p1.qx == p2.qx && p1.qy <= p2.qy)) {
+                    return new GridSeg(p1, p2);
+                }
+                return new GridSeg(p2, p1);
+            }
+        }
+
+        Set<GridPt> vertices = new HashSet<>();
+        List<GridSeg> rawSegments = new ArrayList<>();
+        for (Wire w : wires) {
+            List<Point2D.Double> pts = w.getGridPoints();
+            for (int i = 0; i < pts.size(); i++) {
+                vertices.add(GridPt.of(pts.get(i).x, pts.get(i).y));
+                if (i + 1 < pts.size()) {
+                    GridPt p1 = GridPt.of(pts.get(i).x, pts.get(i).y);
+                    GridPt p2 = GridPt.of(pts.get(i + 1).x, pts.get(i + 1).y);
+                    if (!p1.equals(p2)) {
+                        rawSegments.add(new GridSeg(p1, p2));
                     }
                 }
             }
         }
+
+        Set<GridSeg> atomicSegments = new HashSet<>();
+        for (GridSeg seg : rawSegments) {
+            double x1 = seg.a.x(), y1 = seg.a.y();
+            double x2 = seg.b.x(), y2 = seg.b.y();
+            boolean horiz = Math.abs(y1 - y2) < eps;
+            boolean vert = Math.abs(x1 - x2) < eps;
+
+            List<GridPt> splits = new ArrayList<>();
+            splits.add(seg.a);
+            splits.add(seg.b);
+            if (horiz) {
+                double minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
+                for (GridPt v : vertices) {
+                    if (Math.abs(v.y() - y1) < eps && v.x() > minX + eps && v.x() < maxX - eps) {
+                        splits.add(v);
+                    }
+                }
+                splits.sort(java.util.Comparator.comparingLong(GridPt::qx));
+            } else if (vert) {
+                double minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
+                for (GridPt v : vertices) {
+                    if (Math.abs(v.x() - x1) < eps && v.y() > minY + eps && v.y() < maxY - eps) {
+                        splits.add(v);
+                    }
+                }
+                splits.sort(java.util.Comparator.comparingLong(GridPt::qy));
+            }
+
+            for (int i = 0; i + 1 < splits.size(); i++) {
+                GridPt u = splits.get(i);
+                GridPt v = splits.get(i + 1);
+                if (!u.equals(v)) {
+                    atomicSegments.add(GridSeg.normalized(u, v));
+                }
+            }
+        }
+
+        Map<GridPt, Integer> degree = new HashMap<>();
+        for (GridSeg seg : atomicSegments) {
+            degree.merge(seg.a, 1, Integer::sum);
+            degree.merge(seg.b, 1, Integer::sum);
+        }
+
+        List<Point2D.Double> junctions = new ArrayList<>();
+        for (Map.Entry<GridPt, Integer> e : degree.entrySet()) {
+            if (e.getValue() >= 3) {
+                junctions.add(new Point2D.Double(e.getKey().x(), e.getKey().y()));
+            }
+        }
+        return junctions;
     }
 
     /**
@@ -2478,44 +2617,74 @@ public class FbdCanvas extends JPanel {
             BlockInstance src, int srcPinIdx,
             BlockInstance dst, int dstPinIdx,
             String netName,
-            DataType srcType, DataType dstType,
+            PinInstance srcPin, PinInstance dstPin,
+            boolean liveMode,
             int g
     ) {
-        g2.setFont(new Font("SansSerif", Font.PLAIN, Math.max(7, g - 2)));
+        DataType srcType = srcPin.getDataType();
+        DataType dstType = dstPin.getDataType();
+        Font flagFont = new Font("Segoe UI", Font.PLAIN, Math.max(7, g - 2));
+        g2.setFont(flagFont);
         FontMetrics fm = g2.getFontMetrics();
         int textW = fm.stringWidth(netName);
-        int flagW = Math.max(3 * g, textW + g + 4);
+        int flagGridW = Math.max(3, (int) Math.ceil((textW + g + 2.0) / g));
+        int flagW = flagGridW * g;
         int flagH = g;
-        int tipW = Math.max(4, g / 2);
+        double r = flagH / 2.0;
 
+        // OCON (Output Connector on src right side) — offset past live output box if shown
         Point2D.Double pOut = src.getOutputPinAnchorGrid(srcPinIdx);
-        int ox = (int) Math.round(pOut.x * g);
+        int baseOx = (int) Math.round(pOut.x * g);
         int oy = (int) Math.round(pOut.y * g - flagH / 2.0);
-        Polygon outPoly = new Polygon(
-                new int[]{ox, ox + flagW - tipW, ox + flagW, ox + flagW - tipW, ox},
-                new int[]{oy, oy, oy + flagH / 2, oy + flagH, oy + flagH},
-                5
-        );
-        g2.setColor(srcType.getPinBackground());
-        g2.fillPolygon(outPoly);
+        int ox = baseOx;
+        if (liveMode && !src.isIoRef()) {
+            String liveStr = "(" + srcPin.getFormattedRuntimeValue(true) + ")";
+            int vw = Math.max(2 * g, fm.stringWidth(liveStr) + 4);
+            int liveGridW = (int) Math.ceil(vw / (double) g);
+            ox = baseOx + liveGridW * g;
+            if (ox > baseOx + vw) {
+                g2.setColor(srcType.getWireColor());
+                g2.setStroke(new BasicStroke(1.0f));
+                g2.drawLine(baseOx + vw, oy + flagH / 2, ox, oy + flagH / 2);
+            }
+        }
+
+        java.awt.geom.Path2D.Double ocon = new java.awt.geom.Path2D.Double();
+        ocon.moveTo(ox, oy);
+        ocon.lineTo(ox + flagW - r, oy);
+        ocon.append(new java.awt.geom.Arc2D.Double(ox + flagW - flagH, oy, flagH, flagH, 90, -180, java.awt.geom.Arc2D.OPEN), true);
+        ocon.lineTo(ox, oy + flagH);
+        ocon.closePath();
+
+        boolean srcActive = liveMode && srcType == DataType.BOOL && srcPin.getRuntimeValue() != 0.0;
+        g2.setColor(srcActive ? srcType.getWireColor() : srcType.getPinBackground());
+        g2.fill(ocon);
         g2.setColor(Color.BLACK);
         g2.setStroke(new BasicStroke(1.0f));
-        g2.drawPolygon(outPoly);
-        g2.drawString(netName, ox + 3, oy + flagH - 2);
+        g2.draw(ocon);
+        g2.setColor(srcActive ? Color.WHITE : Color.BLACK);
+        int textY = oy + (flagH + fm.getAscent() - fm.getDescent()) / 2;
+        g2.drawString(netName, ox + Math.max(3, g / 3), textY);
 
+        // ICON (Input Connector on dst left side)
         Point2D.Double pIn = dst.getInputPinAnchorGrid(dstPinIdx);
         int ix = (int) Math.round(pIn.x * g);
         int iy = (int) Math.round(pIn.y * g - flagH / 2.0);
-        Polygon inPoly = new Polygon(
-                new int[]{ix - flagW, ix - tipW, ix, ix - tipW, ix - flagW},
-                new int[]{iy, iy, iy + flagH / 2, iy + flagH, iy + flagH},
-                5
-        );
-        g2.setColor(dstType.getPinBackground());
-        g2.fillPolygon(inPoly);
+        java.awt.geom.Path2D.Double icon = new java.awt.geom.Path2D.Double();
+        icon.moveTo(ix, iy + flagH);
+        icon.lineTo(ix - flagW + r, iy + flagH);
+        icon.append(new java.awt.geom.Arc2D.Double(ix - flagW, iy, flagH, flagH, 270, -180, java.awt.geom.Arc2D.OPEN), true);
+        icon.lineTo(ix, iy);
+        icon.closePath();
+
+        boolean dstActive = liveMode && dstType == DataType.BOOL && dstPin.getRuntimeValue() != 0.0;
+        g2.setColor(dstActive ? dstType.getWireColor() : dstType.getPinBackground());
+        g2.fill(icon);
         g2.setColor(Color.BLACK);
-        g2.drawPolygon(inPoly);
-        g2.drawString(netName, ix - flagW + 3, iy + flagH - 2);
+        g2.draw(icon);
+        g2.setColor(dstActive ? Color.WHITE : Color.BLACK);
+        int inTextY = iy + (flagH + fm.getAscent() - fm.getDescent()) / 2;
+        g2.drawString(netName, ix - flagW + (int) Math.round(r) + 2, inTextY);
     }
 
     private void paintBlocks(Graphics2D g2, Page page, int g) {
@@ -2527,6 +2696,10 @@ public class FbdCanvas extends JPanel {
         g2.setStroke(new BasicStroke(1.0f));
 
         for (BlockInstance b : page.getBlocks()) {
+            if (b.isIoRef()) {
+                paintIoRefBlock(g2, b, g, pinFont, showLiveOutputs, exporting);
+                continue;
+            }
             int bx = b.getGridX() * g;
             int by = b.getGridY() * g;
             int bw = b.getGridWidth() * g;
@@ -2686,6 +2859,77 @@ public class FbdCanvas extends JPanel {
                 g2.drawRect(bx - 2, by - 2, bw + 4, bh + 4);
                 g2.setStroke(oldStroke);
             }
+        }
+    }
+
+    private void paintIoRefBlock(Graphics2D g2, BlockInstance b, int g, Font pinFont, boolean showLiveOutputs, boolean exporting) {
+        int bx = b.getGridX() * g;
+        int by = b.getGridY() * g;
+        int bw = b.getGridWidth() * g;
+        int bh = g;
+        int midY = by + g / 2;
+
+        boolean isInput = b.isInputRef();
+        PinInstance pin = isInput
+                ? (b.getOutputs().isEmpty() ? null : b.getOutputs().getFirst())
+                : (b.getInputs().isEmpty() ? null : b.getInputs().getFirst());
+        DataType dt = pin != null ? pin.getDataType() : DataType.BOOL;
+        Color pastel = dt.getPinBackground();
+        boolean activeBool = showLiveOutputs && pin != null && dt == DataType.BOOL && pin.getRuntimeValue() != 0.0;
+
+        Polygon outer = new Polygon();
+        Polygon tip = new Polygon();
+        if (isInput) {
+            int splitX = bx + bw - g;
+            outer.addPoint(bx, by);
+            outer.addPoint(splitX, by);
+            outer.addPoint(bx + bw, midY);
+            outer.addPoint(splitX, by + bh);
+            outer.addPoint(bx, by + bh);
+
+            tip.addPoint(splitX, by);
+            tip.addPoint(bx + bw, midY);
+            tip.addPoint(splitX, by + bh);
+        } else {
+            int splitX = bx + g;
+            outer.addPoint(bx, midY);
+            outer.addPoint(splitX, by);
+            outer.addPoint(bx + bw, by);
+            outer.addPoint(bx + bw, by + bh);
+            outer.addPoint(splitX, by + bh);
+
+            tip.addPoint(bx, midY);
+            tip.addPoint(splitX, by);
+            tip.addPoint(splitX, by + bh);
+        }
+
+        if (activeBool) {
+            g2.setColor(dt.getWireColor());
+            g2.fillPolygon(outer);
+        } else {
+            g2.setColor(Color.WHITE);
+            g2.fillPolygon(outer);
+            g2.setColor(pastel);
+            g2.fillPolygon(tip);
+        }
+
+        g2.setColor(Color.BLACK);
+        g2.drawPolygon(outer);
+
+        g2.setFont(pinFont);
+        FontMetrics fm = g2.getFontMetrics();
+        String label = b.getIoRefLabel();
+        int textX = isInput ? (bx + Math.max(3, g / 3)) : (bx + g + Math.max(2, g / 4));
+        int textY = by + (bh + fm.getAscent() - fm.getDescent()) / 2;
+        g2.setColor(activeBool ? Color.WHITE : Color.BLACK);
+        g2.drawString(label, textX, textY);
+
+        if (!exporting && selectedBlockIds.contains(b.getId())) {
+            g2.setColor(new Color(0x00, 0x55, 0xE5));
+            Stroke oldStroke = g2.getStroke();
+            g2.setStroke(new BasicStroke(1.0f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[]{3f, 2f}, 0f));
+            g2.drawRect(bx - 2, by - 2, bw + 4, bh + 4);
+            g2.setStroke(oldStroke);
         }
     }
 

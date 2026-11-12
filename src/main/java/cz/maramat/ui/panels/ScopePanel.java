@@ -87,7 +87,7 @@ public class ScopePanel extends JPanel {
         setBackground(Color.WHITE);
 
         // Pre-populate default pins from sample project
-        selectedPins.add("8xDI1.DI0");
+        selectedPins.add("IREF1.Y");
         selectedPins.add("And1.Y");
         selectedPins.add("Value1.In");
 

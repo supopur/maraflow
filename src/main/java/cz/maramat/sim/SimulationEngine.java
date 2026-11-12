@@ -762,32 +762,20 @@ public class SimulationEngine {
 
         List<PinInstance> outs = b.getOutputs();
         switch (defId) {
-            case "IO.DI" -> {
+            case "IO.IREF" -> {
                 String ch = b.getCustomProperties().getOrDefault("Channel", "DI0");
                 if (!outs.isEmpty()) {
-                    outs.getFirst().setRuntimeValue(getOperandValue(project, ch) != 0.0 ? 1.0 : 0.0);
+                    PinInstance outPin = outs.getFirst();
+                    double val = getOperandValue(project, ch);
+                    outPin.setRuntimeValue(outPin.getDataType() == DataType.BOOL ? (val != 0.0 ? 1.0 : 0.0) : val);
                 }
             }
-            case "IO.DO" -> {
+            case "IO.OREF" -> {
                 String ch = b.getCustomProperties().getOrDefault("Channel", "DO0");
-                double v = (ins.size() > 1 && ins.get(1).getRuntimeValue() != 0.0) ? 1.0 : 0.0;
-                setOperandValue(ch, v);
-                if (!outs.isEmpty()) {
-                    outs.getFirst().setRuntimeValue(v);
-                }
-            }
-            case "IO.AI" -> {
-                String ch = b.getCustomProperties().getOrDefault("Channel", "AI0");
-                if (!outs.isEmpty()) {
-                    outs.getFirst().setRuntimeValue(getOperandValue(project, ch));
-                }
-            }
-            case "IO.AO" -> {
-                String ch = b.getCustomProperties().getOrDefault("Channel", "AO0");
-                double v = ins.size() > 1 ? ins.get(1).getRuntimeValue() : 0.0;
-                setOperandValue(ch, v);
-                if (!outs.isEmpty()) {
-                    outs.getFirst().setRuntimeValue(1.0);
+                if (!ins.isEmpty()) {
+                    PinInstance inPin = ins.getFirst();
+                    double val = inPin.getRuntimeValue();
+                    setOperandValue(ch, inPin.getDataType() == DataType.BOOL ? (val != 0.0 ? 1.0 : 0.0) : val);
                 }
             }
             case "IO.PWM" -> {
@@ -796,21 +784,6 @@ public class SimulationEngine {
                 setOperandValue(ch, duty);
                 if (!outs.isEmpty()) {
                     outs.getFirst().setRuntimeValue(duty > 0.0 ? 1.0 : 0.0);
-                }
-            }
-            case "IO.8xDI" -> {
-                for (int i = 0; i < outs.size(); i++) {
-                    String diName = "DI" + i;
-                    Double ov = virtualRegisters.get(diName);
-                    if (ov != null) {
-                        outs.get(i).setRuntimeValue(ov);
-                    }
-                }
-            }
-            case "IO.8xDO" -> {
-                for (int i = 1; i < ins.size(); i++) {
-                    String doName = "DO" + (i - 1);
-                    setOperandValue(doName, ins.get(i).getRuntimeValue());
                 }
             }
             case "Bool.And", "Bool.Nand" -> {

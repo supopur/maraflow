@@ -135,59 +135,16 @@ public final class BlockCatalog {
 
         // 3. I/O (Hardware Target Aware)
         reg(new BlockDefinition(
-                "IO.DI", "I/O", "DI", "DI",
-                List.of(enPin()),
-                List.of(pin("Y", "Digital Input State", DataType.BOOL, "0")),
-                3, 2, false, false, 0.15
+                "IO.IREF", "I/O", "IREF", "IREF",
+                List.of(),
+                List.of(pin("Y", "Input Reference", DataType.BOOL, "0")),
+                3, 1, false, false, 0.15
         ));
         reg(new BlockDefinition(
-                "IO.DO", "I/O", "DO", "DO",
-                List.of(enPin(), pin("X", "Output Drive State", DataType.BOOL, "0")),
-                List.of(pin("Y", "Confirmed Output State", DataType.BOOL, "0")),
-                3, 2, false, false, 0.15
-        ));
-        reg(new BlockDefinition(
-                "IO.8xDI", "I/O", "8x DI", "8xDI",
-                List.of(enPin()),
-                List.of(
-                        pin("DI0", "Digital Input 0", DataType.BOOL, "0"),
-                        pin("DI1", "Digital Input 1", DataType.BOOL, "0"),
-                        pin("DI2", "Digital Input 2", DataType.BOOL, "0"),
-                        pin("DI3", "Digital Input 3", DataType.BOOL, "0"),
-                        pin("DI4", "Digital Input 4", DataType.BOOL, "0"),
-                        pin("DI5", "Digital Input 5", DataType.BOOL, "0"),
-                        pin("DI6", "Digital Input 6", DataType.BOOL, "0"),
-                        pin("DI7", "Digital Input 7", DataType.BOOL, "0")
-                ),
-                3, 8, false, false, 0.40
-        ));
-        reg(new BlockDefinition(
-                "IO.8xDO", "I/O", "8x DO", "8xDO",
-                List.of(
-                        enPin(),
-                        pin("DO0", "Digital Output 0", DataType.BOOL, "0"),
-                        pin("DO1", "Digital Output 1", DataType.BOOL, "0"),
-                        pin("DO2", "Digital Output 2", DataType.BOOL, "0"),
-                        pin("DO3", "Digital Output 3", DataType.BOOL, "0"),
-                        pin("DO4", "Digital Output 4", DataType.BOOL, "0"),
-                        pin("DO5", "Digital Output 5", DataType.BOOL, "0"),
-                        pin("DO6", "Digital Output 6", DataType.BOOL, "0"),
-                        pin("DO7", "Digital Output 7", DataType.BOOL, "0")
-                ),
-                List.of(pin("Ok", "Port Write Status", DataType.BOOL, "1")),
-                3, 9, false, false, 0.40
-        ));
-        reg(new BlockDefinition(
-                "IO.AI", "I/O", "AI", "AI",
-                List.of(enPin()),
-                List.of(pin("Val", "Analog Input Raw/Scaled", DataType.INT, "0")),
-                3, 2, false, true, 0.50
-        ));
-        reg(new BlockDefinition(
-                "IO.AO", "I/O", "AO", "AO",
-                List.of(enPin(), pin("Val", "Analog Output Value", DataType.INT, "0")),
-                List.of(pin("Ok", "DAC Status", DataType.BOOL, "1")),
-                3, 2, false, true, 0.50
+                "IO.OREF", "I/O", "OREF", "OREF",
+                List.of(pin("X", "Output Reference", DataType.BOOL, "0")),
+                List.of(),
+                3, 1, false, false, 0.15
         ));
         reg(new BlockDefinition(
                 "IO.PWM", "I/O", "PWM", "PWM",

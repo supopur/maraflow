@@ -85,30 +85,34 @@ public class Project {
         p.setDirty(true);
         Page page1 = p.getPages().getFirst();
 
-        BlockDefinition di8Def = BlockCatalog.getById("IO.8xDI");
+        BlockDefinition irefDef = BlockCatalog.getById("IO.IREF");
         BlockDefinition andDef = BlockCatalog.getById("Bool.And");
         BlockDefinition valDef = BlockCatalog.getById("Visual.Value");
         BlockDefinition segDef = BlockCatalog.getById("Visual.Segment");
 
-        BlockInstance bDi = new BlockInstance(di8Def, "8xDI1", 25, 30, 2, 20);
+        BlockInstance bDi0 = new BlockInstance(irefDef, "IREF1", 28, 33, 2, 15);
+        bDi0.setIoRefChannel("DI0");
+        BlockInstance bDi1 = new BlockInstance(irefDef, "IREF2", 28, 34, 2, 20);
+        bDi1.setIoRefChannel("DI1");
         BlockInstance bAnd1 = new BlockInstance(andDef, "And1", 39, 30, 2, 30);
         BlockInstance bVal1 = new BlockInstance(valDef, "Value1", 58, 31, 2, 40);
         BlockInstance bAnd2 = new BlockInstance(andDef, "And2", 51, 17, 2, 10);
         BlockInstance bSeg1 = new BlockInstance(segDef, "Segment 1", 75, 11, 2, 50);
 
-        page1.getBlocks().add(bDi);
+        page1.getBlocks().add(bDi0);
+        page1.getBlocks().add(bDi1);
         page1.getBlocks().add(bAnd1);
         page1.getBlocks().add(bVal1);
         page1.getBlocks().add(bAnd2);
         page1.getBlocks().add(bSeg1);
 
-        Point2D.Double s1 = bDi.getOutputPinAnchorGrid(0);
+        Point2D.Double s1 = bDi0.getOutputPinAnchorGrid(0);
         Point2D.Double e1 = bAnd1.getInputPinAnchorGrid(1);
-        page1.getWires().add(new Wire(bDi.getId(), 0, bAnd1.getId(), 1, "8xDI1.DI0", s1, e1));
+        page1.getWires().add(new Wire(bDi0.getId(), 0, bAnd1.getId(), 1, "IREF1.Y", s1, e1));
 
-        Point2D.Double s2 = bDi.getOutputPinAnchorGrid(1);
+        Point2D.Double s2 = bDi1.getOutputPinAnchorGrid(0);
         Point2D.Double e2 = bAnd1.getInputPinAnchorGrid(2);
-        page1.getWires().add(new Wire(bDi.getId(), 1, bAnd1.getId(), 2, "8xDI1.DI1", s2, e2));
+        page1.getWires().add(new Wire(bDi1.getId(), 0, bAnd1.getId(), 2, "IREF2.Y", s2, e2));
 
         Point2D.Double s3 = bAnd1.getOutputPinAnchorGrid(0);
         Point2D.Double e3 = bVal1.getInputPinAnchorGrid(0);

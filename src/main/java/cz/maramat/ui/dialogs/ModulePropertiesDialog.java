@@ -175,17 +175,7 @@ public class ModulePropertiesDialog extends JDialog {
             specificControls.put("DataType", dtBox);
         }
 
-        if (defId.equals("IO.8xDI") || defId.equals("IO.8xDO")) {
-            String pinLabelPrefix = defId.endsWith("DI") ? "DI" : "DO";
-            for (int i = 0; i < 8; i++) {
-                String key = "Pin" + i;
-                String currentPin = block.getCustomProperties().getOrDefault(key, "PA" + i);
-                JComboBox<String> pinCombo = new JComboBox<>(STM32_PIN_IDS);
-                pinCombo.setSelectedItem(currentPin);
-                addRow(p, gbc, row++, pinLabelPrefix + i + " Hardware Pin:", pinCombo);
-                specificControls.put(key, pinCombo);
-            }
-        } else {
+        {
             for (Map.Entry<String, String> entry : block.getCustomProperties().entrySet()) {
                 String k = entry.getKey();
                 if (k.equals("InputCount") || k.equals("DataType")) continue;
@@ -307,16 +297,16 @@ public class ModulePropertiesDialog extends JDialog {
 
     private String[] buildChannelOptionsForBlock(String defId) {
         return switch (defId) {
-            case "IO.DI" -> new String[]{
+            case "IO.IREF" -> new String[]{
                     "DI0", "DI1", "DI2", "DI3", "DI4", "DI5", "DI6", "DI7",
-                    "DI8", "DI9", "DI10", "DI11", "DI12", "DI13", "DI14", "DI15"
+                    "DI8", "DI9", "DI10", "DI11", "DI12", "DI13", "DI14", "DI15",
+                    "AI0", "AI1", "AI2", "AI3", "AI4", "AI5", "AI6", "AI7"
             };
-            case "IO.DO" -> new String[]{
+            case "IO.OREF" -> new String[]{
                     "DO0", "DO1", "DO2", "DO3", "DO4", "DO5", "DO6", "DO7",
-                    "DO8", "DO9", "DO10", "DO11", "DO12", "DO13", "DO14", "DO15"
+                    "DO8", "DO9", "DO10", "DO11", "DO12", "DO13", "DO14", "DO15",
+                    "AO0", "AO1", "AO2", "AO3"
             };
-            case "IO.AI" -> new String[]{"AI0", "AI1", "AI2", "AI3", "AI4", "AI5", "AI6", "AI7"};
-            case "IO.AO" -> new String[]{"AO0", "AO1", "AO2", "AO3"};
             case "IO.PWM" -> new String[]{"PWM0", "PWM1", "PWM2", "PWM3"};
             default -> STM32_PIN_IDS;
         };
@@ -496,7 +486,12 @@ public class ModulePropertiesDialog extends JDialog {
             } else if (comp instanceof JComboBox<?> cb) {
                 Object sel = cb.isEditable() ? cb.getEditor().getItem() : cb.getSelectedItem();
                 if (sel != null) {
-                    block.getCustomProperties().put(key, sel.toString().trim());
+                    String val = sel.toString().trim();
+                    if (key.equals("Channel") && block.isIoRef()) {
+                        block.setIoRefChannel(val);
+                    } else {
+                        block.getCustomProperties().put(key, val);
+                    }
                 }
             } else if (comp instanceof JTextField tf) {
                 block.getCustomProperties().put(key, tf.getText().trim());

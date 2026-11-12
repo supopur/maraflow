@@ -1128,15 +1128,15 @@ public final class ProjectExporter {
                     BlockInstance src = byId.get(w.getSourceBlockId());
                     if (src != null && w.getSourcePinIndex() >= 0 && w.getSourcePinIndex() < src.getOutputs().size()) {
                         String defId = src.getDefinitionId();
-                        if ("IO.DI".equals(defId) || "IO.AI".equals(defId)) {
-                            addGpioToken(src.getOutputs().get(w.getSourcePinIndex()).getShortName(), di, dOut, ai, ao);
+                        if ("IO.IREF".equals(defId)) {
+                            addGpioToken(src.getIoRefLabel(), di, dOut, ai, ao);
                         }
                     }
                     BlockInstance dst = byId.get(w.getTargetBlockId());
                     if (dst != null && w.getTargetPinIndex() >= 0 && w.getTargetPinIndex() < dst.getInputs().size()) {
                         String defId = dst.getDefinitionId();
-                        if ("IO.DO".equals(defId) || "IO.AO".equals(defId)) {
-                            addGpioToken(dst.getInputs().get(w.getTargetPinIndex()).getShortName(), di, dOut, ai, ao);
+                        if ("IO.OREF".equals(defId)) {
+                            addGpioToken(dst.getIoRefLabel(), di, dOut, ai, ao);
                         }
                     }
                 }

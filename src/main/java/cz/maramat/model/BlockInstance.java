@@ -2,8 +2,12 @@ package cz.maramat.model;
 
 import cz.maramat.model.BlockDefinition.PinSpec;
 
+import java.awt.Font;
+import java.awt.FontMetrics;
+import java.awt.Graphics2D;
 import java.awt.Point;
 import java.awt.geom.Point2D;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -13,6 +17,16 @@ import java.util.UUID;
 public class BlockInstance {
     public static final int HEADER_GRID_HEIGHT = 2;
     public static final int PIN_COL_GRID_WIDTH = 2;
+    private static final int BASE_GRID_PX = 10;
+    private static final FontMetrics BASE_PIN_METRICS = createBasePinMetrics();
+
+    private static FontMetrics createBasePinMetrics() {
+        BufferedImage img = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = img.createGraphics();
+        FontMetrics fm = g2.getFontMetrics(new Font("Segoe UI", Font.PLAIN, BASE_GRID_PX - 2));
+        g2.dispose();
+        return fm;
+    }
 
     private String id;
     private String definitionId;
@@ -73,19 +87,10 @@ public class BlockInstance {
             }
             customProperties.put("DataType", dt.name());
         }
-        if (definitionId.equals("IO.8xDI") || definitionId.equals("IO.8xDO")) {
-            String prefix = definitionId.endsWith("DI") ? "PA" : "PB";
-            for (int i = 0; i < 8; i++) {
-                customProperties.put("Pin" + i, prefix + i);
-            }
-        } else if (definitionId.equals("IO.DI")) {
+        if (definitionId.equals("IO.IREF")) {
             customProperties.put("Channel", "DI0");
-        } else if (definitionId.equals("IO.DO")) {
+        } else if (definitionId.equals("IO.OREF")) {
             customProperties.put("Channel", "DO0");
-        } else if (definitionId.equals("IO.AI")) {
-            customProperties.put("Channel", "AI0");
-        } else if (definitionId.equals("IO.AO")) {
-            customProperties.put("Channel", "AO0");
         } else if (definitionId.equals("IO.PWM")) {
             customProperties.put("Channel", "PWM0");
         } else if (definitionId.startsWith("IO.")) {
@@ -156,7 +161,48 @@ public class BlockInstance {
         return clone;
     }
 
+    public boolean isIoRef() {
+        return "IO.IREF".equals(definitionId) || "IO.OREF".equals(definitionId);
+    }
+
+    public boolean isInputRef() {
+        return "IO.IREF".equals(definitionId);
+    }
+
+    public boolean isOutputRef() {
+        return "IO.OREF".equals(definitionId);
+    }
+
+    public String getIoRefLabel() {
+        String ch = customProperties.get("Channel");
+        if (ch != null && !ch.isBlank()) {
+            return ch.trim();
+        }
+        return name != null ? name : "";
+    }
+
+    public int getIoRefBodyGridWidth() {
+        String label = getIoRefLabel();
+        int textPx = BASE_PIN_METRICS.stringWidth(label);
+        return Math.max(2, (int) Math.ceil((textPx + 8.0) / BASE_GRID_PX));
+    }
+
+    public void setIoRefChannel(String channel) {
+        String ch = channel != null ? channel.trim() : "";
+        customProperties.put("Channel", ch);
+        String upper = ch.toUpperCase();
+        DataType dt = (upper.startsWith("AI") || upper.startsWith("AO")) ? DataType.INT : DataType.BOOL;
+        if (isInputRef() && !outputs.isEmpty()) {
+            outputs.getFirst().setDataType(dt);
+        } else if (isOutputRef() && !inputs.isEmpty()) {
+            inputs.getFirst().setDataType(dt);
+        }
+    }
+
     public int getGridWidth() {
+        if (isIoRef()) {
+            return getIoRefBodyGridWidth() + 1;
+        }
         if (definitionId.startsWith("Visual.Vars.")) {
             return courtyardGridWidth + 1;
         }
@@ -164,11 +210,17 @@ public class BlockInstance {
     }
 
     public int getBodyGridHeight() {
+        if (isIoRef()) {
+            return 1;
+        }
         int pinRows = Math.max(inputs.size(), outputs.size());
         return Math.max(minBodyGridHeight, Math.max(2, pinRows));
     }
 
     public int getGridHeight() {
+        if (isIoRef()) {
+            return 1;
+        }
         return HEADER_GRID_HEIGHT + getBodyGridHeight();
     }
 
@@ -176,6 +228,9 @@ public class BlockInstance {
      * Returns the grid point where a wire connects to the center of the given input pin (offset by 0.5).
      */
     public Point2D.Double getInputPinAnchorGrid(int pinIndex) {
+        if (isIoRef()) {
+            return new Point2D.Double(gridX, gridY + 0.5);
+        }
         return new Point2D.Double(gridX, gridY + HEADER_GRID_HEIGHT + pinIndex + 0.5);
     }
 
@@ -183,6 +238,9 @@ public class BlockInstance {
      * Returns the grid point where a wire connects to the center of the given output pin (offset by 0.5).
      */
     public Point2D.Double getOutputPinAnchorGrid(int pinIndex) {
+        if (isIoRef()) {
+            return new Point2D.Double(gridX + getGridWidth(), gridY + 0.5);
+        }
         return new Point2D.Double(gridX + getGridWidth(), gridY + HEADER_GRID_HEIGHT + pinIndex + 0.5);
     }
 
