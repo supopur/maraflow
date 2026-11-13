@@ -2,6 +2,8 @@ package cz.maramat.ui;
 
 import cz.maramat.compiler.BytecodeCompiler;
 import cz.maramat.compiler.BytecodeCompiler.CompilationReport;
+import cz.maramat.help.HelpContext;
+import cz.maramat.help.diagram.HelpCodeExporter;
 import cz.maramat.io.MflProjectSerializer;
 import cz.maramat.model.BlockCatalog;
 import cz.maramat.model.BlockInstance;
@@ -15,6 +17,7 @@ import cz.maramat.settings.AppSettings;
 import cz.maramat.sim.BlockSorter;
 import cz.maramat.sim.BlockSorter.OrderSortMode;
 import cz.maramat.sim.SimulationEngine;
+import cz.maramat.sim.SimulatorBridgeServer;
 import cz.maramat.ui.canvas.FbdCanvas;
 import cz.maramat.ui.canvas.FloatingPageWindow;
 import cz.maramat.ui.canvas.LadderCanvas;
@@ -25,6 +28,7 @@ import cz.maramat.ui.dialogs.CompilationResultsDialog;
 import cz.maramat.ui.dialogs.NewProjectWizardDialog;
 import cz.maramat.ui.dialogs.PlcConfigDialog;
 import cz.maramat.ui.dialogs.SettingsDialog;
+import cz.maramat.ui.help.HelpWindow;
 import cz.maramat.ui.panels.DockableSectionPanel;
 import cz.maramat.ui.panels.HomeScreenPanel;
 import cz.maramat.ui.panels.LibraryTreePanel;
@@ -53,6 +57,7 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.KeyStroke;
+import javax.swing.SwingUtilities;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
@@ -82,6 +87,7 @@ public class MainWindow extends JFrame {
     private boolean projectOpen = false;
     private final UndoManager50 undoManager = new UndoManager50();
     private final SimulationEngine simEngine;
+    private final SimulatorBridgeServer simBridgeServer;
 
     private final CardLayout rootCardLayout = new CardLayout();
     private final JPanel rootCardPanel = new JPanel(rootCardLayout);
@@ -121,6 +127,12 @@ public class MainWindow extends JFrame {
 
         this.simEngine = new SimulationEngine(this::onSimulationTickUiUpdate);
         this.simEngine.addScopeListener(scopePanel::recordSample);
+        this.simBridgeServer = new SimulatorBridgeServer(
+                this.simEngine,
+                () -> this.project,
+                () -> SwingUtilities.invokeLater(this::onRemoteSimStateChanged)
+        );
+        this.simBridgeServer.startQuietly(SimulatorBridgeServer.DEFAULT_PORT);
 
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
@@ -361,6 +373,42 @@ public class MainWindow extends JFrame {
         return project.getPages().get(idx).getLanguage() == IecLanguage.ST;
     }
 
+    private void actionCopyHelpCode() {
+        if (project == null || project.getPages().isEmpty()) return;
+        int idx = Math.clamp(pageTabBar.getActivePageIndex(), 0, project.getPages().size() - 1);
+        Page activePage = project.getPages().get(idx);
+        boolean includeLive = simEngine.getState() != SimulationEngine.State.STOPPED;
+
+        String exported;
+        if (activePage.getLanguage() == IecLanguage.LD) {
+            exported = HelpCodeExporter.exportLd(activePage, includeLive);
+        } else if (activePage.getLanguage() == IecLanguage.ST) {
+            exported = HelpCodeExporter.exportSt(activePage.getStCode());
+        } else {
+            exported = HelpCodeExporter.exportFbd(
+                    activePage,
+                    fbdCanvas.getSelectedBlockIds(),
+                    fbdCanvas.getSelectedGraphicIds(),
+                    includeLive
+            );
+        }
+
+        if (exported == null || exported.isBlank()) {
+            JOptionPane.showMessageDialog(this, "Nothing to export on the active page.", "Copy Help Code", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new java.awt.datatransfer.StringSelection(exported), null);
+        JOptionPane.showMessageDialog(this, "Help Markdown code copied to clipboard.", "Copy Help Code", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    private void onRemoteSimStateChanged() {
+        if (editorToolbar != null) {
+            editorToolbar.updateSimState(simEngine.getState());
+            editorToolbar.updateEStopButtonVisual(simEngine.isEStopActive());
+        }
+        onSimulationTickUiUpdate();
+    }
+
     private void onSimulationTickUiUpdate() {
         if (fbdCanvas != null) {
             fbdCanvas.repaint();
@@ -563,6 +611,14 @@ public class MainWindow extends JFrame {
         findItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_F, menuMask));
         findItem.addActionListener(e -> actionFind());
         editMenu.add(findItem);
+
+        editMenu.addSeparator();
+
+        JMenuItem copyHelpCodeItem = new JMenuItem("Copy Help Code");
+        copyHelpCodeItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_C, menuMask | java.awt.event.InputEvent.SHIFT_DOWN_MASK));
+        copyHelpCodeItem.addActionListener(e -> actionCopyHelpCode());
+        editMenu.add(copyHelpCodeItem);
+
         bar.add(editMenu);
 
         // 3. View
@@ -762,6 +818,28 @@ public class MainWindow extends JFrame {
 
         // 8. Help
         JMenu helpMenu = new JMenu("Help");
+        JMenuItem contentsItem = new JMenuItem("Help Contents");
+        contentsItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_F1, 0));
+        contentsItem.addActionListener(e -> HelpWindow.open(
+                this,
+                HelpContext.resolvePageId(fbdCanvas, libraryTreePanel, stEditorPanel, ladderCanvas)
+        ));
+        HelpWindow.setOpenStSnippetHandler(code -> javax.swing.SwingUtilities.invokeLater(() -> {
+            if (project == null) {
+                JOptionPane.showMessageDialog(this, "Open or create a project first.", "Maraflow", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            pageTabBar.addNewPageWithLanguage(false, IecLanguage.ST);
+            int idx = Math.clamp(pageTabBar.getActivePageIndex(), 0, project.getPages().size() - 1);
+            Page active = project.getPages().get(idx);
+            if (active != null && active.getLanguage() == IecLanguage.ST) {
+                active.setStCode(code);
+                stEditorPanel.setPage(project, active);
+                this.toFront();
+            }
+        }));
+        helpMenu.add(contentsItem);
+        helpMenu.addSeparator();
         JMenuItem aboutItem = new JMenuItem("About Maraflow");
         aboutItem.addActionListener(e -> JOptionPane.showMessageDialog(
                 this,
@@ -1158,6 +1236,9 @@ public class MainWindow extends JFrame {
             } else if (choice != 1) {
                 return;
             }
+        }
+        if (simBridgeServer != null) {
+            simBridgeServer.stop();
         }
         if (simEngine != null && project != null) {
             simEngine.stopSimulation(project);

@@ -206,4 +206,18 @@ public class LibraryTreePanel extends JPanel {
         }
         parent.add(new DefaultMutableTreeNode(def));
     }
+
+    public String getSelectedBlockDefinitionId() {
+        TreePath path = tree.getSelectionPath();
+        if (path == null) return null;
+        if (path.getLastPathComponent() instanceof DefaultMutableTreeNode dmtn
+                && dmtn.getUserObject() instanceof BlockDefinition def) {
+            return def.getId();
+        }
+        return null;
+    }
+
+    public boolean isTreeFocused() {
+        return tree.hasFocus();
+    }
 }

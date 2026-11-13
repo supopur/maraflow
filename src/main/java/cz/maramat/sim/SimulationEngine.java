@@ -86,22 +86,29 @@ public class SimulationEngine {
         if (operand == null || operand.isBlank()) return 0.0;
         String key = operand.trim();
 
-        // Check if operand is a BlockName.PinName reference
+        // Check if operand is a BlockName.PinName or PageName.StVarName reference
         int dot = key.indexOf('.');
         if (dot > 0 && project != null) {
-            String blockName = key.substring(0, dot);
-            String pinName = key.substring(dot + 1);
+            String left = key.substring(0, dot);
+            String right = key.substring(dot + 1);
             for (Page page : project.getPages()) {
-                BlockInstance b = page.findBlockByName(blockName);
+                BlockInstance b = page.findBlockByName(left);
                 if (b != null) {
                     for (PinInstance out : b.getOutputs()) {
-                        if (out.getShortName().equalsIgnoreCase(pinName)) {
+                        if (out.getShortName().equalsIgnoreCase(right)) {
                             return out.getRuntimeValue();
                         }
                     }
                     for (PinInstance in : b.getInputs()) {
-                        if (in.getShortName().equalsIgnoreCase(pinName)) {
+                        if (in.getShortName().equalsIgnoreCase(right)) {
                             return in.getRuntimeValue();
+                        }
+                    }
+                }
+                if (page.getName() != null && page.getName().equalsIgnoreCase(left)) {
+                    for (StVariable stVar : page.getStVariables()) {
+                        if (stVar.getName().equalsIgnoreCase(right)) {
+                            return stVar.getRuntimeValue();
                         }
                     }
                 }
@@ -114,6 +121,17 @@ public class SimulationEngine {
         regVal = virtualRegisters.get(key);
         if (regVal != null) return regVal;
 
+        // Check unqualified ST variables across pages
+        if (project != null) {
+            for (Page page : project.getPages()) {
+                for (StVariable stVar : page.getStVariables()) {
+                    if (stVar.getName().equalsIgnoreCase(key)) {
+                        return stVar.getRuntimeValue();
+                    }
+                }
+            }
+        }
+
         // Otherwise try numeric literal
         try {
             if ("TRUE".equalsIgnoreCase(key)) return 1.0;
@@ -125,11 +143,72 @@ public class SimulationEngine {
     }
 
     public void setOperandValue(String operand, double value) {
+        setOperandValue(null, operand, value);
+    }
+
+    public void setOperandValue(Project project, String operand, double value) {
         if (operand == null || operand.isBlank()) return;
         String key = operand.trim();
         virtualRegisters.put(key, value);
         virtualRegisters.put(key.toUpperCase(), value);
+
+        if (project != null) {
+            int dot = key.indexOf('.');
+            if (dot > 0) {
+                String left = key.substring(0, dot);
+                String right = key.substring(dot + 1);
+                for (Page page : project.getPages()) {
+                    BlockInstance b = page.findBlockByName(left);
+                    if (b != null) {
+                        if (b.getDefinitionId() != null && b.getDefinitionId().startsWith("Visual.Vars.")
+                                && !b.getOutputs().isEmpty()) {
+                            PinInstance out = b.getOutputs().getFirst();
+                            double converted = DataType.convertValue(value, DataType.FLOAT, out.getDataType());
+                            out.setRuntimeValue(converted);
+                            b.getCustomProperties().put("CurrentValue", formatOperandValue(out.getDataType(), converted));
+                        } else {
+                            for (PinInstance out : b.getOutputs()) {
+                                if (out.getShortName().equalsIgnoreCase(right)) {
+                                    out.setRuntimeValue(DataType.convertValue(value, DataType.FLOAT, out.getDataType()));
+                                }
+                            }
+                            for (PinInstance in : b.getInputs()) {
+                                if (in.getShortName().equalsIgnoreCase(right)) {
+                                    in.setRuntimeValue(DataType.convertValue(value, DataType.FLOAT, in.getDataType()));
+                                }
+                            }
+                        }
+                    }
+                    if (page.getName() != null && page.getName().equalsIgnoreCase(left)) {
+                        for (StVariable stVar : page.getStVariables()) {
+                            if (stVar.getName().equalsIgnoreCase(right)) {
+                                stVar.setRuntimeValue(DataType.convertValue(value, DataType.FLOAT, stVar.getDataType()));
+                            }
+                        }
+                    }
+                }
+            } else {
+                for (Page page : project.getPages()) {
+                    for (StVariable stVar : page.getStVariables()) {
+                        if (stVar.getName().equalsIgnoreCase(key)) {
+                            stVar.setRuntimeValue(DataType.convertValue(value, DataType.FLOAT, stVar.getDataType()));
+                        }
+                    }
+                }
+            }
+        }
+
         requestUiRepaint();
+    }
+
+    private static String formatOperandValue(DataType type, double value) {
+        if (type == DataType.BOOL) {
+            return (value != 0.0) ? "1" : "0";
+        }
+        if (type == DataType.INT || type == DataType.LONG) {
+            return Long.toString(Math.round(value));
+        }
+        return Double.toString(value);
     }
 
     public void toggleBooleanOperand(Project project, String operand) {

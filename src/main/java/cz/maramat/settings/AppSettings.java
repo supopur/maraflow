@@ -43,6 +43,9 @@ public final class AppSettings {
     private boolean stGutterMarkers = true;
     private boolean stSquigglyUnderlines = true;
 
+    // Help
+    private String helpLanguage = "auto"; // "auto", "en", "cs"
+
     private final List<Runnable> listeners = new ArrayList<>();
 
     private AppSettings() {}
@@ -248,5 +251,25 @@ public final class AppSettings {
 
     public void setStSquigglyUnderlines(boolean stSquigglyUnderlines) {
         this.stSquigglyUnderlines = stSquigglyUnderlines;
+    }
+
+    public String getHelpLanguage() {
+        return helpLanguage;
+    }
+
+    public void setHelpLanguage(String helpLanguage) {
+        if ("en".equals(helpLanguage) || "cs".equals(helpLanguage)) {
+            this.helpLanguage = helpLanguage;
+        } else {
+            this.helpLanguage = "auto";
+        }
+    }
+
+    public String resolveHelpLocale() {
+        if ("en".equals(helpLanguage) || "cs".equals(helpLanguage)) {
+            return helpLanguage;
+        }
+        String lang = java.util.Locale.getDefault().getLanguage();
+        return "cs".equalsIgnoreCase(lang) ? "cs" : "en";
     }
 }

@@ -1783,4 +1783,34 @@ public class StEditorPanel extends JPanel {
             }
         }
     }
+
+    public boolean isEditorFocused() {
+        return codePane.hasFocus();
+    }
+
+    public String getWordAtCaret() {
+        String sel = codePane.getSelectedText();
+        if (sel != null && !sel.isBlank()) {
+            return sel.trim();
+        }
+        try {
+            String text = codePane.getDocument().getText(0, codePane.getDocument().getLength());
+            int pos = Math.min(codePane.getCaretPosition(), text.length());
+            int start = pos;
+            while (start > 0 && isIdentChar(text.charAt(start - 1))) {
+                start--;
+            }
+            int end = pos;
+            while (end < text.length() && isIdentChar(text.charAt(end))) {
+                end++;
+            }
+            return text.substring(start, end).trim();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private static boolean isIdentChar(char c) {
+        return Character.isLetterOrDigit(c) || c == '_';
+    }
 }

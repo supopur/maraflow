@@ -117,9 +117,19 @@ public class CompilationResultsDialog extends JDialog {
             dispose();
         });
 
+        JButton errRefBtn = new JButton("Error Reference");
+        errRefBtn.setPreferredSize(new Dimension(130, 28));
+        errRefBtn.addActionListener(e -> {
+            Frame ownerFrame = getOwner() instanceof Frame f ? f : null;
+            nextAction = NextAction.NONE;
+            dispose();
+            cz.maramat.ui.help.HelpWindow.open(ownerFrame, "reference/errors");
+        });
+
         bottomBar.add(closeBtn);
         bottomBar.add(uploadBtn);
         bottomBar.add(uploadWatchBtn);
+        bottomBar.add(errRefBtn);
         root.add(bottomBar, BorderLayout.SOUTH);
 
         getRootPane().setDefaultButton(closeBtn);

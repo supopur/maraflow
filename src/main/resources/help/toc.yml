@@ -1,0 +1,56 @@
+- section: getting-started
+  title_en: Getting Started
+  title_cs: Začínáme
+  items:
+    - getting-started/scan-cycle
+    - getting-started/first-latch
+    - getting-started/boolean-algebra
+    - getting-started/binary-adder
+    - getting-started/seven-segment-driver
+    - getting-started/timers-and-edges
+    - getting-started/traffic-light
+    - getting-started/simulate
+    - getting-started/upload
+    - getting-started/glossary
+
+- section: concepts
+  title_en: Concepts
+  title_cs: Koncepty
+  items:
+    - concepts/fbd-ld-st
+    - concepts/data-types
+    - concepts/execution-order
+
+- section: editor
+  title_en: Editor
+  title_cs: Editor
+  items:
+    - editor/fbd-canvas
+    - editor/pages-and-macros
+    - editor/shortcuts
+
+- section: st
+  title_en: Structured Text (ST)
+  title_cs: Strukturovaný text (ST)
+  items:
+    - st/tutorial
+    - st/syntax
+    - st/keywords
+
+- section: ld
+  title_en: Ladder Diagram (LD)
+  title_cs: Žebříčkové schéma (LD)
+  items:
+    - ld/basics
+
+- section: reference
+  title_en: Reference
+  title_cs: Reference
+  items:
+    - reference/errors
+    - reference/memory
+
+- section: blocks
+  title_en: Blocks
+  title_cs: Bloky
+  auto: blocks

@@ -312,4 +312,18 @@ public class Wire {
     public List<Point2D.Double> getGridPoints() {
         return gridPoints;
     }
+
+    public boolean isUserEditedRoute() {
+        return userEditedRoute;
+    }
+
+    public void setManualRoute(List<Point2D.Double> points) {
+        gridPoints.clear();
+        if (points != null) {
+            for (Point2D.Double p : points) {
+                gridPoints.add(new Point2D.Double(p.x, p.y));
+            }
+        }
+        this.userEditedRoute = true;
+    }
 }
