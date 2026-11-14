@@ -198,8 +198,8 @@ public final class BytecodeCompiler {
                 BlockInstance src = page.findBlockById(w.getSourceBlockId());
                 BlockInstance dst = page.findBlockById(w.getTargetBlockId());
                 if (src != null && dst != null
-                        && w.getSourcePinIndex() < src.getOutputs().size()
-                        && w.getTargetPinIndex() < dst.getInputs().size()) {
+                        && w.getSourcePinIndex() >= 0 && w.getSourcePinIndex() < src.getOutputs().size()
+                        && w.getTargetPinIndex() >= 0 && w.getTargetPinIndex() < dst.getInputs().size()) {
                     DataType st = src.getOutputs().get(w.getSourcePinIndex()).getDataType();
                     DataType dt = dst.getInputs().get(w.getTargetPinIndex()).getDataType();
                     if (st != dt) {

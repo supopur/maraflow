@@ -777,7 +777,6 @@ public class SimulationEngine {
             if (updated != null) {
                 double converted = DataType.convertValue(updated, DataType.FLOAT, v.getDataType());
                 v.setRuntimeValue(converted);
-                virtualRegisters.put(v.getName().toUpperCase(), converted);
             }
         }
     }
@@ -1018,7 +1017,7 @@ public class SimulationEngine {
                     BlockInstance srcBlock = (index != null)
                             ? index.blocksById().get(w.getSourceBlockId())
                             : page.findBlockById(w.getSourceBlockId());
-                    if (srcBlock != null && w.getSourcePinIndex() < srcBlock.getOutputs().size()) {
+                    if (srcBlock != null && w.getSourcePinIndex() >= 0 && w.getSourcePinIndex() < srcBlock.getOutputs().size()) {
                         PinInstance outPin = srcBlock.getOutputs().get(w.getSourcePinIndex());
                         if (drivenByVisualButton || drivenExternally) {
                             if (srcBlock.isInputRef()) {
@@ -1588,7 +1587,8 @@ public class SimulationEngine {
             case "Main.Timers.EncodeDate" -> {
                 int yr = (int) (ins.size() > 1 ? ins.get(1).getRuntimeValue() : 2026);
                 int mon = Math.clamp((int) (ins.size() > 2 ? ins.get(2).getRuntimeValue() : 1), 1, 12);
-                int day = Math.clamp((int) (ins.size() > 3 ? ins.get(3).getRuntimeValue() : 1), 1, 31);
+                int maxDay = java.time.YearMonth.of(Math.clamp(yr, 1970, 9999), mon).lengthOfMonth();
+                int day = Math.clamp((int) (ins.size() > 3 ? ins.get(3).getRuntimeValue() : 1), 1, maxDay);
                 int hr = Math.clamp((int) (ins.size() > 4 ? ins.get(4).getRuntimeValue() : 0), 0, 23);
                 int min = Math.clamp((int) (ins.size() > 5 ? ins.get(5).getRuntimeValue() : 0), 0, 59);
                 int sec = Math.clamp((int) (ins.size() > 6 ? ins.get(6).getRuntimeValue() : 0), 0, 59);
@@ -1801,7 +1801,7 @@ public class SimulationEngine {
                 Wire w = rtIndex.wireByTargetPin().get(outBlock.getId() + ":" + i);
                 if (w != null) {
                     BlockInstance srcBlock = rtIndex.blocksById().get(w.getSourceBlockId());
-                    if (srcBlock != null && w.getSourcePinIndex() < srcBlock.getOutputs().size()) {
+                    if (srcBlock != null && w.getSourcePinIndex() >= 0 && w.getSourcePinIndex() < srcBlock.getOutputs().size()) {
                         PinInstance srcOut = srcBlock.getOutputs().get(w.getSourcePinIndex());
                         double converted = DataType.convertValue(srcOut.getRuntimeValue(), srcOut.getDataType(), inPin.getDataType());
                         inPin.setRuntimeValue(converted);

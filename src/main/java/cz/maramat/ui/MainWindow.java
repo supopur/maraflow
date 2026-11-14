@@ -233,6 +233,7 @@ public class MainWindow extends JFrame {
 
             @Override
             public void onPagesStructureChanged() {
+                undoManager.clear();
                 for (FloatingPageWindow fpw : new ArrayList<>(floatingPageWindows)) {
                     if (!project.getPages().contains(fpw.getPage())) {
                         fpw.closeWindow();

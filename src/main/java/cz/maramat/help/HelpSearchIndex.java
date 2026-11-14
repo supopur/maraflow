@@ -1,47 +1,40 @@
 package cz.maramat.help;
 
 import cz.maramat.help.HelpToc.TocNode;
-import org.apache.lucene.analysis.Analyzer;
-import org.apache.lucene.analysis.LowerCaseFilter;
-import org.apache.lucene.analysis.TokenStream;
-import org.apache.lucene.analysis.Tokenizer;
-import org.apache.lucene.analysis.miscellaneous.ASCIIFoldingFilter;
-import org.apache.lucene.analysis.standard.StandardTokenizer;
-import org.apache.lucene.document.Document;
-import org.apache.lucene.document.Field;
-import org.apache.lucene.document.StoredField;
-import org.apache.lucene.document.TextField;
-import org.apache.lucene.index.DirectoryReader;
-import org.apache.lucene.index.IndexWriter;
-import org.apache.lucene.index.IndexWriterConfig;
-import org.apache.lucene.queryparser.classic.MultiFieldQueryParser;
-import org.apache.lucene.queryparser.classic.QueryParser;
-import org.apache.lucene.search.IndexSearcher;
-import org.apache.lucene.search.Query;
-import org.apache.lucene.search.ScoreDoc;
-import org.apache.lucene.search.TopDocs;
-import org.apache.lucene.store.ByteBuffersDirectory;
 
+import java.text.Normalizer;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Lazy in-memory Lucene search index for Help pages (diacritic-insensitive for EN/CZ).
+ * Lazy in-memory search index for Help pages (diacritic-insensitive for EN/CZ).
  */
 public final class HelpSearchIndex {
 
     public record SearchResult(String pageId, String title, String snippet) {}
 
-    private static final Pattern HEADING_PATTERN = Pattern.compile("^#{2,3}\\s+(.+)$", Pattern.MULTILINE);
+    private record IndexedPage(
+            String id,
+            String title,
+            String body,
+            String foldedTitle,
+            String foldedTags,
+            String foldedHeadings,
+            String foldedBody
+    ) {}
 
-    private ByteBuffersDirectory directory;
-    private DirectoryReader reader;
+    private record ScoredPage(IndexedPage page, int score) {}
+
+    private static final Pattern HEADING_PATTERN = Pattern.compile("^#{2,3}\\s+(.+)$", Pattern.MULTILINE);
+    private static final Pattern DIACRITICS = Pattern.compile("\\p{M}+");
+
+    private List<IndexedPage> pages;
     private String indexedLocale;
 
     public synchronized List<SearchResult> search(String rawQuery, String locale, HelpContentManager contentManager) {
@@ -51,111 +44,86 @@ public final class HelpSearchIndex {
         String normLocale = "cs".equals(locale) ? "cs" : "en";
         ensureBuilt(normLocale, contentManager);
 
-        try {
-            IndexSearcher searcher = new IndexSearcher(reader);
-            Analyzer analyzer = createAnalyzer();
-            Map<String, Float> boosts = Map.of(
-                    "title", 4.0f,
-                    "tags", 3.0f,
-                    "headings", 2.0f,
-                    "body", 1.0f
-            );
-            MultiFieldQueryParser parser = new MultiFieldQueryParser(
-                    new String[]{"title", "tags", "headings", "body"},
-                    analyzer,
-                    boosts
-            );
-            parser.setDefaultOperator(QueryParser.Operator.AND);
-
-            String qText = rawQuery.trim();
-            Query query;
-            try {
-                query = parser.parse(qText);
-            } catch (Exception parseEx) {
-                query = parser.parse(QueryParser.escape(qText));
-            }
-
-            TopDocs topDocs = searcher.search(query, 30);
-            if (topDocs.totalHits.value == 0 && !qText.contains("*")) {
-                // Fallback to prefix/escaped query for partial typing
-                String[] terms = qText.split("\\s+");
-                StringBuilder prefixQ = new StringBuilder();
-                for (String t : terms) {
-                    if (!t.isEmpty()) {
-                        if (!prefixQ.isEmpty()) prefixQ.append(' ');
-                        prefixQ.append(QueryParser.escape(t)).append('*');
-                    }
-                }
-                if (!prefixQ.isEmpty()) {
-                    query = parser.parse(prefixQ.toString());
-                    topDocs = searcher.search(query, 30);
-                }
-            }
-
-            List<SearchResult> results = new ArrayList<>();
-            for (ScoreDoc sd : topDocs.scoreDocs) {
-                Document doc = searcher.storedFields().document(sd.doc);
-                String id = doc.get("id");
-                String title = doc.get("title");
-                String body = doc.get("body");
-                results.add(new SearchResult(id, title, makeSnippet(body, qText)));
-            }
-            return results;
-        } catch (Exception e) {
+        String foldedQuery = fold(rawQuery.trim());
+        String[] terms = foldedQuery.split("\\s+");
+        if (terms.length == 0) {
             return List.of();
         }
+
+        List<ScoredPage> matches = new ArrayList<>();
+        for (IndexedPage p : pages) {
+            int score = scorePage(p, terms);
+            if (score > 0) {
+                matches.add(new ScoredPage(p, score));
+            }
+        }
+        matches.sort(Comparator.comparingInt(ScoredPage::score).reversed()
+                .thenComparing(sp -> sp.page().title(), String.CASE_INSENSITIVE_ORDER));
+
+        int limit = Math.min(30, matches.size());
+        List<SearchResult> results = new ArrayList<>(limit);
+        for (int i = 0; i < limit; i++) {
+            IndexedPage p = matches.get(i).page();
+            results.add(new SearchResult(p.id(), p.title(), makeSnippet(p.body(), rawQuery.trim())));
+        }
+        return results;
+    }
+
+    private static int scorePage(IndexedPage p, String[] terms) {
+        int total = 0;
+        for (String term : terms) {
+            if (term.isEmpty()) continue;
+            int termScore = 0;
+            if (p.foldedTitle().contains(term)) termScore += 4;
+            if (p.foldedTags().contains(term)) termScore += 3;
+            if (p.foldedHeadings().contains(term)) termScore += 2;
+            if (p.foldedBody().contains(term)) termScore += 1;
+            if (termScore == 0) {
+                return 0;
+            }
+            total += termScore;
+        }
+        return total;
     }
 
     private void ensureBuilt(String locale, HelpContentManager contentManager) {
-        if (directory != null && reader != null && locale.equals(indexedLocale)) {
+        if (pages != null && locale.equals(indexedLocale)) {
             return;
         }
-        release();
-        try {
-            directory = new ByteBuffersDirectory();
-            Analyzer analyzer = createAnalyzer();
-            IndexWriterConfig cfg = new IndexWriterConfig(analyzer);
-            try (IndexWriter writer = new IndexWriter(directory, cfg)) {
-                TocNode root = HelpToc.load(locale, contentManager);
-                Set<String> pageIds = new LinkedHashSet<>();
-                collectPageIds(root, pageIds);
+        TocNode root = HelpToc.load(locale, contentManager);
+        Set<String> pageIds = new LinkedHashSet<>();
+        collectPageIds(root, pageIds);
 
-                for (String pageId : pageIds) {
-                    HelpPage page = contentManager.loadPage(pageId, locale);
-                    if (page == null) continue;
-                    Document doc = new Document();
-                    doc.add(new StoredField("id", page.id()));
-                    doc.add(new TextField("title", page.title(), Field.Store.YES));
-                    doc.add(new TextField("tags", String.join(" ", page.tags()), Field.Store.NO));
-                    doc.add(new TextField("headings", extractHeadings(page.markdown()), Field.Store.NO));
-                    doc.add(new TextField("body", stripMarkdownNoise(page.markdown()), Field.Store.YES));
-                    writer.addDocument(doc);
-                }
-            }
-            reader = DirectoryReader.open(directory);
-            indexedLocale = locale;
-        } catch (Exception e) {
-            release();
-            throw new IllegalStateException("Failed to build Help search index", e);
+        List<IndexedPage> built = new ArrayList<>(pageIds.size());
+        for (String pageId : pageIds) {
+            HelpPage page = contentManager.loadPage(pageId, locale);
+            if (page == null) continue;
+            String body = stripMarkdownNoise(page.markdown());
+            String headings = extractHeadings(page.markdown());
+            String tags = String.join(" ", page.tags());
+            built.add(new IndexedPage(
+                    page.id(),
+                    page.title(),
+                    body,
+                    fold(page.title()),
+                    fold(tags),
+                    fold(headings),
+                    fold(body)
+            ));
         }
+        pages = built;
+        indexedLocale = locale;
     }
 
     public synchronized void release() {
-        try {
-            if (reader != null) {
-                reader.close();
-                reader = null;
-            }
-        } catch (Exception ignored) {
-        }
-        try {
-            if (directory != null) {
-                directory.close();
-                directory = null;
-            }
-        } catch (Exception ignored) {
-        }
+        pages = null;
         indexedLocale = null;
+    }
+
+    private static String fold(String s) {
+        if (s == null || s.isEmpty()) return "";
+        String norm = Normalizer.normalize(s, Normalizer.Form.NFD);
+        return DIACRITICS.matcher(norm).replaceAll("").toLowerCase(Locale.ROOT);
     }
 
     private static void collectPageIds(TocNode node, Set<String> out) {
@@ -186,8 +154,8 @@ public final class HelpSearchIndex {
 
     private static String makeSnippet(String body, String query) {
         if (body == null || body.isBlank()) return "";
-        String lowerBody = body.toLowerCase(Locale.ROOT);
-        String firstTerm = query.toLowerCase(Locale.ROOT).split("\\s+")[0];
+        String lowerBody = fold(body);
+        String firstTerm = fold(query).split("\\s+")[0];
         int idx = lowerBody.indexOf(firstTerm);
         int start = Math.max(0, idx < 0 ? 0 : idx - 35);
         int end = Math.min(body.length(), start + 110);
@@ -195,17 +163,5 @@ public final class HelpSearchIndex {
         if (start > 0) slice = "..." + slice;
         if (end < body.length()) slice = slice + "...";
         return slice;
-    }
-
-    private static Analyzer createAnalyzer() {
-        return new Analyzer() {
-            @Override
-            protected TokenStreamComponents createComponents(String fieldName) {
-                Tokenizer source = new StandardTokenizer();
-                TokenStream filter = new LowerCaseFilter(source);
-                filter = new ASCIIFoldingFilter(filter);
-                return new TokenStreamComponents(source, filter);
-            }
-        };
     }
 }

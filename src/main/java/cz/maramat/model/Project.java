@@ -9,6 +9,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class Project {
     public static final String VERSION = "1.0.0";
@@ -23,7 +24,7 @@ public class Project {
     private IecLanguage primaryLanguage = IecLanguage.FBD;
     private final EStopConfig eStopConfig = new EStopConfig();
     private final UnitConfig unitConfig = new UnitConfig();
-    private final List<Page> pages = new ArrayList<>();
+    private final List<Page> pages = new CopyOnWriteArrayList<>();
     private final Map<String, DataType> symbolicTags = new LinkedHashMap<>();
     private final Map<String, String> symbolicTagDescriptions = new LinkedHashMap<>();
 

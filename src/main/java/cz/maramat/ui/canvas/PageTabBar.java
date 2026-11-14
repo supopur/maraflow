@@ -456,6 +456,7 @@ public class PageTabBar extends JPanel {
             project.getPages().add(idx - 1, p);
             project.setDirty(true);
             setActivePageIndex(idx - 1);
+            listener.onPagesStructureChanged();
         });
         menu.add(moveLeftItem);
 
@@ -466,6 +467,7 @@ public class PageTabBar extends JPanel {
             project.getPages().add(idx + 1, p);
             project.setDirty(true);
             setActivePageIndex(idx + 1);
+            listener.onPagesStructureChanged();
         });
         menu.add(moveRightItem);
 

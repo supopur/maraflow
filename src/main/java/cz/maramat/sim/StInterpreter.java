@@ -1375,11 +1375,21 @@ public final class StInterpreter {
                 }
                 case "LIMIT" -> {
                     requireArgs(up, inputExprs, 3, line);
-                    yield ctx -> Math.clamp(inputExprs.get(1).eval(ctx), inputExprs.get(0).eval(ctx), inputExprs.get(2).eval(ctx));
+                    yield ctx -> {
+                        double lo = inputExprs.get(0).eval(ctx);
+                        double v = inputExprs.get(1).eval(ctx);
+                        double hi = inputExprs.get(2).eval(ctx);
+                        return Math.clamp(v, Math.min(lo, hi), Math.max(lo, hi));
+                    };
                 }
                 case "CLAMP" -> {
                     requireArgs(up, inputExprs, 3, line);
-                    yield ctx -> Math.clamp(inputExprs.get(0).eval(ctx), inputExprs.get(1).eval(ctx), inputExprs.get(2).eval(ctx));
+                    yield ctx -> {
+                        double v = inputExprs.get(0).eval(ctx);
+                        double lo = inputExprs.get(1).eval(ctx);
+                        double hi = inputExprs.get(2).eval(ctx);
+                        return Math.clamp(v, Math.min(lo, hi), Math.max(lo, hi));
+                    };
                 }
                 case "SEL" -> {
                     requireArgs(up, inputExprs, 3, line);

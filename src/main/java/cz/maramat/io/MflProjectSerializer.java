@@ -530,7 +530,7 @@ public final class MflProjectSerializer {
         return project;
     }
 
-    private static LadderElement loadLadderElement(Properties props, String ep, int indexHint) {
+    private static LadderElement loadLadderElement(Properties props, String ep, int indexHint) throws IOException {
         LadderElement.Kind kind = LadderElement.Kind.valueOf(
                 props.getProperty(ep + "kind", LadderElement.Kind.NO_CONTACT.name())
         );
@@ -548,7 +548,7 @@ public final class MflProjectSerializer {
         return el;
     }
 
-    private static BlockInstance loadBlockInstance(Properties props, String bp, int indexHint) {
+    private static BlockInstance loadBlockInstance(Properties props, String bp, int indexHint) throws IOException {
         String defId = props.getProperty(bp + "defId", "Bool.And");
         String savedTypeName = props.getProperty(bp + "typeName", "Block");
         BlockDefinition def = BlockCatalog.getById(defId);
@@ -556,7 +556,7 @@ public final class MflProjectSerializer {
             if (defId.startsWith("Macro.User.")) {
                 def = new BlockDefinition(defId, "Macro", savedTypeName, savedTypeName, List.of(), List.of(), 4, 2, false, false, 15.0);
             } else {
-                def = BlockCatalog.getById("Bool.And");
+                throw new IOException("Unknown block definition: " + defId);
             }
         }
         String name = props.getProperty(bp + "name", "Block" + (indexHint + 1));
