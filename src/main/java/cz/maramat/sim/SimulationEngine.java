@@ -21,13 +21,17 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class SimulationEngine {
     public enum State {
@@ -42,17 +46,23 @@ public class SimulationEngine {
     private volatile boolean manualEStopButtonPressed = false;
     private volatile boolean eStopActive = false;
     private volatile int eStopTrippedMask = 0;
-    private volatile int simulatedInterruptPulseCounter = 0;
+    private final AtomicInteger simulatedInterruptPulseCounter = new AtomicInteger(0);
     private final Map<String, Integer> simulatedInterruptPulseCounters = new ConcurrentHashMap<>();
 
     private final AtomicBoolean workerRunning = new AtomicBoolean(false);
+    private final Object lifecycleLock = new Object();
+    private final Object pauseLock = new Object();
+    private volatile Project activeProject;
     private Thread virtualSimThread;
     private final Map<String, Double> virtualRegisters = new ConcurrentHashMap<>();
     private final Map<String, Page> macroRuntimePages = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, Double>> stPersistentVars = new ConcurrentHashMap<>();
+    private final Map<String, java.util.ArrayDeque<Double>> movingAvgWindows = new ConcurrentHashMap<>();
+    private final Map<String, double[]> arrayRegisters = new ConcurrentHashMap<>();
     private final Map<String, Integer> blockLastInterruptPulseSeen = new ConcurrentHashMap<>();
     private final Map<String, Boolean> blockPendingRstClear = new ConcurrentHashMap<>();
     private final Runnable uiRepaintCallback;
-    private final List<ScopeSampleListener> scopeListeners = new ArrayList<>();
+    private final List<ScopeSampleListener> scopeListeners = new CopyOnWriteArrayList<>();
 
     public interface ScopeSampleListener {
         void onScanCompleted(Project project, double simTimeSeconds);
@@ -63,7 +73,13 @@ public class SimulationEngine {
     }
 
     public void addScopeListener(ScopeSampleListener l) {
-        scopeListeners.add(l);
+        if (l != null && !scopeListeners.contains(l)) {
+            scopeListeners.add(l);
+        }
+    }
+
+    public void removeScopeListener(ScopeSampleListener l) {
+        scopeListeners.remove(l);
     }
 
     public State getState() {
@@ -106,11 +122,20 @@ public class SimulationEngine {
                     }
                 }
                 if (page.getName() != null && page.getName().equalsIgnoreCase(left)) {
-                    for (StVariable stVar : page.getStVariables()) {
-                        if (stVar.getName().equalsIgnoreCase(right)) {
-                            return stVar.getRuntimeValue();
-                        }
+                    StVariable stVar = page.findStVariableByName(right);
+                    if (stVar != null) {
+                        return stVar.getRuntimeValue();
                     }
+                }
+            }
+        }
+
+        // Check ST variables across pages first (single source of truth, O(1) per page)
+        if (project != null) {
+            for (Page page : project.getPages()) {
+                StVariable stVar = page.findStVariableByName(key);
+                if (stVar != null) {
+                    return stVar.getRuntimeValue();
                 }
             }
         }
@@ -120,17 +145,6 @@ public class SimulationEngine {
         if (regVal != null) return regVal;
         regVal = virtualRegisters.get(key);
         if (regVal != null) return regVal;
-
-        // Check unqualified ST variables across pages
-        if (project != null) {
-            for (Page page : project.getPages()) {
-                for (StVariable stVar : page.getStVariables()) {
-                    if (stVar.getName().equalsIgnoreCase(key)) {
-                        return stVar.getRuntimeValue();
-                    }
-                }
-            }
-        }
 
         // Otherwise try numeric literal
         try {
@@ -143,7 +157,7 @@ public class SimulationEngine {
     }
 
     public void setOperandValue(String operand, double value) {
-        setOperandValue(null, operand, value);
+        setOperandValue(activeProject, operand, value);
     }
 
     public void setOperandValue(Project project, String operand, double value) {
@@ -180,25 +194,35 @@ public class SimulationEngine {
                         }
                     }
                     if (page.getName() != null && page.getName().equalsIgnoreCase(left)) {
-                        for (StVariable stVar : page.getStVariables()) {
-                            if (stVar.getName().equalsIgnoreCase(right)) {
-                                stVar.setRuntimeValue(DataType.convertValue(value, DataType.FLOAT, stVar.getDataType()));
-                            }
+                        StVariable stVar = page.findStVariableByName(right);
+                        if (stVar != null) {
+                            double converted = DataType.convertValue(value, DataType.FLOAT, stVar.getDataType());
+                            stVar.setRuntimeValue(converted);
+                            updateStPersistentVar(page, stVar.getName(), converted);
                         }
                     }
                 }
             } else {
                 for (Page page : project.getPages()) {
-                    for (StVariable stVar : page.getStVariables()) {
-                        if (stVar.getName().equalsIgnoreCase(key)) {
-                            stVar.setRuntimeValue(DataType.convertValue(value, DataType.FLOAT, stVar.getDataType()));
-                        }
+                    StVariable stVar = page.findStVariableByName(key);
+                    if (stVar != null) {
+                        double converted = DataType.convertValue(value, DataType.FLOAT, stVar.getDataType());
+                        stVar.setRuntimeValue(converted);
+                        updateStPersistentVar(page, stVar.getName(), converted);
                     }
                 }
             }
         }
 
         requestUiRepaint();
+    }
+
+    private void updateStPersistentVar(Page page, String varName, double converted) {
+        if (page == null || varName == null) return;
+        Map<String, Double> localMap = stPersistentVars.get("PAGE:" + (page.getName() != null ? page.getName() : ""));
+        if (localMap != null) {
+            localMap.put(varName, converted);
+        }
     }
 
     private static String formatOperandValue(DataType type, double value) {
@@ -214,48 +238,77 @@ public class SimulationEngine {
     public void toggleBooleanOperand(Project project, String operand) {
         if (operand == null || operand.isBlank()) return;
         double cur = getOperandValue(project, operand);
-        setOperandValue(operand, (cur != 0.0) ? 0.0 : 1.0);
+        setOperandValue(project, operand, (cur != 0.0) ? 0.0 : 1.0);
     }
 
     public void startSimulation(Project project) {
-        if (state == State.RUNNING) return;
-        if (state == State.STOPPED || state == State.WATCH_MODE) {
-            resetAllBlocks(project);
-        }
-        state = State.RUNNING;
-        if (workerRunning.compareAndSet(false, true)) {
-            virtualSimThread = Thread.ofVirtual().name("Maraflow-Sim-Engine").start(() -> runLoop(project));
+        synchronized (lifecycleLock) {
+            if (state == State.RUNNING) return;
+            this.activeProject = project;
+            if (state == State.STOPPED || state == State.WATCH_MODE) {
+                resetAllBlocks(project);
+            }
+            state = State.RUNNING;
+            synchronized (pauseLock) {
+                pauseLock.notifyAll();
+            }
+            if (workerRunning.compareAndSet(false, true)) {
+                virtualSimThread = Thread.ofVirtual().name("Maraflow-Sim-Engine").start(() -> runLoop(project));
+            }
         }
         requestUiRepaint();
     }
 
     public void pauseSimulation() {
-        if (state == State.RUNNING) {
-            state = State.PAUSED;
-            requestUiRepaint();
+        synchronized (lifecycleLock) {
+            if (state == State.RUNNING) {
+                state = State.PAUSED;
+                requestUiRepaint();
+            }
         }
     }
 
     public void stopSimulation(Project project) {
-        state = State.STOPPED;
-        workerRunning.set(false);
-        if (virtualSimThread != null) {
-            virtualSimThread.interrupt();
+        synchronized (lifecycleLock) {
+            this.activeProject = project;
+            state = State.STOPPED;
+            workerRunning.set(false);
+            synchronized (pauseLock) {
+                pauseLock.notifyAll();
+            }
+            Thread t = virtualSimThread;
+            if (t != null) {
+                t.interrupt();
+                if (t != Thread.currentThread()) {
+                    try {
+                        t.join(250);
+                    } catch (InterruptedException ignored) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                virtualSimThread = null;
+            }
+            resetAllBlocks(project);
         }
-        resetAllBlocks(project);
         requestUiRepaint();
     }
 
     public void enterWatchMode(Project project) {
-        stopSimulation(project);
-        state = State.WATCH_MODE;
-        if (workerRunning.compareAndSet(false, true)) {
-            virtualSimThread = Thread.ofVirtual().name("Maraflow-Watch-Poller").start(() -> runLoop(project));
+        synchronized (lifecycleLock) {
+            stopSimulation(project);
+            this.activeProject = project;
+            state = State.WATCH_MODE;
+            synchronized (pauseLock) {
+                pauseLock.notifyAll();
+            }
+            if (workerRunning.compareAndSet(false, true)) {
+                virtualSimThread = Thread.ofVirtual().name("Maraflow-Watch-Poller").start(() -> runLoop(project));
+            }
         }
         requestUiRepaint();
     }
 
-    public void setManualEStopButtonPressed(boolean pressed) {
+    public synchronized void setManualEStopButtonPressed(boolean pressed) {
         this.manualEStopButtonPressed = pressed;
         if (pressed) {
             this.eStopActive = true;
@@ -264,7 +317,7 @@ public class SimulationEngine {
         requestUiRepaint();
     }
 
-    public void manualResetEStop() {
+    public synchronized void manualResetEStop() {
         this.manualEStopButtonPressed = false;
         this.eStopActive = false;
         this.eStopTrippedMask = 0;
@@ -285,7 +338,7 @@ public class SimulationEngine {
 
     public void fireSimulatedInterruptPulse(String targetSource) {
         if (targetSource == null || "ALL".equalsIgnoreCase(targetSource)) {
-            this.simulatedInterruptPulseCounter++;
+            this.simulatedInterruptPulseCounter.incrementAndGet();
             for (String k : simulatedInterruptPulseCounters.keySet()) {
                 simulatedInterruptPulseCounters.merge(k, 1, Integer::sum);
             }
@@ -314,10 +367,16 @@ public class SimulationEngine {
     private void resetAllBlocks(Project project) {
         virtualRegisters.clear();
         macroRuntimePages.clear();
+        stPersistentVars.clear();
+        movingAvgWindows.clear();
+        arrayRegisters.clear();
         blockLastInterruptPulseSeen.clear();
         blockPendingRstClear.clear();
-        eStopActive = manualEStopButtonPressed;
-        eStopTrippedMask = manualEStopButtonPressed ? 0x8000 : 0;
+        simulatedInterruptPulseCounters.clear();
+        synchronized (this) {
+            eStopActive = manualEStopButtonPressed;
+            eStopTrippedMask = manualEStopButtonPressed ? 0x8000 : 0;
+        }
         if (project == null) return;
 
         // Initialize Active-Low (NC) E-Stop channels to 1.0 (Closed = Safe) by default on reset
@@ -394,6 +453,21 @@ public class SimulationEngine {
         long lastUiRepaintMs = 0L;
 
         while (workerRunning.get()) {
+            if (state != State.RUNNING && state != State.WATCH_MODE) {
+                synchronized (pauseLock) {
+                    while (workerRunning.get() && state != State.RUNNING && state != State.WATCH_MODE) {
+                        try {
+                            pauseLock.wait(100);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                    }
+                }
+                lastWallNs = System.nanoTime();
+                continue;
+            }
+
             try {
                 Thread.sleep(5);
             } catch (InterruptedException e) {
@@ -407,6 +481,7 @@ public class SimulationEngine {
                 continue;
             }
 
+            updateEStopSupervision(project);
             double effectiveMult = (state == State.WATCH_MODE) ? 1.0 : speedMultiplier;
             double simDeltaMs = wallDeltaMs * effectiveMult;
             simTimeSeconds += simDeltaMs / 1000.0;
@@ -435,13 +510,14 @@ public class SimulationEngine {
     }
 
     void stepOnceForTesting(Project project, double dtMs) {
+        this.activeProject = project;
+        updateEStopSupervision(project);
         for (int t = 0; t < 6; t++) {
             executeThreadScan(project, t, dtMs, 0.0);
         }
     }
 
     private void executeThreadScan(Project project, int threadId, double dtMs, double simTimeSeconds) {
-        updateEStopSupervision(project);
         EStopConfig cfg = project.getEStopConfig();
 
         if (eStopActive) {
@@ -486,21 +562,25 @@ public class SimulationEngine {
         }
         if (page.getLanguage() == IecLanguage.ST) {
             if (ignoreThreadFilterForEStop || page.getStThreadId() == threadId) {
-                executeStPageScan(project, page);
+                executeStPageScan(project, page, dtMs);
             }
             return;
         }
 
         // FBD page execution
+        PageScanIndex index = buildPageScanIndex(page);
         for (GraphicElement ge : page.getGraphics()) {
             if (ge.getKind() == GraphicElement.Kind.VISUAL_BUTTON && !ge.getBoundTargetPin().isBlank()) {
-                String[] parts = ge.getBoundTargetPin().split("\\.");
-                if (parts.length == 2) {
-                    BlockInstance targetBlock = page.findBlockByName(parts[0]);
+                String target = ge.getBoundTargetPin();
+                int dot = target.indexOf('.');
+                if (dot > 0) {
+                    String bName = target.substring(0, dot);
+                    String pName = target.substring(dot + 1);
+                    BlockInstance targetBlock = page.findBlockByName(bName);
                     if (targetBlock != null) {
                         for (int i = 0; i < targetBlock.getInputs().size(); i++) {
                             PinInstance pin = targetBlock.getInputs().get(i);
-                            if (pin.getShortName().equalsIgnoreCase(parts[1])) {
+                            if (pin.getShortName().equalsIgnoreCase(pName)) {
                                 pin.setRuntimeValue(ge.isActiveState() ? 1.0 : 0.0);
                             }
                         }
@@ -518,12 +598,41 @@ public class SimulationEngine {
         threadBlocks.sort(Comparator.comparingInt(BlockInstance::getOrder));
 
         for (BlockInstance b : threadBlocks) {
-            evaluateBlock(project, page, b, dtMs, simTimeSeconds, true, 0);
+            evaluateBlock(project, page, index, b, dtMs, simTimeSeconds, true, 0);
         }
     }
 
-    private void executeStPageScan(Project project, Page page) {
-        Map<String, Double> localMap = new LinkedHashMap<>();
+    private record PageScanIndex(
+            Map<String, BlockInstance> blocksById,
+            Map<String, Wire> wireByTargetPin,
+            Set<String> visualButtonTargetsUpper
+    ) {}
+
+    private static PageScanIndex buildPageScanIndex(Page page) {
+        List<BlockInstance> blocks = page.getBlocks();
+        Map<String, BlockInstance> blocksById = new HashMap<>(Math.max(16, blocks.size() * 2));
+        for (BlockInstance b : blocks) {
+            blocksById.put(b.getId(), b);
+        }
+        List<Wire> wires = page.getWires();
+        Map<String, Wire> wireByTargetPin = new HashMap<>(Math.max(16, wires.size() * 2));
+        for (Wire w : wires) {
+            wireByTargetPin.put(w.getTargetBlockId() + ":" + w.getTargetPinIndex(), w);
+        }
+        Set<String> visualTargets = new java.util.HashSet<>();
+        for (GraphicElement ge : page.getGraphics()) {
+            if (ge.getKind() == GraphicElement.Kind.VISUAL_BUTTON && !ge.getBoundTargetPin().isBlank()) {
+                visualTargets.add(ge.getBoundTargetPin().toUpperCase());
+            }
+        }
+        return new PageScanIndex(blocksById, wireByTargetPin, visualTargets);
+    }
+
+    private void executeStPageScan(Project project, Page page, double dtMs) {
+        Map<String, Double> localMap = stPersistentVars.computeIfAbsent(
+                "PAGE:" + (page.getName() != null ? page.getName() : ""),
+                k -> new ConcurrentSkipListMap<>(String.CASE_INSENSITIVE_ORDER)
+        );
         for (StVariable v : page.getStVariables()) {
             if (v.getScope() == StVariable.Scope.VAR_TEMP) {
                 localMap.put(v.getName(), v.getDataType().toNumericValue(v.getInitialValue()));
@@ -540,14 +649,16 @@ public class SimulationEngine {
 
             @Override
             public void writeOperand(String name, double value) {
-                setOperandValue(name, value);
+                setOperandValue(project, name, value);
             }
-        });
+        }, dtMs);
 
         for (StVariable v : page.getStVariables()) {
             Double updated = localMap.get(v.getName());
             if (updated != null) {
-                v.setRuntimeValue(DataType.convertValue(updated, DataType.FLOAT, v.getDataType()));
+                double converted = DataType.convertValue(updated, DataType.FLOAT, v.getDataType());
+                v.setRuntimeValue(converted);
+                virtualRegisters.put(v.getName().toUpperCase(), converted);
             }
         }
     }
@@ -611,7 +722,7 @@ public class SimulationEngine {
             // Rejoin any parallel branches that end at the last column (>= n - 1)
             boolean finalPower = nodePower[n];
             for (LadderBranch br : rung.getParallelBranches()) {
-                if (br.getEndColumn() >= n - 1) {
+                if (br.getEndColumn() >= n - 1 && (n == 0 || br.getStartColumn() < n)) {
                     if (n == 0) {
                         boolean brPower = true;
                         br.setBranchEnergizedIn(true);
@@ -669,13 +780,13 @@ public class SimulationEngine {
                 double val = getOperandValue(project, pin.getConstantValue());
                 pin.setRuntimeValue(val);
             }
-            evaluateBlock(project, page, b, dtMs, simTimeSeconds, false, 0);
+            evaluateBlock(project, page, null, b, dtMs, simTimeSeconds, false, 0);
 
             // Write any bound output pin operands (e.g., AO0, PWM0, REG_0)
             for (PinInstance outPin : b.getOutputs()) {
                 String targetOp = outPin.getConstantValue();
                 if (targetOp != null && !targetOp.isBlank() && !targetOp.equals("0")) {
-                    setOperandValue(targetOp, outPin.getRuntimeValue());
+                    setOperandValue(project, targetOp, outPin.getRuntimeValue());
                 }
             }
 
@@ -704,19 +815,19 @@ public class SimulationEngine {
         String op = coil.getOperand();
         switch (coil.getKind()) {
             case NORMAL_COIL -> {
-                setOperandValue(op, rungPower ? 1.0 : 0.0);
+                setOperandValue(project, op, rungPower ? 1.0 : 0.0);
                 coil.setOperandState(rungPower);
                 coil.setEnergizedOut(rungPower);
             }
             case NEGATED_COIL -> {
                 boolean v = !rungPower;
-                setOperandValue(op, v ? 1.0 : 0.0);
+                setOperandValue(project, op, v ? 1.0 : 0.0);
                 coil.setOperandState(v);
                 coil.setEnergizedOut(v);
             }
             case SET_COIL -> {
                 if (rungPower) {
-                    setOperandValue(op, 1.0);
+                    setOperandValue(project, op, 1.0);
                 }
                 boolean cur = getOperandValue(project, op) != 0.0;
                 coil.setOperandState(cur);
@@ -724,7 +835,7 @@ public class SimulationEngine {
             }
             case RESET_COIL -> {
                 if (rungPower) {
-                    setOperandValue(op, 0.0);
+                    setOperandValue(project, op, 0.0);
                 }
                 boolean cur = getOperandValue(project, op) != 0.0;
                 coil.setOperandState(cur);
@@ -732,20 +843,20 @@ public class SimulationEngine {
             }
             case POS_EDGE_COIL -> {
                 boolean pulse = rungPower && !prev;
-                setOperandValue(op, pulse ? 1.0 : 0.0);
+                setOperandValue(project, op, pulse ? 1.0 : 0.0);
                 coil.setOperandState(pulse);
                 coil.setEnergizedOut(pulse);
             }
             case NEG_EDGE_COIL -> {
                 boolean pulse = !rungPower && prev;
-                setOperandValue(op, pulse ? 1.0 : 0.0);
+                setOperandValue(project, op, pulse ? 1.0 : 0.0);
                 coil.setOperandState(pulse);
                 coil.setEnergizedOut(pulse);
             }
             case ANALOG_COIL -> {
                 double srcVal = getOperandValue(project, coil.getSourceOperand());
                 if (rungPower) {
-                    setOperandValue(op, srcVal);
+                    setOperandValue(project, op, srcVal);
                 }
                 double curOut = getOperandValue(project, op);
                 coil.setNumericRuntimeValue(curOut);
@@ -756,28 +867,38 @@ public class SimulationEngine {
         }
     }
 
-    private void evaluateBlock(Project project, Page page, BlockInstance b, double dtMs, double simTimeSeconds, boolean propagateFbdWires, int depth) {
+    private void evaluateBlock(Project project, Page page, PageScanIndex index, BlockInstance b, double dtMs, double simTimeSeconds, boolean propagateFbdWires, int depth) {
         if (depth > 8) return;
         List<PinInstance> ins = b.getInputs();
         if (propagateFbdWires) {
             for (int i = 0; i < ins.size(); i++) {
                 PinInstance inPin = ins.get(i);
-                Wire w = page.findWireToInputPin(b.getId(), i);
+                Wire w = (index != null)
+                        ? index.wireByTargetPin().get(b.getId() + ":" + i)
+                        : page.findWireToInputPin(b.getId(), i);
                 if (w != null) {
-                    BlockInstance srcBlock = page.findBlockById(w.getSourceBlockId());
+                    BlockInstance srcBlock = (index != null)
+                            ? index.blocksById().get(w.getSourceBlockId())
+                            : page.findBlockById(w.getSourceBlockId());
                     if (srcBlock != null && w.getSourcePinIndex() < srcBlock.getOutputs().size()) {
                         PinInstance outPin = srcBlock.getOutputs().get(w.getSourcePinIndex());
                         double converted = DataType.convertValue(outPin.getRuntimeValue(), outPin.getDataType(), inPin.getDataType());
                         inPin.setRuntimeValue(converted);
                     }
                 } else {
-                    boolean drivenByVisualButton = false;
-                    String targetRef = b.getName() + "." + inPin.getShortName();
-                    for (GraphicElement ge : page.getGraphics()) {
-                        if (ge.getKind() == GraphicElement.Kind.VISUAL_BUTTON
-                                && ge.getBoundTargetPin().equalsIgnoreCase(targetRef)) {
-                            drivenByVisualButton = true;
-                            break;
+                    boolean drivenByVisualButton;
+                    if (index != null) {
+                        drivenByVisualButton = !index.visualButtonTargetsUpper().isEmpty()
+                                && index.visualButtonTargetsUpper().contains((b.getName() + "." + inPin.getShortName()).toUpperCase());
+                    } else {
+                        drivenByVisualButton = false;
+                        String targetRef = b.getName() + "." + inPin.getShortName();
+                        for (GraphicElement ge : page.getGraphics()) {
+                            if (ge.getKind() == GraphicElement.Kind.VISUAL_BUTTON
+                                    && ge.getBoundTargetPin().equalsIgnoreCase(targetRef)) {
+                                drivenByVisualButton = true;
+                                break;
+                            }
                         }
                     }
                     if (!drivenByVisualButton) {
@@ -800,7 +921,7 @@ public class SimulationEngine {
             boolean shouldWrite = trigMode.startsWith("Rising") ? enRisingEdge : enHigh;
             if (shouldWrite && ins.size() > 1) {
                 double val = ins.get(1).getRuntimeValue();
-                setOperandValue(regName, val);
+                setOperandValue(project, regName, val);
                 if (!b.getOutputs().isEmpty()) {
                     PinInstance outPin = b.getOutputs().getFirst();
                     outPin.setRuntimeValue(DataType.convertValue(val, ins.get(1).getDataType(), outPin.getDataType()));
@@ -854,13 +975,13 @@ public class SimulationEngine {
                 if (!ins.isEmpty()) {
                     PinInstance inPin = ins.getFirst();
                     double val = inPin.getRuntimeValue();
-                    setOperandValue(ch, inPin.getDataType() == DataType.BOOL ? (val != 0.0 ? 1.0 : 0.0) : val);
+                    setOperandValue(project, ch, inPin.getDataType() == DataType.BOOL ? (val != 0.0 ? 1.0 : 0.0) : val);
                 }
             }
             case "IO.PWM" -> {
                 String ch = b.getCustomProperties().getOrDefault("Channel", "PWM0");
                 double duty = ins.size() > 2 ? ins.get(2).getRuntimeValue() : 0.0;
-                setOperandValue(ch, duty);
+                setOperandValue(project, ch, duty);
                 if (!outs.isEmpty()) {
                     outs.getFirst().setRuntimeValue(duty > 0.0 ? 1.0 : 0.0);
                 }
@@ -1011,12 +1132,112 @@ public class SimulationEngine {
                 double scaled = (Math.abs(span) < 1e-12) ? oLo : (oLo + ((inVal - iLo) / span) * (oHi - oLo));
                 outs.getFirst().setRuntimeValue(DataType.convertValue(scaled, DataType.FLOAT, outs.getFirst().getDataType()));
             }
+            case "Math.PID" -> {
+                double pv = ins.size() > 1 ? ins.get(1).getRuntimeValue() : 0.0;
+                double sp = ins.size() > 2 ? ins.get(2).getRuntimeValue() : 0.0;
+                double kp = ins.size() > 3 ? ins.get(3).getRuntimeValue() : 1.0;
+                double ki = ins.size() > 4 ? ins.get(4).getRuntimeValue() : 0.0;
+                double kd = ins.size() > 5 ? ins.get(5).getRuntimeValue() : 0.0;
+                boolean rst = ins.size() > 6 && ins.get(6).getRuntimeValue() != 0.0;
+                double dtSec = Math.max(0.001, dtMs / 1000.0);
+                double err = sp - pv;
+                double integral = rst ? 0.0 : (b.getInternalState1() + err * dtSec);
+                double prevErr = rst ? err : b.getInternalState2();
+                double deriv = (err - prevErr) / dtSec;
+                b.setInternalState1(integral);
+                b.setInternalState2(err);
+                if (!outs.isEmpty()) {
+                    outs.getFirst().setRuntimeValue(kp * err + ki * integral + kd * deriv);
+                }
+            }
             case "Main.Comparators.EQ" -> outs.getFirst().setRuntimeValue(Math.abs(ins.get(1).getRuntimeValue() - ins.get(2).getRuntimeValue()) < 1e-6 ? 1.0 : 0.0);
             case "Main.Comparators.NE" -> outs.getFirst().setRuntimeValue(Math.abs(ins.get(1).getRuntimeValue() - ins.get(2).getRuntimeValue()) >= 1e-6 ? 1.0 : 0.0);
             case "Main.Comparators.GT" -> outs.getFirst().setRuntimeValue(ins.get(1).getRuntimeValue() > ins.get(2).getRuntimeValue() ? 1.0 : 0.0);
             case "Main.Comparators.GE" -> outs.getFirst().setRuntimeValue(ins.get(1).getRuntimeValue() >= ins.get(2).getRuntimeValue() ? 1.0 : 0.0);
             case "Main.Comparators.LT" -> outs.getFirst().setRuntimeValue(ins.get(1).getRuntimeValue() < ins.get(2).getRuntimeValue() ? 1.0 : 0.0);
             case "Main.Comparators.LE" -> outs.getFirst().setRuntimeValue(ins.get(1).getRuntimeValue() <= ins.get(2).getRuntimeValue() ? 1.0 : 0.0);
+            case "Main.Comparators.InRange" -> {
+                double in = ins.get(1).getRuntimeValue();
+                double min = ins.get(2).getRuntimeValue();
+                double max = ins.get(3).getRuntimeValue();
+                double lo = Math.min(min, max);
+                double hi = Math.max(min, max);
+                outs.getFirst().setRuntimeValue((in >= lo && in <= hi) ? 1.0 : 0.0);
+            }
+            case "Main.Comparators.Hysteresis" -> {
+                double in = ins.get(1).getRuntimeValue();
+                double lo = ins.get(2).getRuntimeValue();
+                double hi = ins.get(3).getRuntimeValue();
+                boolean q = b.getInternalState1() != 0.0;
+                if (in >= hi) q = true;
+                else if (in <= lo) q = false;
+                b.setInternalState1(q ? 1.0 : 0.0);
+                outs.getFirst().setRuntimeValue(q ? 1.0 : 0.0);
+            }
+            case "Main.Filters.MovingAvg" -> {
+                double in = ins.get(1).getRuntimeValue();
+                boolean rst = ins.size() > 2 && ins.get(2).getRuntimeValue() != 0.0;
+                int winSize = 8;
+                try {
+                    winSize = Math.max(1, Math.min(256, Integer.parseInt(b.getCustomProperties().getOrDefault("WindowSize", "8").trim())));
+                } catch (NumberFormatException ignored) {}
+                java.util.ArrayDeque<Double> win = movingAvgWindows.computeIfAbsent(b.getId(), k -> new java.util.ArrayDeque<>());
+                if (rst) win.clear();
+                win.addLast(in);
+                while (win.size() > winSize) win.removeFirst();
+                double sum = 0.0;
+                for (double v : win) sum += v;
+                outs.getFirst().setRuntimeValue(win.isEmpty() ? in : sum / win.size());
+            }
+            case "Main.Filters.LowPass" -> {
+                double in = ins.get(1).getRuntimeValue();
+                double alpha = Math.clamp(ins.get(2).getRuntimeValue(), 0.0, 1.0);
+                double y;
+                if (b.getInternalState2() < 0.5) {
+                    y = in;
+                    b.setInternalState2(1.0);
+                } else {
+                    double prev = b.getInternalState1();
+                    y = prev + alpha * (in - prev);
+                }
+                b.setInternalState1(y);
+                outs.getFirst().setRuntimeValue(y);
+            }
+            case "Main.Filters.Debounce" -> {
+                boolean in = ins.get(1).getRuntimeValue() != 0.0;
+                double tMs = Math.max(0.0, ins.get(2).getRuntimeValue());
+                boolean outState = b.getInternalState2() != 0.0;
+                double et = b.getInternalState1();
+                if (in != outState) {
+                    et += dtMs;
+                    if (et >= tMs) {
+                        outState = in;
+                        et = 0.0;
+                    }
+                } else {
+                    et = 0.0;
+                }
+                b.setInternalState1(et);
+                b.setInternalState2(outState ? 1.0 : 0.0);
+                outs.getFirst().setRuntimeValue(outState ? 1.0 : 0.0);
+            }
+            case "Main.Arrays.ArrayRead" -> {
+                String arrName = b.getCustomProperties().getOrDefault("ArrayName", "ARR_0");
+                double[] arr = arrayRegisters.computeIfAbsent(arrName, k -> new double[64]);
+                int idx = (int) Math.floor(ins.get(1).getRuntimeValue());
+                boolean oob = idx < 0 || idx >= arr.length;
+                if (outs.size() > 0) outs.get(0).setRuntimeValue(oob ? 0.0 : DataType.convertValue(arr[idx], DataType.FLOAT, outs.get(0).getDataType()));
+                if (outs.size() > 1) outs.get(1).setRuntimeValue(oob ? 1.0 : 0.0);
+            }
+            case "Main.Arrays.ArrayWrite" -> {
+                String arrName = b.getCustomProperties().getOrDefault("ArrayName", "ARR_0");
+                double[] arr = arrayRegisters.computeIfAbsent(arrName, k -> new double[64]);
+                int idx = (int) Math.floor(ins.get(1).getRuntimeValue());
+                double val = ins.size() > 2 ? ins.get(2).getRuntimeValue() : 0.0;
+                boolean oob = idx < 0 || idx >= arr.length;
+                if (!oob) arr[idx] = val;
+                if (!outs.isEmpty()) outs.getFirst().setRuntimeValue(oob ? 1.0 : 0.0);
+            }
             case "Main.Switches.Sel" -> {
                 boolean g = ins.get(1).getRuntimeValue() != 0.0;
                 outs.getFirst().setRuntimeValue(g ? ins.get(3).getRuntimeValue() : ins.get(2).getRuntimeValue());
@@ -1029,17 +1250,53 @@ public class SimulationEngine {
                     outs.getFirst().setRuntimeValue(ins.get(2 + idx).getRuntimeValue());
                 }
             }
+            case "Main.Switches.Demux" -> {
+                int adr = (int) ins.get(1).getRuntimeValue();
+                double in = ins.size() > 2 ? ins.get(2).getRuntimeValue() : 0.0;
+                for (int i = 0; i < outs.size(); i++) {
+                    outs.get(i).setRuntimeValue(i == adr ? in : 0.0);
+                }
+            }
             case "Main.Timers.Timer" -> {
                 boolean in = ins.get(1).getRuntimeValue() != 0.0;
                 double pt = Math.max(0.0, ins.get(2).getRuntimeValue());
+                String mode = b.getCustomProperties().getOrDefault("TimerMode", "TON").trim().toUpperCase();
                 double et = b.getInternalState1();
-                if (in) {
-                    et = Math.min(pt, et + dtMs);
+                boolean qOut;
+                if ("TOF".equals(mode)) {
+                    if (in) {
+                        et = 0.0;
+                    } else if (et < pt) {
+                        et = Math.min(pt, et + dtMs);
+                    }
+                    qOut = in || et < pt;
+                } else if ("TP".equals(mode)) {
+                    boolean prevIn = b.isPrevTriggerState();
+                    b.setPrevTriggerState(in);
+                    boolean active = b.getInternalState2() != 0.0;
+                    if (!active && in && !prevIn) {
+                        active = true;
+                        et = 0.0;
+                    }
+                    if (active) {
+                        et += dtMs;
+                        if (et >= pt) {
+                            active = false;
+                            et = pt;
+                        }
+                    }
+                    b.setInternalState2(active ? 1.0 : 0.0);
+                    qOut = active;
                 } else {
-                    et = 0.0;
+                    if (in) {
+                        et = Math.min(pt, et + dtMs);
+                    } else {
+                        et = 0.0;
+                    }
+                    qOut = in && et >= pt;
                 }
                 b.setInternalState1(et);
-                outs.get(0).setRuntimeValue((in && et >= pt) ? 1.0 : 0.0);
+                outs.get(0).setRuntimeValue(qOut ? 1.0 : 0.0);
                 outs.get(1).setRuntimeValue((int) et);
             }
             case "Main.Timers.PulseGen" -> {
@@ -1117,6 +1374,20 @@ public class SimulationEngine {
                 if (outs.size() > 4) outs.get(4).setRuntimeValue(dt.getMinute());
                 if (outs.size() > 5) outs.get(5).setRuntimeValue(dt.getSecond());
             }
+            case "Main.Timers.EncodeDate" -> {
+                int yr = (int) (ins.size() > 1 ? ins.get(1).getRuntimeValue() : 2026);
+                int mon = Math.clamp((int) (ins.size() > 2 ? ins.get(2).getRuntimeValue() : 1), 1, 12);
+                int day = Math.clamp((int) (ins.size() > 3 ? ins.get(3).getRuntimeValue() : 1), 1, 28);
+                int hr = Math.clamp((int) (ins.size() > 4 ? ins.get(4).getRuntimeValue() : 0), 0, 23);
+                int min = Math.clamp((int) (ins.size() > 5 ? ins.get(5).getRuntimeValue() : 0), 0, 59);
+                int sec = Math.clamp((int) (ins.size() > 6 ? ins.get(6).getRuntimeValue() : 0), 0, 59);
+                try {
+                    long epoch = ZonedDateTime.of(yr, mon, day, hr, min, sec, 0, ZoneOffset.UTC).toEpochSecond();
+                    outs.getFirst().setRuntimeValue(DataType.convertValue(epoch, DataType.LONG, outs.getFirst().getDataType()));
+                } catch (Exception ignored) {
+                    outs.getFirst().setRuntimeValue(0.0);
+                }
+            }
             case "Main.Conversion.PackBits" -> {
                 long packed = 0;
                 for (int i = 1; i < ins.size(); i++) {
@@ -1173,7 +1444,7 @@ public class SimulationEngine {
         boolean eventTriggered = false;
         double capturedValue = simPulseVal;
 
-        int globalCount = this.simulatedInterruptPulseCounter;
+        int globalCount = this.simulatedInterruptPulseCounter.get();
         int specificCount = simulatedInterruptPulseCounters.getOrDefault(source.toUpperCase(), 0);
         int currentPulseCount = globalCount + specificCount;
         int prevPulseCount = blockLastInterruptPulseSeen.getOrDefault(b.getId(), currentPulseCount);
@@ -1242,7 +1513,7 @@ public class SimulationEngine {
         if (macroDefPage == null) return;
 
         if (macroDefPage.getLanguage() == IecLanguage.ST) {
-            evaluateStMacroBlock(project, macroDefPage, macroBlock);
+            evaluateStMacroBlock(project, macroDefPage, macroBlock, dtMs);
             return;
         }
 
@@ -1253,6 +1524,7 @@ public class SimulationEngine {
             }
             return existing;
         });
+        PageScanIndex rtIndex = buildPageScanIndex(rtPage);
 
         // 1. Copy macro instance input pins (after En at index 0) into MacroIn block outputs on rtPage
         List<BlockInstance> macroInBlocks = new ArrayList<>();
@@ -1285,7 +1557,7 @@ public class SimulationEngine {
 
         // 2. Evaluate all inner blocks in execution order
         for (BlockInstance inner : innerExecBlocks) {
-            evaluateBlock(project, rtPage, inner, dtMs, simTimeSeconds, true, depth + 1);
+            evaluateBlock(project, rtPage, rtIndex, inner, dtMs, simTimeSeconds, true, depth + 1);
         }
 
         // 3. Propagate wires into MacroOut blocks and copy their input values to the macro instance's output pins
@@ -1294,9 +1566,9 @@ public class SimulationEngine {
             List<PinInstance> mIns = outBlock.getInputs();
             for (int i = 0; i < mIns.size(); i++) {
                 PinInstance inPin = mIns.get(i);
-                Wire w = rtPage.findWireToInputPin(outBlock.getId(), i);
+                Wire w = rtIndex.wireByTargetPin().get(outBlock.getId() + ":" + i);
                 if (w != null) {
-                    BlockInstance srcBlock = rtPage.findBlockById(w.getSourceBlockId());
+                    BlockInstance srcBlock = rtIndex.blocksById().get(w.getSourceBlockId());
                     if (srcBlock != null && w.getSourcePinIndex() < srcBlock.getOutputs().size()) {
                         PinInstance srcOut = srcBlock.getOutputs().get(w.getSourcePinIndex());
                         double converted = DataType.convertValue(srcOut.getRuntimeValue(), srcOut.getDataType(), inPin.getDataType());
@@ -1330,7 +1602,7 @@ public class SimulationEngine {
         }
     }
 
-    private void evaluateStMacroBlock(Project project, Page macroDefPage, BlockInstance macroBlock) {
+    private void evaluateStMacroBlock(Project project, Page macroDefPage, BlockInstance macroBlock, double dtMs) {
         final Page defRef = macroDefPage;
         Page rtPage = macroRuntimePages.compute(macroBlock.getId(), (k, existing) -> {
             if (existing == null || existing.getStVariables().size() != defRef.getStVariables().size()) {
@@ -1339,7 +1611,10 @@ public class SimulationEngine {
             return existing;
         });
 
-        Map<String, Double> localMap = new LinkedHashMap<>();
+        Map<String, Double> localMap = stPersistentVars.computeIfAbsent(
+                macroBlock.getId(),
+                k -> new TreeMap<>(String.CASE_INSENSITIVE_ORDER)
+        );
         int inPinIdx = 1; // index 0 is En
         for (int i = 0; i < defRef.getStVariables().size(); i++) {
             StVariable defVar = defRef.getStVariables().get(i);
@@ -1366,9 +1641,9 @@ public class SimulationEngine {
 
             @Override
             public void writeOperand(String name, double value) {
-                setOperandValue(name, value);
+                setOperandValue(project, name, value);
             }
-        });
+        }, dtMs);
 
         int outPinIdx = 0;
         for (int i = 0; i < defRef.getStVariables().size(); i++) {

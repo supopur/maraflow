@@ -16,6 +16,7 @@ import cz.maramat.model.Project;
 import cz.maramat.settings.AppSettings;
 import cz.maramat.sim.SimulationEngine;
 import cz.maramat.ui.AppFonts;
+import cz.maramat.ui.AppFonts;
 import cz.maramat.ui.dialogs.ModulePropertiesDialog;
 import cz.maramat.ui.dialogs.OperandPickerDialog;
 import cz.maramat.ui.render.LdRenderer;
@@ -645,7 +646,7 @@ public class LadderCanvas extends JPanel {
 
         if (el.getKind() == LadderElement.Kind.FUNCTION_BLOCK && el.getBlockInstance() != null) {
             Page before = page.copy();
-            Frame owner = (Frame) SwingUtilities.getWindowAncestor(this);
+            Frame owner = AppFonts.resolveFrameOwner(this);
             ModulePropertiesDialog dlg = new ModulePropertiesDialog(owner, page, el.getBlockInstance());
             dlg.setVisible(true);
             if (dlg.isConfirmed()) {
@@ -660,7 +661,7 @@ public class LadderCanvas extends JPanel {
             return;
         }
 
-        Frame owner = (Frame) SwingUtilities.getWindowAncestor(this);
+        Frame owner = AppFonts.resolveFrameOwner(this);
         OperandPickerDialog dlg = new OperandPickerDialog(
                 owner,
                 project,
@@ -681,7 +682,7 @@ public class LadderCanvas extends JPanel {
     private void openAnalogCoilEditor(LadderElement el) {
         Page page = getActivePage();
         if (page == null) return;
-        Frame owner = (Frame) SwingUtilities.getWindowAncestor(this);
+        Frame owner = AppFonts.resolveFrameOwner(this);
 
         JPanel panel = new JPanel(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
@@ -748,7 +749,7 @@ public class LadderCanvas extends JPanel {
                 : phb.block().getOutputs().get(phb.pinIndex());
         if (phb.isInput() && pin.getShortName().equalsIgnoreCase("En")) return;
 
-        Frame owner = (Frame) SwingUtilities.getWindowAncestor(this);
+        Frame owner = AppFonts.resolveFrameOwner(this);
         String title = phb.isInput()
                 ? ("Bind Input Pin Operand / Constant - " + phb.block().getName() + "." + pin.getShortName())
                 : ("Bind Output Pin Destination (AO / PWM / REG) - " + phb.block().getName() + "." + pin.getShortName());
@@ -769,7 +770,7 @@ public class LadderCanvas extends JPanel {
     }
 
     private void showLiveAnalogAdjusterDialog(String operandName) {
-        Frame owner = (Frame) SwingUtilities.getWindowAncestor(this);
+        Frame owner = AppFonts.resolveFrameOwner(this);
         JDialog dlg = new JDialog(owner, "Live Analog / Register Value: " + operandName, false);
 
         JPanel root = new JPanel(new BorderLayout(8, 8));

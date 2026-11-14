@@ -3,7 +3,10 @@ package cz.maramat.model;
 import java.awt.Point;
 import java.awt.geom.Point2D;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 public class Page {
     private String name;
@@ -19,6 +22,11 @@ public class Page {
     private final List<GraphicElement> graphics = new ArrayList<>();
     private final List<LadderRung> rungs = new ArrayList<>();
     private final List<StVariable> stVariables = new ArrayList<>();
+
+    private transient volatile Map<String, StVariable> cachedStVarsByUpperName;
+    private transient volatile int cachedStVarsCount = -1;
+    private transient volatile StVariable cachedFirstStVar = null;
+    private transient volatile StVariable cachedLastStVar = null;
 
     public Page(String name) {
         this(name, IecLanguage.FBD);
@@ -116,6 +124,43 @@ public class Page {
 
     public List<StVariable> getStVariables() {
         return stVariables;
+    }
+
+    /**
+     * O(1) case-insensitive lookup for an ST variable declared on this page.
+     */
+    public StVariable findStVariableByName(String varName) {
+        if (varName == null || varName.isBlank()) return null;
+        int size = stVariables.size();
+        if (size == 0) return null;
+        StVariable first = stVariables.getFirst();
+        StVariable last = stVariables.getLast();
+        Map<String, StVariable> map = cachedStVarsByUpperName;
+        if (map == null || cachedStVarsCount != size || cachedFirstStVar != first || cachedLastStVar != last) {
+            map = rebuildStVarCache(size, first, last);
+        }
+        String clean = varName.trim();
+        String upper = clean.toUpperCase(Locale.ROOT);
+        StVariable hit = map.get(upper);
+        if (hit != null && (hit.getName() == null || !hit.getName().equalsIgnoreCase(clean))) {
+            map = rebuildStVarCache(size, first, last);
+            hit = map.get(upper);
+        }
+        return hit;
+    }
+
+    private synchronized Map<String, StVariable> rebuildStVarCache(int size, StVariable first, StVariable last) {
+        Map<String, StVariable> rebuilt = new HashMap<>(Math.max(16, size * 2));
+        for (StVariable v : stVariables) {
+            if (v.getName() != null) {
+                rebuilt.put(v.getName().toUpperCase(Locale.ROOT), v);
+            }
+        }
+        cachedStVarsByUpperName = rebuilt;
+        cachedStVarsCount = size;
+        cachedFirstStVar = first;
+        cachedLastStVar = last;
+        return rebuilt;
     }
 
     public List<BlockInstance> getBlocks() {

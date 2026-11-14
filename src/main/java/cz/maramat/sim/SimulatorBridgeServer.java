@@ -13,6 +13,9 @@ import java.net.Socket;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -111,7 +114,12 @@ public class SimulatorBridgeServer {
         while (running.get() && !ss.isClosed()) {
             try {
                 Socket client = ss.accept();
+                if (!running.get()) {
+                    try { client.close(); } catch (IOException ignored) {}
+                    break;
+                }
                 client.setTcpNoDelay(true);
+                client.setSoTimeout(5000);
                 activeClients.add(client);
                 Thread.ofVirtual()
                         .name("Maraflow-Sim-Bridge-Client")
@@ -124,17 +132,31 @@ public class SimulatorBridgeServer {
         }
     }
 
+    static final class ClientSession {
+        List<String> subscribedOperands = List.of();
+        double[] lastSentValues = new double[0];
+        boolean forceFullSnapshot = true;
+        Project lastProject = null;
+    }
+
     private void handleClient(Socket client) {
+        ClientSession session = new ClientSession();
         try (Socket sock = client;
              BufferedReader in = new BufferedReader(new InputStreamReader(sock.getInputStream(), StandardCharsets.UTF_8));
              PrintWriter out = new PrintWriter(new OutputStreamWriter(sock.getOutputStream(), StandardCharsets.UTF_8), true)) {
-            String line;
-            while (running.get() && (line = in.readLine()) != null) {
+            while (running.get()) {
+                String line;
+                try {
+                    line = in.readLine();
+                } catch (java.net.SocketTimeoutException timeout) {
+                    continue;
+                }
+                if (line == null) break;
                 String trimmed = line.trim();
                 if (trimmed.isEmpty()) {
                     continue;
                 }
-                String response = processCommand(trimmed);
+                String response = processCommand(trimmed, session);
                 out.println(response);
                 if ("OK BYE".equals(response)) {
                     break;
@@ -147,6 +169,10 @@ public class SimulatorBridgeServer {
     }
 
     String processCommand(String line) {
+        return processCommand(line, new ClientSession());
+    }
+
+    String processCommand(String line, ClientSession session) {
         String[] parts = line.split("\\s+");
         String cmd = parts[0].toUpperCase();
         Project project = (projectSupplier != null) ? projectSupplier.get() : null;
@@ -231,15 +257,55 @@ public class SimulatorBridgeServer {
                     }
                     yield sb.toString();
                 }
+                case "SUB" -> {
+                    List<String> ops = new ArrayList<>(Math.max(0, parts.length - 1));
+                    for (int i = 1; i < parts.length; i++) {
+                        ops.add(decode(parts[i]));
+                    }
+                    session.subscribedOperands = ops;
+                    session.lastSentValues = new double[ops.size()];
+                    Arrays.fill(session.lastSentValues, Double.NaN);
+                    session.forceFullSnapshot = true;
+                    session.lastProject = project;
+                    yield "OK " + ops.size();
+                }
+                case "POLL" -> {
+                    if (session.lastProject != project) {
+                        session.lastProject = project;
+                        session.forceFullSnapshot = true;
+                    }
+                    String projName = (project != null && project.getProjectName() != null) ? project.getProjectName() : "";
+                    StringBuilder sb = new StringBuilder(128);
+                    sb.append("OK state=").append(simEngine.getState().name())
+                            .append(" estop=").append(simEngine.isEStopActive() ? "1" : "0")
+                            .append(" speed=").append(simEngine.getSpeedMultiplier())
+                            .append(" project=").append(encode(projName))
+                            .append(" |");
+                    List<String> ops = session.subscribedOperands;
+                    for (int i = 0; i < ops.size(); i++) {
+                        double v = simEngine.getOperandValue(project, ops.get(i));
+                        if (session.forceFullSnapshot || Double.compare(v, session.lastSentValues[i]) != 0) {
+                            session.lastSentValues[i] = v;
+                            sb.append(' ').append(i).append('=').append(v);
+                        }
+                    }
+                    session.forceFullSnapshot = false;
+                    yield sb.toString();
+                }
                 case "MSET" -> {
+                    java.util.List<String> ops = new java.util.ArrayList<>(parts.length);
+                    double[] vals = new double[parts.length];
+                    int count = 0;
                     for (int i = 1; i < parts.length; i++) {
                         int eq = parts[i].indexOf('=');
                         if (eq <= 0) {
                             yield "ERR Invalid MSET pair: " + parts[i];
                         }
-                        String op = decode(parts[i].substring(0, eq));
-                        double val = parseDouble(parts[i].substring(eq + 1));
-                        simEngine.setOperandValue(project, op, val);
+                        ops.add(decode(parts[i].substring(0, eq)));
+                        vals[count++] = parseDouble(parts[i].substring(eq + 1));
+                    }
+                    for (int i = 0; i < count; i++) {
+                        simEngine.setOperandValue(project, ops.get(i), vals[i]);
                     }
                     yield "OK";
                 }
@@ -252,7 +318,7 @@ public class SimulatorBridgeServer {
 
     private void notifyStateChanged() {
         if (onStateChanged != null) {
-            onStateChanged.run();
+            javax.swing.SwingUtilities.invokeLater(onStateChanged);
         }
     }
 

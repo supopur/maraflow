@@ -824,13 +824,16 @@ public class StEditorPanel extends JPanel {
         }
     }
 
+    private final List<Object> findHighlightTags = new ArrayList<>();
+
     private void highlightAllMatches() {
+        clearFindHighlights();
         Highlighter hl = codePane.getHighlighter();
-        hl.removeAllHighlights();
         for (int i = 0; i < currentMatches.size(); i++) {
             int[] m = currentMatches.get(i);
             try {
-                hl.addHighlight(m[0], m[1], (i == currentMatchIndex) ? currentMatchPainter : matchPainter);
+                Object tag = hl.addHighlight(m[0], m[1], (i == currentMatchIndex) ? currentMatchPainter : matchPainter);
+                findHighlightTags.add(tag);
             } catch (BadLocationException ignored) {}
         }
         updateMatchLabel();
@@ -866,7 +869,11 @@ public class StEditorPanel extends JPanel {
     }
 
     private void clearFindHighlights() {
-        codePane.getHighlighter().removeAllHighlights();
+        Highlighter hl = codePane.getHighlighter();
+        for (Object tag : findHighlightTags) {
+            hl.removeHighlight(tag);
+        }
+        findHighlightTags.clear();
     }
 
     private void replaceCurrentAndNext() {
@@ -908,6 +915,7 @@ public class StEditorPanel extends JPanel {
 
     public void setPage(Project project, Page page) {
         completionDebounce.stop();
+        highlightDebounce.stop();
         hideCompletionPopup();
         this.project = project;
         this.page = page;
@@ -1738,13 +1746,12 @@ public class StEditorPanel extends JPanel {
             return new Dimension(w, pane.getPreferredSize().height);
         }
 
+        private static final Color GUTTER_ERROR_COLOR = new Color(0xD3, 0x2F, 0x2F);
+        private static final Color GUTTER_WARN_COLOR = new Color(0xF5, 0x7C, 0x00);
+        private static final Color GUTTER_TEXT_COLOR = new Color(0x55, 0x60, 0x70);
+
         private int countLines() {
-            String t = pane.getText();
-            int count = 1;
-            for (int i = 0; i < t.length(); i++) {
-                if (t.charAt(i) == '\n') count++;
-            }
-            return count;
+            return Math.max(1, pane.getDocument().getDefaultRootElement().getElementCount());
         }
 
         @Override
@@ -1754,29 +1761,41 @@ public class StEditorPanel extends JPanel {
                 g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
                 g2.setRenderingHint(java.awt.RenderingHints.KEY_TEXT_ANTIALIASING, java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
             }
-            FontMetrics fm = g.getFontMetrics(AppFonts.canvasMono(12f));
-            int lineHeight = pane.getFontMetrics(pane.getFont()).getHeight();
-            int ascent = pane.getFontMetrics(pane.getFont()).getAscent();
+            Font gutterFont = AppFonts.canvasMono(12f);
+            FontMetrics fm = g.getFontMetrics(gutterFont);
+            FontMetrics paneFm = pane.getFontMetrics(pane.getFont());
+            int lineHeight = Math.max(1, paneFm.getHeight());
+            int ascent = paneFm.getAscent();
             int lines = countLines();
-            int y = ascent + 2;
-            for (int i = 1; i <= lines; i++) {
-                final int lineNum = i;
-                StLanguageServer.Diagnostic lineDiag = diagnostics.stream()
-                        .filter(d -> d.line() == lineNum)
-                        .findFirst()
-                        .orElse(null);
-                if (lineDiag != null) {
-                    if (lineDiag.severity() == StLanguageServer.Severity.ERROR) {
-                        g.setColor(new Color(0xD3, 0x2F, 0x2F));
-                        g.fillOval(3, y - ascent + 2, 7, 7);
-                    } else {
-                        g.setColor(new Color(0xF5, 0x7C, 0x00));
-                        g.fillOval(3, y - ascent + 2, 7, 7);
-                    }
+
+            java.awt.Rectangle clip = g.getClipBounds();
+            int startLine = 1;
+            int endLine = lines;
+            if (clip != null) {
+                startLine = Math.max(1, (clip.y - 2) / lineHeight + 1);
+                endLine = Math.min(lines, (clip.y + clip.height) / lineHeight + 2);
+            }
+
+            java.util.Map<Integer, StLanguageServer.Severity> diagByLine = java.util.Collections.emptyMap();
+            if (!diagnostics.isEmpty()) {
+                diagByLine = new java.util.HashMap<>();
+                for (StLanguageServer.Diagnostic d : diagnostics) {
+                    diagByLine.merge(d.line(), d.severity(),
+                            (a, b) -> (a == StLanguageServer.Severity.ERROR || b == StLanguageServer.Severity.ERROR)
+                                    ? StLanguageServer.Severity.ERROR : a);
                 }
-                g.setFont(AppFonts.canvasMono(12f));
-                g.setColor(new Color(0x55, 0x60, 0x70));
-                String s = String.valueOf(i);
+            }
+
+            g.setFont(gutterFont);
+            int y = ascent + 2 + (startLine - 1) * lineHeight;
+            for (int i = startLine; i <= endLine; i++) {
+                StLanguageServer.Severity sev = diagByLine.get(i);
+                if (sev != null) {
+                    g.setColor(sev == StLanguageServer.Severity.ERROR ? GUTTER_ERROR_COLOR : GUTTER_WARN_COLOR);
+                    g.fillOval(3, y - ascent + 2, 7, 7);
+                }
+                g.setColor(GUTTER_TEXT_COLOR);
+                String s = Integer.toString(i);
                 int x = getWidth() - fm.stringWidth(s) - 6;
                 g.drawString(s, x, y);
                 y += lineHeight;
@@ -1786,6 +1805,42 @@ public class StEditorPanel extends JPanel {
 
     public boolean isEditorFocused() {
         return codePane.hasFocus();
+    }
+
+    public void cutEditorSelection() {
+        codePane.cut();
+    }
+
+    public void copyEditorSelection() {
+        codePane.copy();
+    }
+
+    public void pasteEditorSelection() {
+        codePane.paste();
+    }
+
+    public void selectAllEditorText() {
+        codePane.selectAll();
+    }
+
+    public void deleteEditorSelection() {
+        int start = codePane.getSelectionStart();
+        int end = codePane.getSelectionEnd();
+        if (end > start) {
+            try {
+                codePane.getDocument().remove(start, end - start);
+            } catch (BadLocationException ignored) {}
+        }
+    }
+
+    public void dispose() {
+        completionDebounce.stop();
+        highlightDebounce.stop();
+        hideCompletionPopup();
+        if (completionWindow != null) {
+            completionWindow.dispose();
+            completionWindow = null;
+        }
     }
 
     public String getWordAtCaret() {

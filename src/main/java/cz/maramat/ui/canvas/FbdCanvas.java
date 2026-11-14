@@ -14,6 +14,7 @@ import cz.maramat.model.Project;
 import cz.maramat.model.Wire;
 import cz.maramat.settings.AppSettings;
 import cz.maramat.sim.SimulationEngine;
+import cz.maramat.ui.AppFonts;
 import cz.maramat.ui.dialogs.ModulePropertiesDialog;
 import cz.maramat.ui.dialogs.VisualElementDialogs;
 import cz.maramat.ui.render.FbdRenderer;
@@ -661,7 +662,7 @@ public class FbdCanvas extends JPanel {
                     if (currentToolMode == ToolMode.VISUAL_BUTTON) {
                         GraphicElement btnElem = new GraphicElement(GraphicElement.Kind.VISUAL_BUTTON, gx, gy, 5, 2);
                         page.getGraphics().add(btnElem);
-                        Frame owner = (Frame) SwingUtilities.getWindowAncestor(FbdCanvas.this);
+                        Frame owner = AppFonts.resolveFrameOwner(FbdCanvas.this);
                         VisualElementDialogs.showVisualButtonDialog(owner, page, btnElem);
                         editListener.onAfterPageEdit("Place Visual Button " + btnElem.getText(), graphicBeforeSnapshot, page);
                         editListener.onResetToolToCursor();
@@ -751,7 +752,7 @@ public class FbdCanvas extends JPanel {
                             return;
                         } else {
                             // Slider single click
-                            Frame owner = (Frame) SwingUtilities.getWindowAncestor(FbdCanvas.this);
+                            Frame owner = AppFonts.resolveFrameOwner(FbdCanvas.this);
                             VisualElementDialogs.triggerXVarAction(owner, hitBlock, FbdCanvas.this::repaint);
                             return;
                         }
@@ -803,7 +804,7 @@ public class FbdCanvas extends JPanel {
                     if (e.getClickCount() == 2) {
                         exitSimOrWatchBeforeStructuralEdit();
                         Page before = page.copy();
-                        Frame owner = (Frame) SwingUtilities.getWindowAncestor(FbdCanvas.this);
+                        Frame owner = AppFonts.resolveFrameOwner(FbdCanvas.this);
                         boolean changed = (hitGraphic.getKind() == GraphicElement.Kind.VISUAL_BUTTON)
                                 ? VisualElementDialogs.showVisualButtonDialog(owner, page, hitGraphic)
                                 : VisualElementDialogs.showGraphicPropertiesDialog(owner, page, hitGraphic);
@@ -1268,7 +1269,7 @@ public class FbdCanvas extends JPanel {
     }
 
     private void onBlockDoubleClicked(Page page, BlockInstance block) {
-        Frame owner = (Frame) SwingUtilities.getWindowAncestor(this);
+        Frame owner = AppFonts.resolveFrameOwner(this);
         if (block.getDefinitionId().startsWith("Visual.Vars.") && simEngine.isShowingLiveOutputs()) {
             // During simulation or watch, properties modal is blocked to prevent accidental stop
             return;
@@ -1546,7 +1547,7 @@ public class FbdCanvas extends JPanel {
             if (isVisualButtonLockedInLiveMode(elem)) return;
             exitSimOrWatchBeforeStructuralEdit();
             Page before = page.copy();
-            Frame owner = (Frame) SwingUtilities.getWindowAncestor(FbdCanvas.this);
+            Frame owner = AppFonts.resolveFrameOwner(FbdCanvas.this);
             boolean changed = (elem.getKind() == GraphicElement.Kind.VISUAL_BUTTON)
                     ? VisualElementDialogs.showVisualButtonDialog(owner, page, elem)
                     : VisualElementDialogs.showGraphicPropertiesDialog(owner, page, elem);
@@ -2066,32 +2067,38 @@ public class FbdCanvas extends JPanel {
         g2.dispose();
     }
 
+    private int cachedGridStepPx = -1;
+    private java.awt.TexturePaint cachedGridPaint = null;
+    private static final Color GRID_MINOR_DOT = new Color(0xBB, 0xC3, 0xCD);
+    private static final Color GRID_MAJOR_DOT = new Color(0x7F, 0x8C, 0x9B);
+
     private void paintDottedGrid(Graphics2D g2, int g) {
-        Rectangle clip = g2.getClipBounds();
-        if (clip == null) clip = new Rectangle(0, 0, getWidth(), getHeight());
-
-        int startGx = Math.max(1, clip.x / g);
-        int endGx = (clip.x + clip.width) / g + 1;
-        int startGy = Math.max(1, clip.y / g);
-        int endGy = (clip.y + clip.height) / g + 1;
-
-        Color minorDot = new Color(0xBB, 0xC3, 0xCD);
-        Color majorDot = new Color(0x7F, 0x8C, 0x9B);
-
-        for (int gx = startGx; gx <= endGx; gx++) {
-            int px = gx * g;
-            boolean majorX = (gx % 10 == 0);
-            for (int gy = startGy; gy <= endGy; gy++) {
-                int py = gy * g;
-                if (majorX && (gy % 10 == 0)) {
-                    g2.setColor(majorDot);
-                    g2.fillRect(px - 1, py - 1, 2, 2);
-                } else {
-                    g2.setColor(minorDot);
-                    g2.fillRect(px, py, 1, 1);
+        if (g <= 0) return;
+        if (cachedGridPaint == null || cachedGridStepPx != g) {
+            int tileSize = g * 10;
+            java.awt.image.BufferedImage tile = new java.awt.image.BufferedImage(tileSize, tileSize, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+            Graphics2D tg = tile.createGraphics();
+            tg.setColor(GRID_MINOR_DOT);
+            for (int gx = 0; gx < 10; gx++) {
+                int px = gx * g;
+                for (int gy = 0; gy < 10; gy++) {
+                    if (gx == 0 && gy == 0) continue;
+                    tg.fillRect(px, gy * g, 1, 1);
                 }
             }
+            tg.setColor(GRID_MAJOR_DOT);
+            tg.fillRect(0, 0, 2, 2);
+            tg.dispose();
+            cachedGridPaint = new java.awt.TexturePaint(tile, new Rectangle(0, 0, tileSize, tileSize));
+            cachedGridStepPx = g;
         }
+
+        Rectangle clip = g2.getClipBounds();
+        if (clip == null) clip = new Rectangle(0, 0, getWidth(), getHeight());
+        java.awt.Paint oldPaint = g2.getPaint();
+        g2.setPaint(cachedGridPaint);
+        g2.fillRect(clip.x, clip.y, clip.width, clip.height);
+        g2.setPaint(oldPaint);
     }
 
     public static void syncVisualValuePinDataTypes(Page page) {

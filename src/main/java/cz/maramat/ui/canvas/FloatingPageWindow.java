@@ -43,6 +43,7 @@ public class FloatingPageWindow {
 
     private final JDialog dialog;
     private final Page page;
+    private final JLabel titleLabel;
     private final FbdCanvas fbdCanvas;
     private final LadderCanvas ladderCanvas;
     private final StEditorPanel stEditorPanel;
@@ -70,6 +71,12 @@ public class FloatingPageWindow {
         this.onCloseCallback = onCloseCallback;
         this.dialog = new JDialog(owner, false);
         this.dialog.setUndecorated(true);
+        this.dialog.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosing(java.awt.event.WindowEvent e) {
+                closeWindow();
+            }
+        });
 
         JPanel root = new JPanel(new BorderLayout());
         root.setBorder(BorderFactory.createLineBorder(new Color(0x33, 0x33, 0x33), 1));
@@ -95,8 +102,8 @@ public class FloatingPageWindow {
         ));
 
         String langBadge = "[" + page.getLanguage().getDisplayName() + "] ";
-        JLabel titleLabel = new JLabel(langBadge + page.getName());
-        titleLabel.setFont(new Font("Segoe UI", Font.BOLD, AppSettings.get().scale(11)));
+        this.titleLabel = new JLabel(langBadge + page.getName());
+        titleLabel.setFont(cz.maramat.ui.AppFonts.uiBold());
         titleLabel.setForeground(new Color(0x22, 0x2A, 0x35));
         header.add(titleLabel, BorderLayout.WEST);
 
@@ -203,7 +210,18 @@ public class FloatingPageWindow {
         }
     }
 
+    public void refreshTitle() {
+        titleLabel.setText("[" + page.getLanguage().getDisplayName() + "] " + page.getName());
+    }
+
+    private boolean closed = false;
+
     public void closeWindow() {
+        if (closed) return;
+        closed = true;
+        if (stEditorPanel != null) {
+            stEditorPanel.dispose();
+        }
         dialog.setVisible(false);
         dialog.dispose();
         if (onCloseCallback != null) {

@@ -30,10 +30,8 @@ public class PinInstance {
     public void setShortName(String name) {
         if (name == null || name.isBlank()) {
             this.shortName = "P";
-        } else if (name.length() > 3) {
-            this.shortName = name.substring(0, 3);
         } else {
-            this.shortName = name;
+            this.shortName = name.trim();
         }
     }
 

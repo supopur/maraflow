@@ -8,6 +8,7 @@ import cz.maramat.model.Page;
 import cz.maramat.model.PinInstance;
 import cz.maramat.model.Project;
 import cz.maramat.settings.AppSettings;
+import cz.maramat.ui.AppFonts;
 import cz.maramat.ui.icons.VectorIcons;
 
 import javax.swing.AbstractAction;
@@ -209,36 +210,46 @@ public class ScopePanel extends JPanel {
     public void adjustXZoom(double factor) {
         xZoom = Math.clamp(xZoom * factor, 0.25, 16.0);
         xZoomLabel.setText(String.format(" %d%% ", Math.round(xZoom * 100)));
-        plotArea.repaint();
+        SwingUtilities.invokeLater(plotArea::repaint);
     }
 
     public void adjustYZoom(double factor) {
         yZoom = Math.clamp(yZoom * factor, 0.25, 16.0);
         yZoomLabel.setText(String.format(" %d%% ", Math.round(yZoom * 100)));
-        plotArea.repaint();
+        SwingUtilities.invokeLater(plotArea::repaint);
     }
 
     public synchronized void clearHistory() {
         channelHistory.clear();
-        plotArea.repaint();
+        SwingUtilities.invokeLater(plotArea::repaint);
     }
 
     public synchronized boolean isPinSelected(String pinRef) {
         return selectedPins.contains(pinRef);
     }
 
+    public synchronized void reset() {
+        selectedPins.clear();
+        channelHistory.clear();
+        channelTypes.clear();
+        channelColors.clear();
+        SwingUtilities.invokeLater(plotArea::repaint);
+    }
+
     public synchronized void togglePinSelection(String pinRef) {
         if (selectedPins.contains(pinRef)) {
             selectedPins.remove(pinRef);
             channelHistory.remove(pinRef);
+            channelTypes.remove(pinRef);
+            channelColors.remove(pinRef);
         } else {
             selectedPins.add(pinRef);
         }
-        plotArea.repaint();
+        SwingUtilities.invokeLater(plotArea::repaint);
     }
 
     public synchronized void recordSample(Project project, double simTimeSeconds) {
-        if (frozen || project == null) return;
+        if (frozen || project == null || selectedPins.isEmpty()) return;
         int maxSamples = AppSettings.get().getScopeMaxSamples();
         int colorIdx = 0;
 
@@ -278,7 +289,7 @@ public class ScopePanel extends JPanel {
                 }
             }
         }
-        plotArea.repaint();
+        SwingUtilities.invokeLater(plotArea::repaint);
     }
 
     private void pushValue(String ref, double val, DataType dt, int maxSamples, int colorIdx) {
@@ -294,7 +305,7 @@ public class ScopePanel extends JPanel {
     private void openPinSelectorDialog() {
         Project proj = projectSupplier.get();
         if (proj == null) return;
-        Frame owner = (Frame) SwingUtilities.getWindowAncestor(this);
+        Frame owner = AppFonts.resolveFrameOwner(this);
         JDialog dlg = new JDialog(owner, "Select Oscilloscope Pins", true);
 
         JPanel root = new JPanel(new BorderLayout(8, 8));
@@ -522,7 +533,7 @@ public class ScopePanel extends JPanel {
             double vMax = mid + halfSpan;
 
             // Left margin Y-axis labels & channel legend
-            Font font = new Font("Monospaced", Font.PLAIN, AppSettings.get().scale(10));
+            Font font = AppFonts.mono(Font.PLAIN, AppSettings.get().scale(10));
             g2.setFont(font);
             g2.setColor(Color.BLACK);
             g2.drawString(String.format(java.util.Locale.US, "%.1f", vMax), 6, y0 + 11);
@@ -547,7 +558,7 @@ public class ScopePanel extends JPanel {
                 int startIdx = Math.max(0, arr.length - visibleSamples);
                 int count = arr.length - startIdx;
 
-                g2.setStroke(new BasicStroke(1.5f));
+                g2.setStroke(STROKE_1_5);
                 for (int i = 0; i < count - 1; i++) {
                     double v1 = arr[startIdx + i];
                     double v2 = arr[startIdx + i + 1];
@@ -560,23 +571,30 @@ public class ScopePanel extends JPanel {
                     g2.drawLine(px1, py1, px2, py2);
                 }
             }
-            g2.setStroke(new BasicStroke(1.0f));
+            g2.setStroke(STROKE_1_0);
         }
 
+        private static final java.awt.Stroke STROKE_1_0 = new BasicStroke(1.0f);
+        private static final java.awt.Stroke STROKE_1_5 = new BasicStroke(1.5f);
+        private static final java.awt.Stroke STROKE_1_6 = new BasicStroke(1.6f);
+        private static final Color BOOL_BG = new Color(0xF8, 0xFA, 0xFC);
+        private static final Color BOOL_GRID = new Color(0xE2, 0xE6, 0xEC);
+        private static final Color BOOL_BORDER = new Color(0xAA, 0xAA, 0xAA);
+
         private void paintBooleanBar(Graphics2D g2, String ch, int x0, int y0, int pw, int lh, int idx) {
-            g2.setColor(new Color(0xF8, 0xFA, 0xFC));
+            g2.setColor(BOOL_BG);
             g2.fillRect(x0, y0, pw, lh);
-            g2.setColor(new Color(0xE2, 0xE6, 0xEC));
+            g2.setColor(BOOL_GRID);
             for (int gx = x0; gx <= x0 + pw; gx += 40) {
                 g2.drawLine(gx, y0, gx, y0 + lh);
             }
-            g2.setColor(new Color(0xAA, 0xAA, 0xAA));
+            g2.setColor(BOOL_BORDER);
             g2.drawRect(x0, y0, pw, lh);
 
             Deque<Double> q = channelHistory.get(ch);
             boolean curHigh = (q != null && !q.isEmpty() && q.getLast() != 0.0);
 
-            Font font = new Font("Monospaced", Font.BOLD, AppSettings.get().scale(10));
+            Font font = AppFonts.mono(Font.BOLD, AppSettings.get().scale(10));
             g2.setFont(font);
             FontMetrics fm = g2.getFontMetrics();
             Color col = DataType.BOOL.getWireColor();
@@ -596,7 +614,7 @@ public class ScopePanel extends JPanel {
             int lowY = y0 + lh - 4;
 
             g2.setColor(col);
-            g2.setStroke(new BasicStroke(1.6f));
+            g2.setStroke(STROKE_1_6);
             for (int i = 0; i < count - 1; i++) {
                 boolean b1 = arr[startIdx + i] != 0.0;
                 boolean b2 = arr[startIdx + i + 1] != 0.0;
@@ -611,7 +629,7 @@ public class ScopePanel extends JPanel {
                     g2.drawLine(px2, py1, px2, py2);
                 }
             }
-            g2.setStroke(new BasicStroke(1.0f));
+            g2.setStroke(STROKE_1_0);
         }
 
         private DataType inferDataTypeFromProject(String ref) {

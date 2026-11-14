@@ -11,6 +11,15 @@ import java.util.*;
 public final class StInterpreter {
 
     private static final int MAX_LOOP_ITERATIONS = 1000;
+    private static final int AST_CACHE_MAX_ENTRIES = 64;
+    private static final Map<String, List<Stmt>> AST_CACHE = Collections.synchronizedMap(
+            new LinkedHashMap<>(64, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, List<Stmt>> eldest) {
+                    return size() > AST_CACHE_MAX_ENTRIES;
+                }
+            }
+    );
 
     public interface OperandAccessor {
         double readOperand(String name);
@@ -82,25 +91,38 @@ public final class StInterpreter {
     }
 
     public static void execute(String code, Map<String, Double> localVars, OperandAccessor accessor) {
+        execute(code, localVars, accessor, 10.0);
+    }
+
+    public static void execute(String code, Map<String, Double> localVars, OperandAccessor accessor, double dtMs) {
         if (code == null || code.isBlank()) return;
         try {
-            String masked = StDeclarationSync.maskDeclarations(code);
-            if (masked.isBlank()) return;
-
-            List<Diagnostic> diags = new ArrayList<>();
-            List<Token> tokens = tokenize(masked);
-            Parser parser = new Parser(tokens, diags);
-            List<Stmt> stmts = parser.parseStatementList(TokType.EOF);
-            if (!diags.isEmpty()) {
-                return;
+            List<Stmt> stmts = AST_CACHE.get(code);
+            if (stmts == null) {
+                String masked = StDeclarationSync.maskDeclarations(code);
+                if (masked.isBlank()) {
+                    AST_CACHE.put(code, List.of());
+                    return;
+                }
+                List<Diagnostic> diags = new ArrayList<>();
+                List<Token> tokens = tokenize(masked);
+                Parser parser = new Parser(tokens, diags);
+                stmts = parser.parseStatementList(TokType.EOF);
+                if (!diags.isEmpty()) {
+                    AST_CACHE.put(code, List.of());
+                    return;
+                }
+                AST_CACHE.put(code, List.copyOf(stmts));
             }
-            EvalContext ctx = new EvalContext(localVars, accessor);
+            if (stmts.isEmpty()) return;
+
+            EvalContext ctx = new EvalContext(localVars, accessor, dtMs > 0.0 ? dtMs : 10.0);
             for (Stmt s : stmts) {
                 s.exec(ctx);
                 if (ctx.returnFlag || ctx.exitFlag) break;
             }
-        } catch (Exception ignored) {
-            // Runtime faults are suppressed to keep scan cycle deterministic
+        } catch (Exception ex) {
+            System.err.println("[StInterpreter] Runtime fault: " + ex.getMessage());
         }
     }
 
@@ -302,28 +324,42 @@ public final class StInterpreter {
     private static final class EvalContext {
         final Map<String, Double> localVars;
         final OperandAccessor accessor;
+        final double dtMs;
         boolean exitFlag = false;
         boolean returnFlag = false;
 
-        EvalContext(Map<String, Double> localVars, OperandAccessor accessor) {
+        EvalContext(Map<String, Double> localVars, OperandAccessor accessor, double dtMs) {
             this.localVars = localVars;
             this.accessor = accessor;
+            this.dtMs = dtMs;
         }
 
         double read(String name) {
-            for (Map.Entry<String, Double> e : localVars.entrySet()) {
-                if (e.getKey().equalsIgnoreCase(name)) {
-                    return e.getValue();
+            Double direct = localVars.get(name);
+            if (direct != null) {
+                return direct;
+            }
+            if (!(localVars instanceof SortedMap)) {
+                for (Map.Entry<String, Double> e : localVars.entrySet()) {
+                    if (e.getKey().equalsIgnoreCase(name)) {
+                        return e.getValue();
+                    }
                 }
             }
             return accessor != null ? accessor.readOperand(name) : 0.0;
         }
 
         void write(String name, double val) {
-            for (String k : localVars.keySet()) {
-                if (k.equalsIgnoreCase(name)) {
-                    localVars.put(k, val);
-                    return;
+            if (localVars.containsKey(name)) {
+                localVars.put(name, val);
+                return;
+            }
+            if (!(localVars instanceof SortedMap)) {
+                for (String k : localVars.keySet()) {
+                    if (k.equalsIgnoreCase(name)) {
+                        localVars.put(k, val);
+                        return;
+                    }
                 }
             }
             if (accessor != null) {
@@ -597,7 +633,7 @@ public final class StInterpreter {
                 double pt = inVals.getOrDefault("PT", 0.0);
                 double et = ctx.localVars.getOrDefault(instName + "._et", 0.0);
                 if (in) {
-                    et = Math.min(pt, et + 10.0);
+                    et = Math.min(pt, et + ctx.dtMs);
                 } else {
                     et = 0.0;
                 }
@@ -612,7 +648,7 @@ public final class StInterpreter {
                 if (in) {
                     et = 0.0;
                 } else if (et < pt) {
-                    et = Math.min(pt, et + 10.0);
+                    et = Math.min(pt, et + ctx.dtMs);
                 }
                 ctx.localVars.put(instName + "._et", et);
                 out.put("Q", (in || et < pt) ? 1.0 : 0.0);
@@ -629,7 +665,7 @@ public final class StInterpreter {
                     et = 0.0;
                 }
                 if (active) {
-                    et += 10.0;
+                    et += ctx.dtMs;
                     if (et >= pt) {
                         active = false;
                         et = pt;
@@ -730,6 +766,7 @@ public final class StInterpreter {
         private final List<Token> tokens;
         private final List<Diagnostic> diags;
         private int pos = 0;
+        private int callSiteSeq = 0;
 
         Parser(List<Token> tokens, List<Diagnostic> diags) {
             this.tokens = tokens;
@@ -1182,6 +1219,17 @@ public final class StInterpreter {
                     if (inputExprs.isEmpty()) {
                         throw new StSyntaxException(line, "XNOR() requires at least one argument");
                     }
+                    if (enArg != null) {
+                        Expr en = enArg.expr();
+                        yield ctx -> {
+                            if (Math.abs(en.eval(ctx)) < 0.5) return 0.0;
+                            boolean res = false;
+                            for (Expr e : operandExprs) {
+                                res ^= (Math.abs(e.eval(ctx)) >= 0.5);
+                            }
+                            return res ? 0.0 : 1.0;
+                        };
+                    }
                     yield ctx -> {
                         boolean res = false;
                         for (Expr e : operandExprs) {
@@ -1396,7 +1444,7 @@ public final class StInterpreter {
                     final Expr fMin = minArg;
                     final Expr fMax = maxArg;
                     final boolean hasExplicitBounds = (fMin != null || fMax != null);
-                    final String stateKey = "__rnd_line_" + line;
+                    final String stateKey = "__rnd_line_" + line + "_" + (callSiteSeq++);
 
                     yield ctx -> {
                         if (fEn != null && Math.abs(fEn.eval(ctx)) < 0.5) {
@@ -1440,7 +1488,7 @@ public final class StInterpreter {
                     if (inExpr == null) throw new StSyntaxException(line, fnName + "() requires an input argument");
                     final Expr fIn = inExpr;
                     final Expr fEn = (enArg != null) ? enArg.expr() : null;
-                    final String stateKey = "__pulse_line_" + line;
+                    final String stateKey = "__pulse_line_" + line + "_" + (callSiteSeq++);
                     yield ctx -> {
                         if (fEn != null && Math.abs(fEn.eval(ctx)) < 0.5) {
                             ctx.localVars.put(stateKey + "_prev", 0.0);

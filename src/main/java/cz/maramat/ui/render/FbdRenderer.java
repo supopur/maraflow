@@ -145,12 +145,12 @@ public final class FbdRenderer {
         }
     }
 
+    private static final Graphics2D METRICS_G2 = METRICS_IMG.createGraphics();
+
     public static Rectangle getGraphicPixelBounds(GraphicElement elem, int g) {
         if (elem.getKind() == GraphicElement.Kind.TEXT) {
-            Font f = new Font("Segoe UI", Font.PLAIN, Math.max(8, (elem.getFontSize() * g) / 10));
-            Graphics2D scratch = METRICS_IMG.createGraphics();
-            FontMetrics fm = scratch.getFontMetrics(f);
-            scratch.dispose();
+            Font f = cz.maramat.ui.AppFonts.ui(Font.PLAIN, Math.max(8, (elem.getFontSize() * g) / 10));
+            FontMetrics fm = METRICS_G2.getFontMetrics(f);
             String txt = elem.getText() == null ? "" : elem.getText();
             int tw = Math.max(g, fm.stringWidth(txt) + 6);
             int th = Math.max(g, fm.getHeight() + 2);
@@ -381,21 +381,28 @@ public final class FbdRenderer {
             }
         }
 
-        for (List<Wire> bundle : busBundles.values()) {
-            if (bundle.size() < 2) {
-                for (Wire w : bundle) w.setBusId(null);
+        Set<String> singleWireBusIds = java.util.Collections.emptySet();
+        for (Map.Entry<String, List<Wire>> entry : busBundles.entrySet()) {
+            if (entry.getValue().size() < 2) {
+                if (singleWireBusIds.isEmpty()) singleWireBusIds = new HashSet<>();
+                singleWireBusIds.add(entry.getKey());
             } else {
-                paintBlockPairBusBundle(g2, page, bundle, g, liveMode, opts);
+                paintBlockPairBusBundle(g2, page, entry.getValue(), g, liveMode, opts);
             }
         }
 
+        Map<String, BlockInstance> blockById = new HashMap<>(Math.max(16, page.getBlocks().size() * 2));
+        for (BlockInstance b : page.getBlocks()) {
+            blockById.put(b.getId(), b);
+        }
+
         for (Wire w : page.getWires()) {
-            if (!w.isHidden() && w.getBusId() != null) {
+            if (!w.isHidden() && w.getBusId() != null && !singleWireBusIds.contains(w.getBusId())) {
                 continue;
             }
 
-            BlockInstance src = page.findBlockById(w.getSourceBlockId());
-            BlockInstance dst = page.findBlockById(w.getTargetBlockId());
+            BlockInstance src = blockById.get(w.getSourceBlockId());
+            BlockInstance dst = blockById.get(w.getTargetBlockId());
             if (src == null || dst == null
                     || w.getSourcePinIndex() >= src.getOutputs().size()
                     || w.getTargetPinIndex() >= dst.getInputs().size()) {

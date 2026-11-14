@@ -75,29 +75,48 @@ public final class BlockSorter {
             }
         }
 
-        List<BlockInstance> remaining = new ArrayList<>(blocks);
-        List<BlockInstance> result = new ArrayList<>();
         Comparator<BlockInstance> xyComp = Comparator.comparingInt(BlockInstance::getGridX).thenComparingInt(BlockInstance::getGridY);
+        Map<String, BlockInstance> byId = new HashMap<>(blocks.size() * 2);
+        java.util.Set<String> remainingIds = new java.util.HashSet<>(blocks.size() * 2);
+        java.util.PriorityQueue<BlockInstance> zeroIn = new java.util.PriorityQueue<>(xyComp);
+        for (BlockInstance b : blocks) {
+            byId.put(b.getId(), b);
+            remainingIds.add(b.getId());
+            if (inDegree.getOrDefault(b.getId(), 0) <= 0) {
+                zeroIn.add(b);
+            }
+        }
 
-        while (!remaining.isEmpty()) {
-            List<BlockInstance> zeroIn = new ArrayList<>();
-            for (BlockInstance b : remaining) {
-                if (inDegree.getOrDefault(b.getId(), 0) <= 0) {
-                    zeroIn.add(b);
+        List<BlockInstance> result = new ArrayList<>(blocks.size());
+        while (!remainingIds.isEmpty()) {
+            BlockInstance pick = null;
+            while (!zeroIn.isEmpty()) {
+                BlockInstance cand = zeroIn.poll();
+                if (remainingIds.contains(cand.getId())) {
+                    pick = cand;
+                    break;
                 }
             }
-            if (zeroIn.isEmpty()) {
-                // Feedback cycle: break cycle using leftmost block
-                remaining.sort(xyComp);
-                zeroIn.add(remaining.getFirst());
-            } else {
-                zeroIn.sort(xyComp);
+            if (pick == null) {
+                for (String id : remainingIds) {
+                    BlockInstance cand = byId.get(id);
+                    if (pick == null || xyComp.compare(cand, pick) < 0) {
+                        pick = cand;
+                    }
+                }
             }
-            BlockInstance pick = zeroIn.getFirst();
-            remaining.remove(pick);
+            remainingIds.remove(pick.getId());
             result.add(pick);
             for (String nextId : adj.getOrDefault(pick.getId(), List.of())) {
-                inDegree.put(nextId, inDegree.getOrDefault(nextId, 1) - 1);
+                if (!remainingIds.contains(nextId)) continue;
+                int nextDeg = inDegree.getOrDefault(nextId, 1) - 1;
+                inDegree.put(nextId, nextDeg);
+                if (nextDeg <= 0) {
+                    BlockInstance nextBlock = byId.get(nextId);
+                    if (nextBlock != null) {
+                        zeroIn.add(nextBlock);
+                    }
+                }
             }
         }
         return result;
@@ -109,8 +128,12 @@ public final class BlockSorter {
     public static void sortBlocksGraphically(Page page) {
         if (page == null || page.getBlocks().isEmpty()) return;
         List<BlockInstance> blocks = page.getBlocks();
-        Map<String, Integer> rankMap = new HashMap<>();
-        for (BlockInstance b : blocks) rankMap.put(b.getId(), 0);
+        Map<String, BlockInstance> byId = new HashMap<>(blocks.size() * 2);
+        Map<String, Integer> rankMap = new HashMap<>(blocks.size() * 2);
+        for (BlockInstance b : blocks) {
+            byId.put(b.getId(), b);
+            rankMap.put(b.getId(), 0);
+        }
 
         // Relax ranks along directed wires (bounded by N iterations to handle feedback loops safely)
         int maxIter = blocks.size();
@@ -153,8 +176,8 @@ public final class BlockSorter {
 
         // Re-route all wires cleanly
         for (Wire w : page.getWires()) {
-            BlockInstance src = page.findBlockById(w.getSourceBlockId());
-            BlockInstance dst = page.findBlockById(w.getTargetBlockId());
+            BlockInstance src = byId.get(w.getSourceBlockId());
+            BlockInstance dst = byId.get(w.getTargetBlockId());
             if (src != null && dst != null
                     && w.getSourcePinIndex() < src.getOutputs().size()
                     && w.getTargetPinIndex() < dst.getInputs().size()) {

@@ -289,6 +289,26 @@ public class DockableSectionPanel extends JPanel {
                         y += (h - nh);
                         h = nh;
                     }
+                    case Cursor.NW_RESIZE_CURSOR -> {
+                        int nw = Math.max(minW, w - dx);
+                        x += (w - nw);
+                        w = nw;
+                        int nh = Math.max(minH, h - dy);
+                        y += (h - nh);
+                        h = nh;
+                    }
+                    case Cursor.NE_RESIZE_CURSOR -> {
+                        w = Math.max(minW, w + dx);
+                        int nh = Math.max(minH, h - dy);
+                        y += (h - nh);
+                        h = nh;
+                    }
+                    case Cursor.SW_RESIZE_CURSOR -> {
+                        int nw = Math.max(minW, w - dx);
+                        x += (w - nw);
+                        w = nw;
+                        h = Math.max(minH, h + dy);
+                    }
                     default -> {}
                 }
                 dialog.setBounds(x, y, w, h);

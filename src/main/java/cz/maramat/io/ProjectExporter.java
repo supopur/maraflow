@@ -343,7 +343,11 @@ public final class ProjectExporter {
             String suffix = sheet.partCount() > 1 ? "_p" + sheet.partIndex() : "";
             String fileName = String.format(Locale.US, "%02d_%s%s.png", i + 1, sanitizeFilename(sheet.page().getName()), suffix);
             File outFile = new File(outDir, fileName);
-            ImageIO.write(img, "png", outFile);
+            try {
+                ImageIO.write(img, "png", outFile);
+            } finally {
+                img.flush();
+            }
             written.add(outFile);
         }
         return written;
@@ -646,9 +650,22 @@ public final class ProjectExporter {
                     }
                     continue;
                 }
-                if (line.startsWith("(*", idx)) {
-                    inBlockComment = true;
-                    continue;
+                if (line.startsWith("(*", idx) || line.startsWith("/*", idx)) {
+                    String openTok = line.substring(idx, idx + 2);
+                    String closeTok = openTok.equals("(*") ? "*)" : "*/";
+                    int end = line.indexOf(closeTok, idx + 2);
+                    if (end < 0) {
+                        String tok = line.substring(idx);
+                        drawStToken(g2, tok, x, y, monoItalic, new Color(0x00, 0x7A, 0x00));
+                        inBlockComment = true;
+                        break;
+                    } else {
+                        String tok = line.substring(idx, end + 2);
+                        drawStToken(g2, tok, x, y, monoItalic, new Color(0x00, 0x7A, 0x00));
+                        x += tok.length() * charW;
+                        idx = end + 2;
+                        continue;
+                    }
                 }
                 if (line.startsWith("//", idx)) {
                     drawStToken(g2, line.substring(idx), x, y, monoItalic, new Color(0x00, 0x7A, 0x00));
@@ -984,8 +1001,9 @@ public final class ProjectExporter {
         PlcThread[] threads = PlcThread.values();
         for (int i = 0; i < threads.length; i++) {
             PlcThread t = threads[i];
-            int estUs = i < report.threadEstUs().length ? report.threadEstUs()[i] : 0;
-            int maxUs = i < report.threadMaxUs().length ? report.threadMaxUs()[i] : t.getMaxAllowedUs();
+            int tid = t.getId();
+            int estUs = tid < report.threadEstUs().length ? report.threadEstUs()[tid] : 0;
+            int maxUs = tid < report.threadMaxUs().length ? report.threadMaxUs()[tid] : t.getMaxAllowedUs();
             int blkCount = i < threadBlocks.length ? threadBlocks[i] : 0;
             String[] vals = {
                     t.getDisplayLabel(),
@@ -1012,11 +1030,14 @@ public final class ProjectExporter {
         return y;
     }
 
+    private static final java.util.regex.Pattern DIGITS_PAT = java.util.regex.Pattern.compile("\\d+");
+    private static final java.util.regex.Pattern NON_DIGITS_PAT = java.util.regex.Pattern.compile("\\D+");
+
     private static double drawGpioSummaryTable(Graphics2D g2, double x, double y, double w, Project project) {
         java.util.Comparator<String> pinOrder = java.util.Comparator
-                .comparing((String s) -> s.replaceAll("\\d+", ""))
+                .comparing((String s) -> DIGITS_PAT.matcher(s).replaceAll(""))
                 .thenComparingInt(s -> {
-                    String digits = s.replaceAll("\\D+", "");
+                    String digits = NON_DIGITS_PAT.matcher(s).replaceAll("");
                     return digits.isEmpty() ? 0 : Integer.parseInt(digits);
                 });
         java.util.Set<String> di = new java.util.TreeSet<>(pinOrder);

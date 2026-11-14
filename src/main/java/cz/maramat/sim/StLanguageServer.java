@@ -201,9 +201,9 @@ public final class StLanguageServer {
             String rawLine = lines[i];
             String trimmed = rawLine.trim();
 
-            if (trimmed.startsWith("/*")) inComment = true;
+            if (trimmed.startsWith("/*") || trimmed.startsWith("(*")) inComment = true;
             if (inComment) {
-                if (trimmed.contains("*/")) inComment = false;
+                if (trimmed.contains("*/") || trimmed.contains("*)")) inComment = false;
                 continue;
             }
             if (trimmed.startsWith("//") || trimmed.isEmpty()) continue;
@@ -220,11 +220,46 @@ public final class StLanguageServer {
         }
     }
 
+    private static final Pattern IDENT_PAT = Pattern.compile("\\b([A-Za-z_][A-Za-z0-9_]*)\\b");
+    private static final Pattern HW_IO_PAT = Pattern.compile("^(?:DI|DO|AI|AO|PWM|M)\\d+$");
+    private static final Pattern REG_PAT = Pattern.compile("^REG_\\d+$");
+    private static final Pattern DI_PAT = Pattern.compile("^DI\\d+$");
+    private static final Pattern DO_PAT = Pattern.compile("^DO\\d+$");
+    private static final Pattern AI_PAT = Pattern.compile("^AI\\d+$");
+    private static final Pattern AO_PAT = Pattern.compile("^AO\\d+$");
+    private static final Pattern PWM_PAT = Pattern.compile("^PWM\\d+$");
+    private static final Pattern M_PAT = Pattern.compile("^M\\d+$");
+    private static final Pattern OPEN_BLOCK_PAT = Pattern.compile("^\\s*(IF|CASE|FOR|WHILE|REPEAT|VAR|VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern CLOSE_BLOCK_PAT = Pattern.compile("^\\s*(END_IF|END_CASE|END_FOR|END_WHILE|END_REPEAT|END_VAR|UNTIL)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern MID_BLOCK_PAT = Pattern.compile("^\\s*(ELSE|ELSIF)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern END_KEYWORD_PAT = Pattern.compile("\\bEND_[A-Z_]+\\b", Pattern.CASE_INSENSITIVE);
+    private static volatile Set<String> staticKnownIdentifiers;
+
+    private static Set<String> getStaticKnownIdentifiers() {
+        Set<String> s = staticKnownIdentifiers;
+        if (s != null) return s;
+        synchronized (StLanguageServer.class) {
+            if (staticKnownIdentifiers != null) return staticKnownIdentifiers;
+            Set<String> known = new HashSet<>();
+            for (String kw : ST_KEYWORDS) known.add(kw.toUpperCase(Locale.ROOT));
+            for (String fn : ST_BUILTIN_FUNCTIONS) known.add(fn.toUpperCase(Locale.ROOT));
+            for (String fb : ST_STANDARD_FBS) known.add(fb.toUpperCase(Locale.ROOT));
+            for (cz.maramat.model.BlockDefinition def : cz.maramat.model.BlockCatalog.getAllDefinitions().values()) {
+                known.add(def.getTypeName().toUpperCase(Locale.ROOT));
+                for (cz.maramat.model.BlockDefinition.PinSpec p : def.getDefaultInputs()) {
+                    known.add(p.shortName().toUpperCase(Locale.ROOT));
+                }
+                for (cz.maramat.model.BlockDefinition.PinSpec p : def.getDefaultOutputs()) {
+                    known.add(p.shortName().toUpperCase(Locale.ROOT));
+                }
+            }
+            staticKnownIdentifiers = Set.copyOf(known);
+            return staticKnownIdentifiers;
+        }
+    }
+
     private static void checkUndeclaredIdentifiers(String code, List<StVariable> declaredVars, Project project, List<Diagnostic> diags) {
-        Set<String> known = new HashSet<>();
-        for (String kw : ST_KEYWORDS) known.add(kw.toUpperCase(Locale.ROOT));
-        for (String fn : ST_BUILTIN_FUNCTIONS) known.add(fn.toUpperCase(Locale.ROOT));
-        for (String fb : ST_STANDARD_FBS) known.add(fb.toUpperCase(Locale.ROOT));
+        Set<String> known = new HashSet<>(getStaticKnownIdentifiers());
 
         if (declaredVars != null) {
             for (StVariable v : declaredVars) {
@@ -241,23 +276,12 @@ public final class StLanguageServer {
             }
         }
 
-        for (cz.maramat.model.BlockDefinition def : cz.maramat.model.BlockCatalog.getAllDefinitions().values()) {
-            known.add(def.getTypeName().toUpperCase(Locale.ROOT));
-            for (cz.maramat.model.BlockDefinition.PinSpec p : def.getDefaultInputs()) {
-                known.add(p.shortName().toUpperCase(Locale.ROOT));
-            }
-            for (cz.maramat.model.BlockDefinition.PinSpec p : def.getDefaultOutputs()) {
-                known.add(p.shortName().toUpperCase(Locale.ROOT));
-            }
-        }
-
         String stripped = stripCommentsAndStrings(code);
         String[] lines = stripped.split("\n", -1);
-        Pattern identPat = Pattern.compile("\\b([A-Za-z_][A-Za-z0-9_]*)\\b");
 
         for (int lineIdx = 0; lineIdx < lines.length; lineIdx++) {
             String line = lines[lineIdx];
-            Matcher m = identPat.matcher(line);
+            Matcher m = IDENT_PAT.matcher(line);
             while (m.find()) {
                 String id = m.group(1);
                 String upper = id.toUpperCase(Locale.ROOT);
@@ -280,18 +304,70 @@ public final class StLanguageServer {
     public static boolean isHardwareIo(String word) {
         if (word == null) return false;
         String w = word.toUpperCase(Locale.ROOT);
-        return w.matches("^(?:DI|DO|AI|AO|PWM|M)\\d+$") || w.matches("^REG_\\d+$");
+        return HW_IO_PAT.matcher(w).matches() || REG_PAT.matcher(w).matches();
     }
 
     private static String stripCommentsAndStrings(String code) {
-        // Strip multi-line comments /* ... */ and (* ... *)
-        String s = code.replaceAll("/\\*[\\s\\S]*?\\*/", " ");
-        s = s.replaceAll("\\(\\*[\\s\\S]*?\\*\\)", " ");
-        // Strip single line comments // ...
-        s = s.replaceAll("//.*", " ");
-        // Strip single quoted strings '...'
-        s = s.replaceAll("'[^'\\n]*'", "' '");
-        return s;
+        if (code == null || code.isEmpty()) return "";
+        int n = code.length();
+        StringBuilder sb = new StringBuilder(n);
+        int i = 0;
+        while (i < n) {
+            char c = code.charAt(i);
+            char next = (i + 1 < n) ? code.charAt(i + 1) : '\0';
+            if (c == '\'' ) {
+                sb.append("' ");
+                i++;
+                while (i < n) {
+                    char sc = code.charAt(i);
+                    if (sc == '\n') {
+                        sb.append('\n');
+                        i++;
+                        break;
+                    }
+                    if (sc == '\'') {
+                        sb.append('\'');
+                        i++;
+                        break;
+                    }
+                    sb.append(' ');
+                    i++;
+                }
+            } else if (c == '/' && next == '/') {
+                while (i < n && code.charAt(i) != '\n') {
+                    sb.append(' ');
+                    i++;
+                }
+            } else if (c == '/' && next == '*') {
+                sb.append("  ");
+                i += 2;
+                while (i < n) {
+                    if (code.charAt(i) == '*' && i + 1 < n && code.charAt(i + 1) == '/') {
+                        sb.append("  ");
+                        i += 2;
+                        break;
+                    }
+                    sb.append(code.charAt(i) == '\n' ? '\n' : ' ');
+                    i++;
+                }
+            } else if (c == '(' && next == '*') {
+                sb.append("  ");
+                i += 2;
+                while (i < n) {
+                    if (code.charAt(i) == '*' && i + 1 < n && code.charAt(i + 1) == ')') {
+                        sb.append("  ");
+                        i += 2;
+                        break;
+                    }
+                    sb.append(code.charAt(i) == '\n' ? '\n' : ' ');
+                    i++;
+                }
+            } else {
+                sb.append(c);
+                i++;
+            }
+        }
+        return sb.toString();
     }
 
     private static volatile List<CompletionItem> staticCompletions;
@@ -557,25 +633,25 @@ public final class StLanguageServer {
         }
 
         // Check Hardware I/O
-        if (upper.matches("^DI\\d+$")) {
+        if (DI_PAT.matcher(upper).matches()) {
             return "<html><b>Digital Input:</b> " + upper + "<br><b>Type:</b> BOOL<br>24V DC opto-isolated industrial input channel.</html>";
         }
-        if (upper.matches("^DO\\d+$")) {
+        if (DO_PAT.matcher(upper).matches()) {
             return "<html><b>Digital Output:</b> " + upper + "<br><b>Type:</b> BOOL<br>Relay / SSR industrial digital output channel.</html>";
         }
-        if (upper.matches("^AI\\d+$")) {
+        if (AI_PAT.matcher(upper).matches()) {
             return "<html><b>Analog Input:</b> " + upper + "<br><b>Type:</b> REAL<br>12-bit ADC input channel (0-10V / 4-20mA).</html>";
         }
-        if (upper.matches("^AO\\d+$")) {
+        if (AO_PAT.matcher(upper).matches()) {
             return "<html><b>Analog Output:</b> " + upper + "<br><b>Type:</b> REAL<br>12-bit DAC output channel (0-10V).</html>";
         }
-        if (upper.matches("^PWM\\d+$")) {
+        if (PWM_PAT.matcher(upper).matches()) {
             return "<html><b>PWM Output:</b> " + upper + "<br><b>Type:</b> REAL<br>High-speed timer PWM output (0.0 to 100.0% duty).</html>";
         }
-        if (upper.matches("^M\\d+$")) {
+        if (M_PAT.matcher(upper).matches()) {
             return "<html><b>Memory Marker:</b> " + upper + "<br><b>Type:</b> BOOL<br>Internal memory flag marker bit.</html>";
         }
-        if (upper.matches("^REG_\\d+$")) {
+        if (REG_PAT.matcher(upper).matches()) {
             return "<html><b>PLC Register:</b> " + upper + "<br><b>Type:</b> REAL / DINT<br>Retentive 32-bit register stored in external FRAM/EEPROM.</html>";
         }
 
@@ -607,10 +683,6 @@ public final class StLanguageServer {
         StringBuilder sb = new StringBuilder();
         int indentLevel = 0;
 
-        Pattern openBlockPat = Pattern.compile("^\\s*(IF|CASE|FOR|WHILE|REPEAT|VAR|VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT)\\b", Pattern.CASE_INSENSITIVE);
-        Pattern closeBlockPat = Pattern.compile("^\\s*(END_IF|END_CASE|END_FOR|END_WHILE|END_REPEAT|END_VAR|UNTIL)\\b", Pattern.CASE_INSENSITIVE);
-        Pattern midBlockPat = Pattern.compile("^\\s*(ELSE|ELSIF)\\b", Pattern.CASE_INSENSITIVE);
-
         for (String raw : lines) {
             String trimmed = raw.trim();
             if (trimmed.isEmpty()) {
@@ -618,8 +690,8 @@ public final class StLanguageServer {
                 continue;
             }
 
-            boolean isClose = closeBlockPat.matcher(trimmed).find();
-            boolean isMid = midBlockPat.matcher(trimmed).find();
+            boolean isClose = CLOSE_BLOCK_PAT.matcher(trimmed).find();
+            boolean isMid = MID_BLOCK_PAT.matcher(trimmed).find();
 
             if (isClose || isMid) {
                 indentLevel = Math.max(0, indentLevel - 1);
@@ -629,8 +701,9 @@ public final class StLanguageServer {
             sb.append(trimmed);
             sb.append("\n");
 
-            boolean isOpen = openBlockPat.matcher(trimmed).find();
-            if ((isOpen || isMid) && !trimmed.contains("END_")) {
+            boolean isOpen = OPEN_BLOCK_PAT.matcher(trimmed).find();
+            String codeOnly = stripCommentsAndStrings(trimmed);
+            if ((isOpen || isMid) && !END_KEYWORD_PAT.matcher(codeOnly).find()) {
                 indentLevel++;
             }
         }

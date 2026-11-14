@@ -226,6 +226,13 @@ public class MainWindow extends JFrame {
 
             @Override
             public void onPagesStructureChanged() {
+                for (FloatingPageWindow fpw : new ArrayList<>(floatingPageWindows)) {
+                    if (!project.getPages().contains(fpw.getPage())) {
+                        fpw.closeWindow();
+                    } else {
+                        fpw.refreshTitle();
+                    }
+                }
                 libraryTreePanel.rebuildTree();
                 refreshTitles();
             }
@@ -309,7 +316,29 @@ public class MainWindow extends JFrame {
         setLocationRelativeTo(null);
     }
 
+    private boolean confirmDiscardUnsavedChanges(String actionTitle) {
+        if (!projectOpen || project == null || !project.isDirty()) {
+            return true;
+        }
+        Object[] options = {"Save", "Discard", "Cancel"};
+        int choice = JOptionPane.showOptionDialog(
+                this,
+                "You have unsaved changes in '" + project.getProjectName() + "'.\nSave before continuing?",
+                actionTitle,
+                JOptionPane.YES_NO_CANCEL_OPTION,
+                JOptionPane.WARNING_MESSAGE,
+                null,
+                options,
+                options[0]
+        );
+        if (choice == 0) {
+            return actionSaveProject(false);
+        }
+        return choice == 1;
+    }
+
     private void showHomeScreen() {
+        if (!confirmDiscardUnsavedChanges("Close Project")) return;
         for (FloatingPageWindow fpw : new ArrayList<>(floatingPageWindows)) {
             fpw.closeWindow();
         }
@@ -327,6 +356,7 @@ public class MainWindow extends JFrame {
         }
         floatingPageWindows.clear();
         simEngine.stopSimulation(project);
+        scopePanel.reset();
         this.project = newProj;
         this.projectOpen = true;
         undoManager.clear();
@@ -558,21 +588,24 @@ public class MainWindow extends JFrame {
         JMenuItem cutItem = new JMenuItem("Cut");
         cutItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_X, menuMask));
         cutItem.addActionListener(e -> {
-            if (!isActivePageLadder()) fbdCanvas.cutSelection();
+            if (isActivePageSt()) stEditorPanel.cutEditorSelection();
+            else if (!isActivePageLadder()) fbdCanvas.cutSelection();
         });
         editMenu.add(cutItem);
 
         JMenuItem copyItem = new JMenuItem("Copy");
         copyItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_C, menuMask));
         copyItem.addActionListener(e -> {
-            if (!isActivePageLadder()) fbdCanvas.copySelection();
+            if (isActivePageSt()) stEditorPanel.copyEditorSelection();
+            else if (!isActivePageLadder()) fbdCanvas.copySelection();
         });
         editMenu.add(copyItem);
 
         JMenuItem pasteItem = new JMenuItem("Paste");
         pasteItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_V, menuMask));
         pasteItem.addActionListener(e -> {
-            if (!isActivePageLadder()) fbdCanvas.pasteClipboard();
+            if (isActivePageSt()) stEditorPanel.pasteEditorSelection();
+            else if (!isActivePageLadder()) fbdCanvas.pasteClipboard();
         });
         editMenu.add(pasteItem);
 
@@ -581,7 +614,7 @@ public class MainWindow extends JFrame {
         dupItem.addActionListener(e -> {
             if (isActivePageLadder()) {
                 ladderCanvas.duplicateSelectedRung();
-            } else {
+            } else if (!isActivePageSt()) {
                 fbdCanvas.duplicateSelection();
             }
         });
@@ -590,7 +623,9 @@ public class MainWindow extends JFrame {
         JMenuItem delItem = new JMenuItem("Delete");
         delItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_BACK_SPACE, 0));
         delItem.addActionListener(e -> {
-            if (isActivePageLadder()) {
+            if (isActivePageSt()) {
+                stEditorPanel.deleteEditorSelection();
+            } else if (isActivePageLadder()) {
                 ladderCanvas.deleteSelection();
             } else {
                 fbdCanvas.deleteSelection();
@@ -603,7 +638,8 @@ public class MainWindow extends JFrame {
         JMenuItem selAllItem = new JMenuItem("Select All");
         selAllItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_A, menuMask));
         selAllItem.addActionListener(e -> {
-            if (!isActivePageLadder()) fbdCanvas.selectAll();
+            if (isActivePageSt()) stEditorPanel.selectAllEditorText();
+            else if (!isActivePageLadder()) fbdCanvas.selectAll();
         });
         editMenu.add(selAllItem);
 
@@ -1184,6 +1220,7 @@ public class MainWindow extends JFrame {
     // =========================================================================
 
     private void actionNewProjectWizard(IecLanguage preselectedLanguage) {
+        if (!confirmDiscardUnsavedChanges("New Project")) return;
         NewProjectWizardDialog wiz = new NewProjectWizardDialog(this, preselectedLanguage);
         wiz.setVisible(true);
         Project created = wiz.getCreatedProject();
@@ -1206,6 +1243,7 @@ public class MainWindow extends JFrame {
     }
 
     private void openProjectFromFile(File file) {
+        if (!confirmDiscardUnsavedChanges("Open Project")) return;
         try {
             Project loaded = MflProjectSerializer.loadProject(file);
             addRecentFile(file);

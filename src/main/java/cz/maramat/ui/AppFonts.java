@@ -51,8 +51,13 @@ public final class AppFonts {
         return MONO_FONT_FAMILY;
     }
 
+    private static final java.util.concurrent.ConcurrentHashMap<Long, Font> UI_FONT_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<Long, Font> MONO_FONT_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
+
     public static Font ui(int style, float size) {
-        return new Font(UI_FONT_FAMILY, style, Math.round(size));
+        int pt = Math.round(size);
+        long key = ((long) style << 32) | (pt & 0xFFFFFFFFL);
+        return UI_FONT_CACHE.computeIfAbsent(key, k -> new Font(UI_FONT_FAMILY, style, pt));
     }
 
     public static Font uiPlain() {
@@ -68,7 +73,9 @@ public final class AppFonts {
     }
 
     public static Font mono(int style, float size) {
-        return new Font(MONO_FONT_FAMILY, style, Math.round(size));
+        int pt = Math.round(size);
+        long key = ((long) style << 32) | (pt & 0xFFFFFFFFL);
+        return MONO_FONT_CACHE.computeIfAbsent(key, k -> new Font(MONO_FONT_FAMILY, style, pt));
     }
 
     public static Font canvasMono(float baseSize) {
@@ -81,5 +88,13 @@ public final class AppFonts {
 
     public static int scaled(int basePx) {
         return cz.maramat.settings.AppSettings.get().scale(basePx);
+    }
+
+    public static java.awt.Frame resolveFrameOwner(java.awt.Component c) {
+        java.awt.Window w = javax.swing.SwingUtilities.getWindowAncestor(c);
+        while (w != null && !(w instanceof java.awt.Frame)) {
+            w = w.getOwner();
+        }
+        return (java.awt.Frame) w;
     }
 }

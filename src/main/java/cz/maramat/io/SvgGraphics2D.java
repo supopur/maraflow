@@ -19,16 +19,14 @@ import java.util.Map;
  */
 public class SvgGraphics2D extends Graphics2D {
 
+    private static final Graphics2D SHARED_METRICS_DELEGATE =
+            new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB).createGraphics();
+
     private static final class SvgBuffer {
         final StringBuilder defs = new StringBuilder();
         final StringBuilder body = new StringBuilder();
         int clipCounter = 0;
-        final Graphics2D metricsDelegate;
-
-        SvgBuffer() {
-            BufferedImage img = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
-            metricsDelegate = img.createGraphics();
-        }
+        final Graphics2D metricsDelegate = SHARED_METRICS_DELEGATE;
     }
 
     private final SvgBuffer buf;

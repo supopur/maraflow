@@ -43,7 +43,7 @@ public class BlockInstance {
 
     private final List<PinInstance> inputs = new ArrayList<>();
     private final List<PinInstance> outputs = new ArrayList<>();
-    private final Map<String, String> customProperties = new LinkedHashMap<>();
+    private final Map<String, String> customProperties = java.util.Collections.synchronizedMap(new LinkedHashMap<>());
 
     // Transient runtime state for edge detection, flip-flops, timers, registers
     private transient boolean prevEnState = false;

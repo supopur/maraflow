@@ -3,6 +3,7 @@ package cz.maramat.sim;
 import cz.maramat.model.BlockCatalog;
 import cz.maramat.model.BlockInstance;
 import cz.maramat.model.DataType;
+import cz.maramat.model.IecLanguage;
 import cz.maramat.model.Page;
 import cz.maramat.model.Project;
 import cz.maramat.model.StVariable;
@@ -17,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SimulatorBridgeServerTest {
@@ -85,6 +87,65 @@ class SimulatorBridgeServerTest {
             assertEquals(SimulationEngine.State.STOPPED, engine.getState());
 
             assertTrue(notifications.get() >= 3);
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
+    void subPollSendsDeltaUpdatesAndBoolTrueFalseParsesCleanly() throws Exception {
+        assertEquals(1.0, DataType.BOOL.toNumericValue("TRUE"));
+        assertEquals(0.0, DataType.BOOL.toNumericValue("FALSE"));
+
+        Project project = new Project();
+        project.setProjectName("Delta Demo");
+        Page stPage = new Page("Control", IecLanguage.ST);
+        stPage.getStVariables().add(new StVariable(StVariable.Scope.VAR, "Flag", DataType.BOOL, "FALSE", ""));
+        stPage.getStVariables().add(new StVariable(StVariable.Scope.VAR, "Temp", DataType.FLOAT, "21.5", ""));
+        stPage.getStVariables().add(new StVariable(StVariable.Scope.VAR, "Count", DataType.INT, "0", ""));
+        stPage.setStCode("""
+                IF Flag THEN
+                    Count := Count + 1;
+                END_IF;
+                """);
+        project.getPages().add(stPage);
+
+        SimulationEngine engine = new SimulationEngine(() -> {});
+        SimulatorBridgeServer server = new SimulatorBridgeServer(engine, () -> project, () -> {});
+        server.start(0);
+        int port = server.getPort();
+
+        try (Socket sock = new Socket("127.0.0.1", port);
+             BufferedReader in = new BufferedReader(new InputStreamReader(sock.getInputStream(), StandardCharsets.UTF_8));
+             PrintWriter out = new PrintWriter(new OutputStreamWriter(sock.getOutputStream(), StandardCharsets.UTF_8), true)) {
+
+            out.println("SUB Flag Temp Count");
+            assertEquals("OK 3", in.readLine());
+
+            // Initial POLL must return all 3 subscribed indices
+            out.println("POLL");
+            String first = in.readLine();
+            assertTrue(first.startsWith("OK state=STOPPED"));
+            assertTrue(first.contains("| 0=0.0 1=21.5 2=0.0"), "Expected initial full snapshot, got: " + first);
+
+            // Second POLL with no changes must return empty delta section
+            out.println("POLL");
+            String second = in.readLine();
+            assertTrue(second.endsWith("|"), "Expected empty delta, got: " + second);
+
+            // Mutate Flag and execute ST scan -> Count increments once
+            out.println("SET Flag 1.0");
+            assertEquals("OK", in.readLine());
+            engine.stepOnceForTesting(project, 10.0);
+            assertEquals(1.0, engine.getOperandValue(project, "Flag"));
+            assertEquals(1.0, engine.getOperandValue(project, "Count"));
+
+            // Third POLL must include only changed indices (0 and 2), omitting unchanged index 1
+            out.println("POLL");
+            String third = in.readLine();
+            assertTrue(third.contains("0=1.0"), "Expected changed index 0 in delta: " + third);
+            assertTrue(third.contains("2=1.0"), "Expected changed index 2 in delta: " + third);
+            assertFalse(third.contains("1="), "Unchanged index 1 must be omitted from delta: " + third);
         } finally {
             server.stop();
         }

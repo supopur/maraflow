@@ -14,7 +14,7 @@ public class UndoManager50 {
 
     private final Deque<HistoryEntry> undoStack = new ArrayDeque<>();
     private final Deque<HistoryEntry> redoStack = new ArrayDeque<>();
-    private final List<Runnable> changeListeners = new ArrayList<>();
+    private final List<Runnable> changeListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     public void recordPageAction(String actionName, int pageIndex, Page beforeState, Page afterState) {
         if (undoStack.size() >= MAX_HISTORY) {
@@ -90,7 +90,13 @@ public class UndoManager50 {
     }
 
     public void addChangeListener(Runnable r) {
-        changeListeners.add(r);
+        if (r != null && !changeListeners.contains(r)) {
+            changeListeners.add(r);
+        }
+    }
+
+    public void removeChangeListener(Runnable r) {
+        changeListeners.remove(r);
     }
 
     private void notifyListeners() {

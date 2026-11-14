@@ -199,8 +199,28 @@ public final class MflProjectSerializer {
             }
         }
 
-        try (FileOutputStream out = new FileOutputStream(file)) {
-            props.storeToXML(out, "Maraflow PLC Project (.mfl)", "UTF-8");
+        java.nio.file.Path targetPath = file.toPath();
+        java.nio.file.Path parentDir = targetPath.getParent();
+        if (parentDir != null) {
+            java.nio.file.Files.createDirectories(parentDir);
+        }
+        java.nio.file.Path tmpPath = java.nio.file.Files.createTempFile(
+                parentDir != null ? parentDir : java.nio.file.Path.of("."),
+                ".maraflow_save_", ".tmp");
+        try {
+            try (FileOutputStream out = new FileOutputStream(tmpPath.toFile())) {
+                props.storeToXML(out, "Maraflow PLC Project (.mfl)", "UTF-8");
+            }
+            try {
+                java.nio.file.Files.move(tmpPath, targetPath,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            } catch (java.nio.file.AtomicMoveNotSupportedException ex) {
+                java.nio.file.Files.move(tmpPath, targetPath,
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            java.nio.file.Files.deleteIfExists(tmpPath);
         }
         project.setProjectFile(file);
         project.setDirty(false);

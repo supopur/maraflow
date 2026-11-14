@@ -109,11 +109,14 @@ public enum DataType {
 
     public double toNumericValue(String valStr) {
         if (valStr == null || valStr.isBlank()) return 0.0;
+        String s = valStr.trim();
+        if ("true".equalsIgnoreCase(s)) return 1.0;
+        if ("false".equalsIgnoreCase(s)) return 0.0;
         try {
             if (this == FLOAT) {
-                return Double.parseDouble(valStr.trim());
+                return Double.parseDouble(s);
             }
-            return (double) parseIntegerLiteral(valStr.trim());
+            return (double) parseIntegerLiteral(s);
         } catch (Exception e) {
             return 0.0;
         }

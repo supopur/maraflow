@@ -46,7 +46,7 @@ public final class AppSettings {
     // Help
     private String helpLanguage = "auto"; // "auto", "en", "cs"
 
-    private final List<Runnable> listeners = new ArrayList<>();
+    private final List<Runnable> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     private AppSettings() {}
 
@@ -64,9 +64,9 @@ public final class AppSettings {
 
     public void applySettingsToUi() {
         float scale = getScaleFactor();
-        int fontSize = Math.max(10, Math.round(12 * scale));
-        Font scaledUiFont = new Font("Segoe UI", Font.PLAIN, fontSize);
-        Font scaledBoldFont = new Font("Segoe UI", Font.BOLD, fontSize);
+        int fontSize = Math.max(10, Math.round(11 * scale));
+        Font scaledUiFont = cz.maramat.ui.AppFonts.ui(Font.PLAIN, fontSize);
+        Font scaledBoldFont = cz.maramat.ui.AppFonts.ui(Font.BOLD, fontSize);
 
         UIManager.put("defaultFont", scaledUiFont);
         String[] fontKeys = {
@@ -97,7 +97,13 @@ public final class AppSettings {
     }
 
     public void addChangeListener(Runnable r) {
-        listeners.add(r);
+        if (r != null && !listeners.contains(r)) {
+            listeners.add(r);
+        }
+    }
+
+    public void removeChangeListener(Runnable r) {
+        listeners.remove(r);
     }
 
     public int getUiScalePercent() {

@@ -333,14 +333,36 @@ public final class HelpWindow extends JFrame {
         updateNavButtons();
     }
 
+    private javax.swing.SwingWorker<List<SearchResult>, Void> activeSearchWorker;
+
     private void runSearch() {
         String q = searchField.getText();
         searchModel.clear();
+        if (activeSearchWorker != null && !activeSearchWorker.isDone()) {
+            activeSearchWorker.cancel(true);
+        }
         if (q == null || q.isBlank()) return;
         String locale = AppSettings.get().resolveHelpLocale();
-        for (SearchResult r : searchIndex.search(q, locale, contentManager)) {
-            searchModel.addElement(r);
-        }
+        activeSearchWorker = new javax.swing.SwingWorker<>() {
+            @Override
+            protected List<SearchResult> doInBackground() {
+                return searchIndex.search(q, locale, contentManager);
+            }
+
+            @Override
+            protected void done() {
+                if (isCancelled()) return;
+                try {
+                    if (!q.equals(searchField.getText())) return;
+                    searchModel.clear();
+                    for (SearchResult r : get()) {
+                        searchModel.addElement(r);
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+        };
+        activeSearchWorker.execute();
     }
 
     private void syncLangCombo() {
@@ -495,6 +517,13 @@ public final class HelpWindow extends JFrame {
     }
 
     private void releaseResources() {
+        if (searchDebounceTimer != null) {
+            searchDebounceTimer.stop();
+        }
+        if (activeSearchWorker != null && !activeSearchWorker.isDone()) {
+            activeSearchWorker.cancel(true);
+            activeSearchWorker = null;
+        }
         contentManager.releaseCaches();
         FbdDiagramRenderer.clearCache();
         LdDiagramRenderer.clearCache();
