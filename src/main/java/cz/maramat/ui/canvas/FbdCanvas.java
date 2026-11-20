@@ -739,14 +739,16 @@ public class FbdCanvas extends JPanel {
                             PinInstance outPin = hitBlock.getOutputs().getFirst();
 
                             if ("Momentary".equalsIgnoreCase(swMode)) {
+                                double numVal = outPin.getDataType().toNumericValue(valB);
                                 hitBlock.getCustomProperties().put("CurrentValue", valB);
-                                outPin.setRuntimeValue(outPin.getDataType().toNumericValue(valB));
+                                simEngine.setOperandValue(project, hitBlock.getName() + "." + outPin.getShortName(), numVal);
                                 heldMomentaryXVar = hitBlock;
                             } else {
                                 String cur = hitBlock.getCustomProperties().getOrDefault("CurrentValue", "0");
                                 String next = cur.equals(valA) ? valB : valA;
+                                double numVal = outPin.getDataType().toNumericValue(next);
                                 hitBlock.getCustomProperties().put("CurrentValue", next);
-                                outPin.setRuntimeValue(outPin.getDataType().toNumericValue(next));
+                                simEngine.setOperandValue(project, hitBlock.getName() + "." + outPin.getShortName(), numVal);
                             }
                             repaint();
                             return;
@@ -791,11 +793,13 @@ public class FbdCanvas extends JPanel {
                 GraphicElement hitGraphic = findGraphicAtPixel(page, mx, my);
                 if (hitGraphic != null) {
                     if (isVisualButtonLockedInLiveMode(hitGraphic)) {
-                        if (hitGraphic.isToggleButton()) {
-                            hitGraphic.setActiveState(!hitGraphic.isActiveState());
-                        } else {
-                            hitGraphic.setActiveState(true);
+                        boolean newState = hitGraphic.isToggleButton() ? !hitGraphic.isActiveState() : true;
+                        hitGraphic.setActiveState(newState);
+                        if (!hitGraphic.isToggleButton()) {
                             heldVisualButton = hitGraphic;
+                        }
+                        if (!hitGraphic.getBoundTargetPin().isBlank()) {
+                            simEngine.setOperandValue(project, hitGraphic.getBoundTargetPin(), newState ? 1.0 : 0.0);
                         }
                         repaint();
                         return;
@@ -1026,15 +1030,19 @@ public class FbdCanvas extends JPanel {
 
                 if (heldVisualButton != null) {
                     heldVisualButton.setActiveState(false);
+                    if (!heldVisualButton.getBoundTargetPin().isBlank()) {
+                        simEngine.setOperandValue(project, heldVisualButton.getBoundTargetPin(), 0.0);
+                    }
                     heldVisualButton = null;
                     repaint();
                 }
 
                 if (heldMomentaryXVar != null) {
                     String valA = heldMomentaryXVar.getCustomProperties().getOrDefault("ValA", "0");
-                    heldMomentaryXVar.getCustomProperties().put("CurrentValue", valA);
                     PinInstance outPin = heldMomentaryXVar.getOutputs().getFirst();
-                    outPin.setRuntimeValue(outPin.getDataType().toNumericValue(valA));
+                    double numVal = outPin.getDataType().toNumericValue(valA);
+                    heldMomentaryXVar.getCustomProperties().put("CurrentValue", valA);
+                    simEngine.setOperandValue(project, heldMomentaryXVar.getName() + "." + outPin.getShortName(), numVal);
                     heldMomentaryXVar = null;
                     repaint();
                 }

@@ -410,11 +410,19 @@ public final class MflwEmitter {
 
     private int resolveInput(BlockInstance b, int pinIndex, Map<String, Integer> wiredSourceSlot) {
         Integer wired = wiredSourceSlot.get(b.getId() + ":IN:" + pinIndex);
-        if (wired != null) return wired;
+        if (wired != null) {
+            if (pinIndex < b.getInputs().size()) {
+                String key = b.getName() + "." + b.getInputs().get(pinIndex).getShortName();
+                operandToSlot.putIfAbsent(key, wired);
+            }
+            return wired;
+        }
         if (pinIndex >= b.getInputs().size()) return 0;
         PinInstance pin = b.getInputs().get(pinIndex);
         int constSlot = allocSlot(pin.getDataType());
         addInitEntry(constSlot, pin.getDataType(), pin.getConstantValue());
+        String key = b.getName() + "." + pin.getShortName();
+        operandToSlot.putIfAbsent(key, constSlot);
         return constSlot;
     }
 
