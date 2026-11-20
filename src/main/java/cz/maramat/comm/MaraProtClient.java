@@ -236,7 +236,18 @@ public final class MaraProtClient implements Closeable {
         int crcCalc = calcCrc16(fullFrame, HEADER_BYTES + rxLen);
         int crcRx = (fullFrame[HEADER_BYTES + rxLen] & 0xFF) | ((fullFrame[HEADER_BYTES + rxLen + 1] & 0xFF) << 8);
         if (crcCalc != crcRx) throw new IOException("CRC mismatch on MaraProt response");
-        if (rxStatus != 0) throw new IOException("PLC returned MaraProt error status: " + rxStatus);
+        if (rxStatus != 0) {
+            String errName = switch (rxStatus) {
+                case 1 -> "ERR_CRC";
+                case 2 -> "ERR_OPCODE";
+                case 3 -> "ERR_PARAM";
+                case 4 -> "ERR_BUSY";
+                case 5 -> "ERR_STATE";
+                case 6 -> "ERR_STORAGE (EEPROM write failed)";
+                default -> "ERR_UNKNOWN";
+            };
+            throw new IOException("PLC returned MaraProt " + errName + " (status=" + rxStatus + ", op=0x" + Integer.toHexString(opcode) + ")");
+        }
 
         byte[] respPayload = new byte[rxLen];
         if (rxLen > 0) System.arraycopy(fullFrame, HEADER_BYTES, respPayload, 0, rxLen);
