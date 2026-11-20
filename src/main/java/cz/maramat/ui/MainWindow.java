@@ -797,11 +797,14 @@ public class MainWindow extends JFrame {
         commMenu.add(readPlcItem);
 
         JMenuItem syncRtcItem = new JMenuItem("Set PLC RTC / Time");
-        syncRtcItem.addActionListener(e -> {
-            plcLogPanel.appendLog("Synchronized STM32F407 hardware RTC with host time.");
-            JOptionPane.showMessageDialog(this, "PLC RTC synchronized to host system clock.", "RTC Sync", JOptionPane.INFORMATION_MESSAGE);
-        });
+        syncRtcItem.addActionListener(e -> actionSyncRtc());
         commMenu.add(syncRtcItem);
+
+        commMenu.addSeparator();
+
+        JMenuItem dfuItem = new JMenuItem("Firmware Update (USB DFU)...");
+        dfuItem.addActionListener(e -> new cz.maramat.ui.dialogs.DfuFirmwareUpdateDialog(this, plcLogPanel::appendLog).setVisible(true));
+        commMenu.add(dfuItem);
         bar.add(commMenu);
 
         // 6. Options (Ctrl/Cmd + , opens settings)
@@ -1591,6 +1594,33 @@ public class MainWindow extends JFrame {
             actionUpload();
         } else if (dlg.getNextAction() == CompilationResultsDialog.NextAction.UPLOAD_AND_WATCH) {
             actionUploadAndWatch();
+        }
+    }
+
+    private void actionSyncRtc() {
+        MaraProtClient liveClient = activeWatchClient;
+        if (liveClient != null) {
+            Thread.ofVirtual().name("MaraProt-RtcSync").start(() -> {
+                try {
+                    long epochSec = java.time.Instant.now().getEpochSecond();
+                    liveClient.setRtcUnixSec(epochSec);
+                    javax.swing.SwingUtilities.invokeLater(() -> {
+                        plcLogPanel.appendLog("Synchronized STM32F407 hardware RTC with host time (" + epochSec + ").");
+                        JOptionPane.showMessageDialog(this, "PLC RTC synchronized to host system clock.", "RTC Sync", JOptionPane.INFORMATION_MESSAGE);
+                    });
+                } catch (Exception ex) {
+                    javax.swing.SwingUtilities.invokeLater(() ->
+                        JOptionPane.showMessageDialog(this, "Failed to sync PLC RTC:\n" + ex.getMessage(), "RTC Sync Error", JOptionPane.ERROR_MESSAGE)
+                    );
+                }
+            });
+            return;
+        }
+        CommunicationDialog dlg = new CommunicationDialog(this, project, CommunicationDialog.Mode.SYNC_RTC);
+        dlg.setVisible(true);
+        if (dlg.isConnectionSucceeded()) {
+            plcLogPanel.appendLog("Synchronized STM32F407 hardware RTC with host time.");
+            JOptionPane.showMessageDialog(this, "PLC RTC synchronized to host system clock.", "RTC Sync", JOptionPane.INFORMATION_MESSAGE);
         }
     }
 

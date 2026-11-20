@@ -114,4 +114,54 @@ class MaraVmAndProtTest {
             assertTrue(vm.getVirtualDo(4), "Negated OREF input pin should invert 0.0 to true on DO4");
         }
     }
+
+    @Test
+    void testShieldPeripheralsCompileAndRunInNativeVm() {
+        Project proj = new Project("shield_test", "Duino - S", cz.maramat.model.IecLanguage.FBD, 2);
+        assertEquals("Duino - S", proj.getTargetPlatform());
+        Page page = proj.getPages().getFirst();
+
+        BlockInstance tmp75 = new BlockInstance(BlockCatalog.getById("Comm.I2C.TMP75"), "TMP1", 10, 10, 2, 10);
+        tmp75.getCustomProperties().put("DeviceAddressHex", "0x4A");
+
+        BlockInstance ds = new BlockInstance(BlockCatalog.getById("Comm.DS18B20.DS18B20Read"), "DS1", 10, 20, 2, 20);
+        ds.getCustomProperties().put("OneWirePin", "DIO13");
+        ds.getCustomProperties().put("RomAddress", "28-AABBCCDDEEFF01");
+
+        BlockInstance chRaw = new BlockInstance(BlockCatalog.getById("IO.CH455G"), "SEG1", 10, 30, 2, 30);
+        chRaw.configureCh455gPins("Raw Digits / Segments", "1011");
+        assertEquals(6, chRaw.getInputs().size(), "1011 mask should expose En, D0, D2, D3, DpMask, Brt");
+        assertEquals("D0", chRaw.getInputs().get(1).getShortName());
+        assertEquals("D2", chRaw.getInputs().get(2).getShortName());
+        assertEquals("D3", chRaw.getInputs().get(3).getShortName());
+
+        BlockInstance chNum = new BlockInstance(BlockCatalog.getById("IO.CH455G"), "SEG2", 10, 45, 2, 40);
+        chNum.configureCh455gPins("Number (Float / Int)", "0111");
+        assertEquals(4, chNum.getInputs().size(), "Number mode should expose En, Val, Dec, Brt");
+
+        page.getBlocks().addAll(java.util.List.of(tmp75, ds, chRaw, chNum));
+
+        MflwEmitter.EmittedProgram emitted = BytecodeCompiler.compileProgram(proj);
+        Integer tmpSlot = emitted.operandToSlot().get("TMP1.Tmp");
+        Integer tmpOkSlot = emitted.operandToSlot().get("TMP1.Ok");
+        Integer dsSlot = emitted.operandToSlot().get("DS1.Tmp");
+        Integer seg1ActSlot = emitted.operandToSlot().get("SEG1.Act");
+        Integer seg2ActSlot = emitted.operandToSlot().get("SEG2.Act");
+        assertNotNull(tmpSlot);
+        assertNotNull(dsSlot);
+        assertNotNull(seg1ActSlot);
+        assertNotNull(seg2ActSlot);
+
+        try (NativeMaraVm vm = new NativeMaraVm()) {
+            assertEquals(0, vm.loadImage(emitted.image()));
+            assertEquals(0, vm.setState(NativeMaraVm.RunState.RUNNING));
+            assertEquals(0, vm.stepThread(2, 100_000));
+
+            assertEquals(25.0, vm.readSlotAsDouble(tmpSlot), 0.01);
+            assertEquals(1.0, vm.readSlotAsDouble(tmpOkSlot));
+            assertEquals(22.5, vm.readSlotAsDouble(dsSlot), 0.01);
+            assertEquals(1.0, vm.readSlotAsDouble(seg1ActSlot));
+            assertEquals(1.0, vm.readSlotAsDouble(seg2ActSlot));
+        }
+    }
 }
