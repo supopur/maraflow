@@ -6,6 +6,7 @@ import cz.maramat.model.IecLanguage;
 import cz.maramat.model.Page;
 import cz.maramat.model.PinInstance;
 import cz.maramat.model.Project;
+import cz.maramat.model.StVariable;
 import cz.maramat.model.Wire;
 import cz.maramat.vm.MaraVm;
 
@@ -33,6 +34,7 @@ public final class MflwEmitter {
     private final Map<String, Integer> operandToSlot = new LinkedHashMap<>();
     private final Map<Integer, String> slotToOperand = new LinkedHashMap<>();
     private final List<InitEntry> initEntries = new ArrayList<>();
+    private Project currentProject;
 
     private record InitEntry(int slotId, long rawBits) {}
 
@@ -43,6 +45,7 @@ public final class MflwEmitter {
     }
 
     private EmittedProgram build(Project project) {
+        this.currentProject = project;
         // 1. Allocate output slots for all FBD blocks and record symbol mappings
         Map<String, Integer> blockPinSlot = new HashMap<>();
         for (Page page : project.getPages()) {
@@ -84,7 +87,12 @@ public final class MflwEmitter {
         }
 
         for (Page page : project.getPages()) {
-            if (page.isMacro() || page.getLanguage() != IecLanguage.FBD) continue;
+            if (page.isMacro()) continue;
+            if (page.getLanguage() == IecLanguage.ST) {
+                emitStPage(threadStreams[Math.clamp(page.getStThreadId(), 1, 5)], page);
+                continue;
+            }
+            if (page.getLanguage() != IecLanguage.FBD) continue;
             List<BlockInstance> sorted = new ArrayList<>(page.getAllBlockInstances());
             sorted.sort(Comparator.comparingInt(BlockInstance::getOrder));
             for (BlockInstance b : sorted) {
@@ -307,13 +315,97 @@ public final class MflwEmitter {
                 writeU16(out, dty);
             }
             default -> {
-                // Other specialized blocks (e.g. Visual.Value, Visual.Segment) need no VM instruction or map to MOV
-                if ("Visual.Value".equals(id) && !b.getInputs().isEmpty()) {
+                if (id.startsWith("Macro.User.")) {
+                    emitStMacroInstance(out, b, id.substring("Macro.User.".length()), enSlot, firstArg, blockPinSlot, wiredSourceSlot);
+                } else if ("Visual.Value".equals(id) && !b.getInputs().isEmpty()) {
                     int srcA = resolveInput(b, 0, wiredSourceSlot);
                     operandToSlot.put(b.getName() + ".In", srcA);
                 }
             }
         }
+    }
+
+    private void emitStMacroInstance(ByteArrayOutputStream out, BlockInstance b, String macroName,
+                                     int enSlot, int firstArg,
+                                     Map<String, Integer> blockPinSlot, Map<String, Integer> wiredSourceSlot) {
+        if (currentProject == null) return;
+        Page macroPage = null;
+        for (Page p : currentProject.getPages()) {
+            if (p.isMacro() && p.getLanguage() == IecLanguage.ST) {
+                String clean = p.getName().startsWith("*") ? p.getName().substring(1).trim() : p.getName().trim();
+                if (clean.equalsIgnoreCase(macroName)) {
+                    macroPage = p;
+                    break;
+                }
+            }
+        }
+        if (macroPage == null) return;
+
+        Map<String, Integer> varSlots = new HashMap<>();
+        Map<String, DataType> varTypes = new HashMap<>();
+        for (StVariable v : macroPage.getStVariables()) {
+            int slotId = allocSlot(v.getDataType());
+            varSlots.put(v.getName().toUpperCase(), slotId);
+            varTypes.put(v.getName().toUpperCase(), v.getDataType());
+            addInitEntry(slotId, v.getDataType(), v.getInitialValue());
+        }
+
+        // Copy FBD block inputs -> VAR_INPUT slots
+        for (int i = firstArg; i < b.getInputs().size(); i++) {
+            PinInstance inPin = b.getInputs().get(i);
+            Integer dstSlot = varSlots.get(inPin.getShortName().toUpperCase());
+            if (dstSlot != null) {
+                int srcSlot = resolveInput(b, i, wiredSourceSlot);
+                writeWord(out, MaraVm.OP_MOV, 0, enSlot, dstSlot, srcSlot);
+            }
+        }
+
+        // Compile ST body
+        StBytecodeCompiler.compile(macroPage.getStCode(), out, varSlots, varTypes, new StBytecodeCompiler.SlotAllocator() {
+            @Override
+            public int allocTempSlot(DataType dt) {
+                return allocSlot(dt);
+            }
+
+            @Override
+            public void addConstInit(int slotId, DataType dt, String valStr) {
+                addInitEntry(slotId, dt, valStr);
+            }
+        });
+
+        // Copy VAR_OUTPUT slots -> FBD block output pin slots
+        for (int i = 0; i < b.getOutputs().size(); i++) {
+            PinInstance outPin = b.getOutputs().get(i);
+            Integer srcSlot = varSlots.get(outPin.getShortName().toUpperCase());
+            Integer dstSlot = blockPinSlot.get(b.getId() + ":OUT:" + i);
+            if (srcSlot != null && dstSlot != null) {
+                writeWord(out, MaraVm.OP_MOV, 0, MaraVm.SLOT_ALWAYS_ENABLED, dstSlot, srcSlot);
+            }
+        }
+    }
+
+    private void emitStPage(ByteArrayOutputStream out, Page page) {
+        Map<String, Integer> varSlots = new HashMap<>();
+        Map<String, DataType> varTypes = new HashMap<>();
+        for (StVariable v : page.getStVariables()) {
+            int slotId = allocSlot(v.getDataType());
+            varSlots.put(v.getName().toUpperCase(), slotId);
+            varTypes.put(v.getName().toUpperCase(), v.getDataType());
+            addInitEntry(slotId, v.getDataType(), v.getInitialValue());
+            operandToSlot.put(page.getName() + "." + v.getName(), slotId);
+            slotToOperand.put(slotId, page.getName() + "." + v.getName());
+        }
+        StBytecodeCompiler.compile(page.getStCode(), out, varSlots, varTypes, new StBytecodeCompiler.SlotAllocator() {
+            @Override
+            public int allocTempSlot(DataType dt) {
+                return allocSlot(dt);
+            }
+
+            @Override
+            public void addConstInit(int slotId, DataType dt, String valStr) {
+                addInitEntry(slotId, dt, valStr);
+            }
+        });
     }
 
     private int resolveInput(BlockInstance b, int pinIndex, Map<String, Integer> wiredSourceSlot) {

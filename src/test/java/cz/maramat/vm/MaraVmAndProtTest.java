@@ -3,6 +3,7 @@ package cz.maramat.vm;
 import cz.maramat.comm.MaraProtClient;
 import cz.maramat.compiler.BytecodeCompiler;
 import cz.maramat.compiler.MflwEmitter;
+import cz.maramat.io.MflProjectSerializer;
 import cz.maramat.model.BlockCatalog;
 import cz.maramat.model.BlockInstance;
 import cz.maramat.model.Page;
@@ -11,6 +12,9 @@ import cz.maramat.model.Wire;
 import org.junit.jupiter.api.Test;
 
 import java.awt.Point;
+import java.io.File;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -68,5 +72,49 @@ class MaraVmAndProtTest {
         int calc = MaraProtClient.calcCrc16(frame, frame.length - 2);
         int rx = (frame[frame.length - 2] & 0xFF) | ((frame[frame.length - 1] & 0xFF) << 8);
         assertEquals(calc, rx);
+    }
+
+    @Test
+    void kyvadlovyProvozStMacroCompilesAndRunsOnMaraVm() throws Exception {
+        File mflFile = new File("/Users/matoussmekal/Downloads/Kyvadlovy provoz.mfl");
+        if (!mflFile.exists()) return;
+
+        Project proj = MflProjectSerializer.loadProject(mflFile);
+        MflwEmitter.EmittedProgram emitted = BytecodeCompiler.compileProgram(proj);
+
+        Map<Integer, Boolean> outputs = new HashMap<>();
+        MaraVm vm = new MaraVm(new MaraHalDriver() {
+            @Override
+            public void doWrite(int channel, boolean value) {
+                outputs.put(channel, value);
+            }
+        });
+
+        assertEquals(MaraVm.Status.OK, vm.loadImage(emitted.image()));
+        assertEquals(MaraVm.Status.OK, vm.setState(MaraVm.RunState.RUNNING));
+
+        // First scan with Run=0: LeftRed (DO24)=true, RightRed (DO3)=true, LeftGreen (DO22)=false, RightGreen (DO2)=false
+        assertEquals(MaraVm.Status.OK, vm.stepThread(2, 100_000));
+        assertTrue(outputs.getOrDefault(24, false), "DO24 (LeftRed) should be ON when stopped");
+        assertTrue(outputs.getOrDefault(3, false), "DO3 (RightRed) should be ON when stopped");
+        assertFalse(outputs.getOrDefault(22, true), "DO22 (LeftGreen) should be OFF when stopped");
+        assertFalse(outputs.getOrDefault(2, true), "DO2 (RightGreen) should be OFF when stopped");
+
+        // Turn on BoolVar1.Y (Switch=1) -> Stav=0 (LeftGreen DO22=true, RightRed DO3=true)
+        Integer boolVarSlot = emitted.operandToSlot().get("BoolVar1.Y");
+        assertNotNull(boolVarSlot);
+        vm.writeSlotFromDouble(boolVarSlot, 1.0);
+        assertEquals(MaraVm.Status.OK, vm.stepThread(2, 100_000));
+        assertTrue(outputs.getOrDefault(22, false), "DO22 (LeftGreen) should turn ON in state 0");
+        assertFalse(outputs.getOrDefault(24, true), "DO24 (LeftRed) should turn OFF in state 0");
+        assertTrue(outputs.getOrDefault(3, false), "DO3 (RightRed) should stay ON in state 0");
+
+        // Advance 25 ticks -> reaches state 2 (RightGreen DO2=true)
+        boolean sawRightGreen = false;
+        for (int i = 0; i < 25; i++) {
+            vm.stepThread(2, 100_000);
+            if (outputs.getOrDefault(2, false)) sawRightGreen = true;
+        }
+        assertTrue(sawRightGreen, "DO2 (RightGreen) should turn ON when state machine reaches state 2");
     }
 }
