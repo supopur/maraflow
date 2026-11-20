@@ -162,6 +162,22 @@ public final class MaraProtClient implements Closeable {
         transceive(OP_FW_ENTER_ROM_DFU, req, 1000);
     }
 
+    public synchronized void writeSlot(int slotId, double value) throws IOException {
+        int type = (slotId >>> MaraVm.SLOT_TYPE_SHIFT) & 0x3;
+        int valSize = MaraVm.getSlotSize(slotId);
+        if (valSize <= 0) return;
+        ByteBuffer req = ByteBuffer.allocate(4 + valSize).order(ByteOrder.LITTLE_ENDIAN);
+        req.putShort((short) 1);
+        req.putShort((short) slotId);
+        switch (type) {
+            case MaraVm.TYPE_BOOL -> req.put((byte) (value != 0.0 ? 1 : 0));
+            case MaraVm.TYPE_INT -> req.putInt((int) Math.round(value));
+            case MaraVm.TYPE_LONG -> req.putLong(Math.round(value));
+            case MaraVm.TYPE_FLOAT -> req.putFloat((float) value);
+        }
+        transceive(OP_SLOT_WRITE_BATCH, req.array(), 1000);
+    }
+
     public static int calcCrc16(byte[] data, int len) {
         int crc = 0xFFFF;
         for (int i = 0; i < len; i++) {

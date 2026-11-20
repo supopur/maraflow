@@ -1628,6 +1628,8 @@ public class MainWindow extends JFrame {
     }
 
     private void stopPlcWatchLoop() {
+        simEngine.setWatchWriteForwarder(null);
+        simEngine.setExternalWatchActive(false);
         Thread t = activeWatchThread;
         activeWatchThread = null;
         if (t != null) t.interrupt();
@@ -1642,6 +1644,27 @@ public class MainWindow extends JFrame {
         stopPlcWatchLoop();
         if (client == null || program == null) return;
         activeWatchClient = client;
+        simEngine.setExternalWatchActive(true);
+        simEngine.setWatchWriteForwarder((operand, val) -> {
+            Integer slotId = program.operandToSlot().get(operand);
+            if (slotId == null) {
+                for (var e : program.operandToSlot().entrySet()) {
+                    if (e.getKey().equalsIgnoreCase(operand)) {
+                        slotId = e.getValue();
+                        break;
+                    }
+                }
+            }
+            if (slotId != null) {
+                int targetSlot = slotId;
+                Thread.ofVirtual().name("MaraProt-Write").start(() -> {
+                    try {
+                        client.writeSlot(targetSlot, val);
+                    } catch (Exception ignored) {
+                    }
+                });
+            }
+        });
         activeWatchThread = Thread.ofVirtual().name("MaraProt-Watch").start(() -> {
             try {
                 int[] slotIds = program.slotToOperand().keySet().stream().mapToInt(Integer::intValue).toArray();
@@ -1654,7 +1677,7 @@ public class MainWindow extends JFrame {
                             String operand = program.slotToOperand().get(entry.getKey());
                             if (operand != null) {
                                 double val = decodeSlotValue(entry.getKey(), entry.getValue());
-                                simEngine.setOperandValue(project, operand, val);
+                                simEngine.setOperandValueFromPlc(project, operand, val);
                             }
                         }
                     }

@@ -61,8 +61,11 @@ public class SimulationEngine {
     private final Map<String, double[]> arrayRegisters = new ConcurrentHashMap<>();
     private final Map<String, Integer> blockLastInterruptPulseSeen = new ConcurrentHashMap<>();
     private final Map<String, Boolean> blockPendingRstClear = new ConcurrentHashMap<>();
+    private final Set<String> externallyDrivenInputPins = ConcurrentHashMap.newKeySet();
     private final Runnable uiRepaintCallback;
     private final List<ScopeSampleListener> scopeListeners = new CopyOnWriteArrayList<>();
+    private volatile boolean externalWatchActive = false;
+    private volatile java.util.function.BiConsumer<String, Double> watchWriteForwarder;
 
     public interface ScopeSampleListener {
         void onScanCompleted(Project project, double simTimeSeconds);
@@ -161,8 +164,22 @@ public class SimulationEngine {
     }
 
     public void setOperandValue(Project project, String operand, double value) {
+        applyOperandValue(project, operand, value, true);
+    }
+
+    public void setOperandValueFromPlc(Project project, String operand, double value) {
+        applyOperandValue(project, operand, value, false);
+    }
+
+    private void applyOperandValue(Project project, String operand, double value, boolean forwardToPlc) {
         if (operand == null || operand.isBlank()) return;
         String key = operand.trim();
+        if (forwardToPlc && state == State.WATCH_MODE && externalWatchActive) {
+            var fwd = this.watchWriteForwarder;
+            if (fwd != null) {
+                fwd.accept(key, value);
+            }
+        }
         virtualRegisters.put(key, value);
         virtualRegisters.put(key.toUpperCase(), value);
 
@@ -188,7 +205,16 @@ public class SimulationEngine {
                             }
                             for (PinInstance in : b.getInputs()) {
                                 if (in.getShortName().equalsIgnoreCase(right)) {
-                                    in.setRuntimeValue(DataType.convertValue(value, DataType.FLOAT, in.getDataType()));
+                                    double converted = DataType.convertValue(value, DataType.FLOAT, in.getDataType());
+                                    in.setRuntimeValue(converted);
+                                    String fullPin = (b.getName() + "." + in.getShortName()).toUpperCase();
+                                    externallyDrivenInputPins.add(fullPin);
+                                    for (GraphicElement ge : page.getGraphics()) {
+                                        if (ge.getKind() == GraphicElement.Kind.VISUAL_BUTTON
+                                                && ge.getBoundTargetPin().equalsIgnoreCase(fullPin)) {
+                                            ge.setActiveState(converted != 0.0);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -293,6 +319,14 @@ public class SimulationEngine {
         requestUiRepaint();
     }
 
+    public void setExternalWatchActive(boolean externalWatchActive) {
+        this.externalWatchActive = externalWatchActive;
+    }
+
+    public void setWatchWriteForwarder(java.util.function.BiConsumer<String, Double> forwarder) {
+        this.watchWriteForwarder = forwarder;
+    }
+
     public void enterWatchMode(Project project) {
         synchronized (lifecycleLock) {
             stopSimulation(project);
@@ -372,6 +406,7 @@ public class SimulationEngine {
         arrayRegisters.clear();
         blockLastInterruptPulseSeen.clear();
         blockPendingRstClear.clear();
+        externallyDrivenInputPins.clear();
         simulatedInterruptPulseCounters.clear();
         synchronized (this) {
             eStopActive = manualEStopButtonPressed;
@@ -481,21 +516,25 @@ public class SimulationEngine {
                 continue;
             }
 
-            updateEStopSupervision(project);
-            double effectiveMult = (state == State.WATCH_MODE) ? 1.0 : speedMultiplier;
-            double simDeltaMs = wallDeltaMs * effectiveMult;
-            simTimeSeconds += simDeltaMs / 1000.0;
+            if (!(state == State.WATCH_MODE && externalWatchActive)) {
+                updateEStopSupervision(project);
+                double effectiveMult = (state == State.WATCH_MODE) ? 1.0 : speedMultiplier;
+                double simDeltaMs = wallDeltaMs * effectiveMult;
+                simTimeSeconds += simDeltaMs / 1000.0;
 
-            for (PlcThread pt : PlcThread.values()) {
-                int tid = pt.getId();
-                threadAccumMs[tid] += simDeltaMs;
-                double period = pt.getPeriodMs();
-                if (threadAccumMs[tid] >= period) {
-                    int cycles = (int) Math.min(20, Math.floor(threadAccumMs[tid] / period));
-                    threadAccumMs[tid] -= cycles * period;
-                    double dtMs = cycles * period;
-                    executeThreadScan(project, tid, dtMs, simTimeSeconds);
+                for (PlcThread pt : PlcThread.values()) {
+                    int tid = pt.getId();
+                    threadAccumMs[tid] += simDeltaMs;
+                    double period = pt.getPeriodMs();
+                    if (threadAccumMs[tid] >= period) {
+                        int cycles = (int) Math.min(20, Math.floor(threadAccumMs[tid] / period));
+                        threadAccumMs[tid] -= cycles * period;
+                        double dtMs = cycles * period;
+                        executeThreadScan(project, tid, dtMs, simTimeSeconds);
+                    }
                 }
+            } else {
+                simTimeSeconds += wallDeltaMs / 1000.0;
             }
 
             long nowMs = System.currentTimeMillis();
@@ -901,7 +940,8 @@ public class SimulationEngine {
                             }
                         }
                     }
-                    if (!drivenByVisualButton) {
+                    String targetPinKey = (b.getName() + "." + inPin.getShortName()).toUpperCase();
+                    if (!drivenByVisualButton && !externallyDrivenInputPins.contains(targetPinKey)) {
                         inPin.setRuntimeValue(inPin.getDataType().toNumericValue(inPin.getConstantValue()));
                     }
                 }
