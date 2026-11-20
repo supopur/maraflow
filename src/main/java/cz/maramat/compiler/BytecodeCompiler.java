@@ -234,22 +234,23 @@ public final class BytecodeCompiler {
         int cpuPctInt = Math.clamp((int) Math.ceil(totalCpuPct), (totalModules > 0 ? 1 : 0), 100);
         logs.add("Info: Compilation succeeded. Estimated CPU load: " + String.format(java.util.Locale.US, "%.2f%%", totalCpuPct));
 
-        byte[] dummyImage = new byte[Math.min(flashBytes, 65536)];
-        dummyImage[0] = 'M';
-        dummyImage[1] = 'F';
-        dummyImage[2] = 'L';
-        dummyImage[3] = 'W';
+        MflwEmitter.EmittedProgram emitted = MflwEmitter.emit(project);
+        byte[] image = emitted.image();
 
         return new CompilationReport(
                 totalRam, 32768,
-                flashBytes, 65536,
+                image.length, 65536,
                 eepromBytes, 65536,
                 threadEstUsInt, threadMaxUsInt,
                 cpuPctInt,
                 ramByType,
                 vmOverhead,
-                dummyImage,
+                image,
                 logs
         );
+    }
+
+    public static MflwEmitter.EmittedProgram compileProgram(Project project) {
+        return MflwEmitter.emit(project);
     }
 }

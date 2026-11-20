@@ -1,5 +1,9 @@
 package cz.maramat.ui.dialogs;
 
+import cz.maramat.comm.MaraProtClient;
+import cz.maramat.comm.MaraTransport;
+import cz.maramat.compiler.BytecodeCompiler;
+import cz.maramat.compiler.MflwEmitter;
 import cz.maramat.model.Project;
 import cz.maramat.settings.AppSettings;
 import cz.maramat.ui.icons.VectorIcons;
@@ -32,6 +36,8 @@ public class CommunicationDialog extends JDialog {
     }
 
     private boolean connectionSucceeded = false;
+    private MaraProtClient connectedClient;
+    private MflwEmitter.EmittedProgram compiledProgram;
     private final Mode mode;
     private final Project project;
 
@@ -135,9 +141,15 @@ public class CommunicationDialog extends JDialog {
         p.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
         GridBagConstraints gbc = createGbc();
 
-        usbPortBox = new JComboBox<>(SERIAL_PORTS);
+        java.util.List<String> detectedPorts = MaraTransport.listSerialPorts();
+        String[] portItems = detectedPorts.isEmpty() ? SERIAL_PORTS : detectedPorts.toArray(new String[0]);
+        usbPortBox = new JComboBox<>(portItems);
         usbPortBox.setEditable(true);
-        usbPortBox.setSelectedItem(AppSettings.get().getDefaultSerialPort());
+        if (!detectedPorts.isEmpty()) {
+            usbPortBox.setSelectedIndex(0);
+        } else {
+            usbPortBox.setSelectedItem(AppSettings.get().getDefaultSerialPort());
+        }
         usbBaudBox = new JComboBox<>(BAUD_RATES);
         usbBaudBox.setSelectedItem(AppSettings.get().getDefaultBaudRate());
         usbAddrSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 254, 1));
@@ -222,11 +234,74 @@ public class CommunicationDialog extends JDialog {
                 return;
             }
         }
-        connectionSucceeded = true;
-        dispose();
+        if (mode == Mode.SETTINGS_ONLY) {
+            AppSettings.get().setDefaultCommMethod(methodTabs.getTitleAt(methodTabs.getSelectedIndex()));
+            connectionSucceeded = true;
+            dispose();
+            return;
+        }
+
+        MaraTransport transport = createSelectedTransport();
+        int stationId = getSelectedStationId();
+        MaraProtClient client = new MaraProtClient(transport, stationId);
+        try {
+            client.connect();
+            MaraProtClient.PlcInfo info = client.getInfo();
+            this.compiledProgram = BytecodeCompiler.compileProgram(project);
+            if (mode == Mode.UPLOAD || mode == Mode.WATCH) {
+                client.uploadImage(compiledProgram.image(), true, null);
+            }
+            if (mode == Mode.UPLOAD) {
+                client.close();
+            } else {
+                this.connectedClient = client;
+            }
+            connectionSucceeded = true;
+            dispose();
+        } catch (Exception ex) {
+            try { client.close(); } catch (Exception ignored) {}
+            JOptionPane.showMessageDialog(
+                    this,
+                    "MaraProt communication failed:\n" + ex.getMessage(),
+                    "Communication Error",
+                    JOptionPane.ERROR_MESSAGE
+            );
+        }
+    }
+
+    private MaraTransport createSelectedTransport() {
+        int tab = methodTabs.getSelectedIndex();
+        if (tab == 2) {
+            String host = ethIpField.getText().trim();
+            int port = ((Number) ethPortSpinner.getValue()).intValue();
+            return new MaraTransport.TcpTransport(host, port);
+        }
+        if (tab == 1) {
+            String port = String.valueOf(rs485PortBox.getSelectedItem()).trim();
+            int baud = Integer.parseInt(String.valueOf(rs485BaudBox.getSelectedItem()).trim());
+            return new MaraTransport.SerialCdcTransport(port, baud);
+        }
+        String port = String.valueOf(usbPortBox.getSelectedItem()).trim();
+        int baud = Integer.parseInt(String.valueOf(usbBaudBox.getSelectedItem()).trim());
+        return new MaraTransport.SerialCdcTransport(port, baud);
+    }
+
+    private int getSelectedStationId() {
+        int tab = methodTabs.getSelectedIndex();
+        if (tab == 1) return ((Number) rs485StationSpinner.getValue()).intValue();
+        if (tab == 2) return ((Number) ethUnitSpinner.getValue()).intValue();
+        return 0; // Point-to-point default for USB CDC
     }
 
     public boolean isConnectionSucceeded() {
         return connectionSucceeded;
+    }
+
+    public MaraProtClient getConnectedClient() {
+        return connectedClient;
+    }
+
+    public MflwEmitter.EmittedProgram getCompiledProgram() {
+        return compiledProgram;
     }
 }

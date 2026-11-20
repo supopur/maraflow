@@ -1,7 +1,10 @@
 package cz.maramat.ui;
 
+import cz.maramat.comm.MaraProtClient;
 import cz.maramat.compiler.BytecodeCompiler;
 import cz.maramat.compiler.BytecodeCompiler.CompilationReport;
+import cz.maramat.compiler.MflwEmitter;
+import cz.maramat.vm.MaraVm;
 import cz.maramat.help.HelpContext;
 import cz.maramat.help.diagram.HelpCodeExporter;
 import cz.maramat.io.MflProjectSerializer;
@@ -1590,20 +1593,25 @@ public class MainWindow extends JFrame {
         }
     }
 
+    private volatile MaraProtClient activeWatchClient;
+    private volatile Thread activeWatchThread;
+
     private void actionUploadAndWatch() {
         if (!projectOpen) return;
         CommunicationDialog commDlg = new CommunicationDialog(this, project, CommunicationDialog.Mode.WATCH);
         commDlg.setVisible(true);
         if (commDlg.isConnectionSucceeded()) {
-            plcLogPanel.appendLog("Bytecode uploaded. Transitioning into PLC Watch Mode (115200 baud smart polling).");
+            plcLogPanel.appendLog("Bytecode uploaded. Transitioning into PLC Watch Mode (MaraProt delta polling).");
             simEngine.enterWatchMode(project);
             editorToolbar.updateSimState(simEngine.getState());
+            startPlcWatchLoop(commDlg.getConnectedClient(), commDlg.getCompiledProgram());
         }
     }
 
     private void actionToggleWatchMode() {
         if (!projectOpen) return;
         if (simEngine.getState() == SimulationEngine.State.WATCH_MODE) {
+            stopPlcWatchLoop();
             simEngine.stopSimulation(project);
             plcLogPanel.appendLog("Exited PLC Watch Mode.");
             editorToolbar.updateSimState(simEngine.getState());
@@ -1615,7 +1623,66 @@ public class MainWindow extends JFrame {
             plcLogPanel.appendLog("Connected to PLC. Editor transitioned into Watch Mode (editing any block exits Watch Mode).");
             simEngine.enterWatchMode(project);
             editorToolbar.updateSimState(simEngine.getState());
+            startPlcWatchLoop(commDlg.getConnectedClient(), commDlg.getCompiledProgram());
         }
+    }
+
+    private void stopPlcWatchLoop() {
+        Thread t = activeWatchThread;
+        activeWatchThread = null;
+        if (t != null) t.interrupt();
+        MaraProtClient c = activeWatchClient;
+        activeWatchClient = null;
+        if (c != null) {
+            try { c.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    private void startPlcWatchLoop(MaraProtClient client, MflwEmitter.EmittedProgram program) {
+        stopPlcWatchLoop();
+        if (client == null || program == null) return;
+        activeWatchClient = client;
+        activeWatchThread = Thread.ofVirtual().name("MaraProt-Watch").start(() -> {
+            try {
+                int[] slotIds = program.slotToOperand().keySet().stream().mapToInt(Integer::intValue).toArray();
+                int epoch = client.watchSubscribe(slotIds);
+                while (simEngine.getState() == SimulationEngine.State.WATCH_MODE && !Thread.currentThread().isInterrupted()) {
+                    MaraProtClient.WatchUpdate upd = client.watchPoll(epoch);
+                    epoch = upd.newEpoch();
+                    if (!upd.changedSlots().isEmpty()) {
+                        for (var entry : upd.changedSlots().entrySet()) {
+                            String operand = program.slotToOperand().get(entry.getKey());
+                            if (operand != null) {
+                                double val = decodeSlotValue(entry.getKey(), entry.getValue());
+                                simEngine.setOperandValue(project, operand, val);
+                            }
+                        }
+                    }
+                    Thread.sleep(50);
+                }
+            } catch (InterruptedException ignored) {
+            } catch (Exception ex) {
+                javax.swing.SwingUtilities.invokeLater(() -> {
+                    plcLogPanel.appendLog("Watch Mode disconnected: " + ex.getMessage());
+                    simEngine.stopSimulation(project);
+                    editorToolbar.updateSimState(simEngine.getState());
+                });
+            } finally {
+                stopPlcWatchLoop();
+            }
+        });
+    }
+
+    private static double decodeSlotValue(int slotId, byte[] raw) {
+        int type = (slotId >>> MaraVm.SLOT_TYPE_SHIFT) & 0x3;
+        java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        return switch (type) {
+            case MaraVm.TYPE_BOOL -> (raw[0] != 0) ? 1.0 : 0.0;
+            case MaraVm.TYPE_INT -> bb.getInt(0);
+            case MaraVm.TYPE_LONG -> (double) bb.getLong(0);
+            case MaraVm.TYPE_FLOAT -> bb.getFloat(0);
+            default -> 0.0;
+        };
     }
 
     private void actionOpenPlcConfig() {
