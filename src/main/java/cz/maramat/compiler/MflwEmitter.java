@@ -19,6 +19,9 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import cz.maramat.model.LadderBranch;
+import cz.maramat.model.LadderElement;
+import cz.maramat.model.LadderRung;
 
 // Emits a valid MFLW v1 binary image and SlotSymbolTable for MaraVm (Java & STM32F407).
 public final class MflwEmitter {
@@ -31,6 +34,9 @@ public final class MflwEmitter {
 
     private final int[] nextSlotIndex = new int[4];
     private int nextStateIdx = 0;
+    private int nextMovAvgIdx = 0;
+    private final Map<String, Integer> arrayNameToIdx = new LinkedHashMap<>();
+    private final Map<String, Integer> regNameToSlot = new LinkedHashMap<>();
     private final Map<String, Integer> operandToSlot = new LinkedHashMap<>();
     private final Map<Integer, String> slotToOperand = new LinkedHashMap<>();
     private final List<InitEntry> initEntries = new ArrayList<>();
@@ -104,6 +110,10 @@ public final class MflwEmitter {
                 emitStPage(threadStreams[Math.clamp(page.getStThreadId(), 1, 5)], page);
                 continue;
             }
+            if (page.getLanguage() == IecLanguage.LD) {
+                emitLdPage(threadStreams, page);
+                continue;
+            }
             if (page.getLanguage() != IecLanguage.FBD) continue;
             List<BlockInstance> sorted = new ArrayList<>(page.getAllBlockInstances());
             sorted.sort(Comparator.comparingInt(BlockInstance::getOrder));
@@ -170,6 +180,14 @@ public final class MflwEmitter {
         if (id == null || id.startsWith("Visual.Vars.")) return;
 
         int[] inSlots = resolveAllInputs(out, b, wiredSourceSlot);
+        emitFbdBlockWithInputs(out, b, inSlots, blockPinSlot);
+    }
+
+    private void emitFbdBlockWithInputs(ByteArrayOutputStream out, BlockInstance b,
+                                        int[] inSlots, Map<String, Integer> blockPinSlot) {
+        String id = b.getDefinitionId();
+        if (id == null || id.startsWith("Visual.Vars.")) return;
+
         boolean hasEn = !b.getInputs().isEmpty() && "En".equals(b.getInputs().get(0).getShortName());
         int enSlot = hasEn ? inSlots[0] : NativeMaraVm.SLOT_ALWAYS_ENABLED;
         int firstArg = hasEn ? 1 : 0;
@@ -231,11 +249,17 @@ public final class MflwEmitter {
                     default -> NativeMaraVm.OP_MAX;
                 };
                 int dst = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
-                int a = inSlotAt(inSlots, firstArg);
-                int bIn = inSlotAt(inSlots, firstArg + 1);
-                writeWord(out, op, 0, enSlot, dst, a);
-                writeU16(out, bIn);
-                writeU16(out, 0);
+                DataType outDt = b.getOutputs().isEmpty() ? DataType.INT : b.getOutputs().getFirst().getDataType();
+                int argc = Math.max(2, b.getInputs().size() - firstArg);
+                int acc = inSlotAt(inSlots, firstArg);
+                for (int i = 1; i < argc; i++) {
+                    int rhs = inSlotAt(inSlots, firstArg + i);
+                    int target = (i == argc - 1) ? dst : allocSlot(outDt);
+                    writeWord(out, op, 0, enSlot, target, acc);
+                    writeU16(out, rhs);
+                    writeU16(out, 0);
+                    acc = target;
+                }
             }
             case "Math.Div", "Math.Mod" -> {
                 int op = id.equals("Math.Div") ? NativeMaraVm.OP_DIV : NativeMaraVm.OP_MOD;
@@ -276,6 +300,48 @@ public final class MflwEmitter {
                 writeU16(out, minS);
                 writeU16(out, maxS);
             }
+            case "Math.Scale" -> {
+                int dst = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                int inS = inSlotAt(inSlots, firstArg);
+                int iLo = inSlotAt(inSlots, firstArg + 1);
+                int iHi = inSlotAt(inSlots, firstArg + 2);
+                int oLo = inSlotAt(inSlots, firstArg + 3);
+                int oHi = inSlotAt(inSlots, firstArg + 4);
+                writeWord(out, NativeMaraVm.OP_SCALE, 0, enSlot, dst, inS);
+                writeU16(out, iLo);
+                writeU16(out, iHi);
+                writeU16(out, oLo);
+                writeU16(out, oHi);
+            }
+            case "Math.Random" -> {
+                int dst = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                int trigS = inSlotAt(inSlots, firstArg);
+                int minS = inSlotAt(inSlots, firstArg + 1);
+                int maxS = inSlotAt(inSlots, firstArg + 2);
+                int stIdx = nextStateIdx++;
+                writeWord(out, NativeMaraVm.OP_RANDOM, 0, enSlot, dst, trigS);
+                writeU16(out, minS);
+                writeU16(out, maxS);
+                writeU16(out, stIdx);
+                writeU16(out, 0);
+            }
+            case "Math.PID" -> {
+                int dst = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                int pv = inSlotAt(inSlots, firstArg);
+                int sp = inSlotAt(inSlots, firstArg + 1);
+                int kp = inSlotAt(inSlots, firstArg + 2);
+                int ki = inSlotAt(inSlots, firstArg + 3);
+                int kd = inSlotAt(inSlots, firstArg + 4);
+                int rst = inSlotAt(inSlots, firstArg + 5);
+                int stIdx = nextStateIdx++;
+                writeWord(out, NativeMaraVm.OP_PID, 0, enSlot, dst, pv);
+                writeU16(out, sp);
+                writeU16(out, kp);
+                writeU16(out, ki);
+                writeU16(out, kd);
+                writeU16(out, rst);
+                writeU16(out, stIdx);
+            }
             case "Main.Comparators.EQ", "Main.Comparators.NE", "Main.Comparators.GT",
                  "Main.Comparators.GE", "Main.Comparators.LT", "Main.Comparators.LE" -> {
                 int op = switch (id) {
@@ -293,6 +359,58 @@ public final class MflwEmitter {
                 writeU16(out, bIn);
                 writeU16(out, 0);
             }
+            case "Main.Comparators.InRange" -> {
+                int dst = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                int inS = inSlotAt(inSlots, firstArg);
+                int minS = inSlotAt(inSlots, firstArg + 1);
+                int maxS = inSlotAt(inSlots, firstArg + 2);
+                writeWord(out, NativeMaraVm.OP_IN_RANGE, 0, enSlot, dst, inS);
+                writeU16(out, minS);
+                writeU16(out, maxS);
+            }
+            case "Main.Comparators.Hysteresis" -> {
+                int dst = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                int inS = inSlotAt(inSlots, firstArg);
+                int loS = inSlotAt(inSlots, firstArg + 1);
+                int hiS = inSlotAt(inSlots, firstArg + 2);
+                int stIdx = nextStateIdx++;
+                writeWord(out, NativeMaraVm.OP_HYSTERESIS, 0, enSlot, dst, inS);
+                writeU16(out, loS);
+                writeU16(out, hiS);
+                writeU16(out, stIdx);
+                writeU16(out, 0);
+            }
+            case "Main.Filters.LowPass" -> {
+                int dst = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                int inS = inSlotAt(inSlots, firstArg);
+                int alpS = inSlotAt(inSlots, firstArg + 1);
+                int stIdx = nextStateIdx++;
+                writeWord(out, NativeMaraVm.OP_LOWPASS, 0, enSlot, dst, inS);
+                writeU16(out, alpS);
+                writeU16(out, stIdx);
+            }
+            case "Main.Filters.MovingAvg" -> {
+                int dst = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                int inS = inSlotAt(inSlots, firstArg);
+                int rstS = inSlotAt(inSlots, firstArg + 1);
+                int winSize = 8;
+                try {
+                    winSize = Math.clamp(Integer.parseInt(b.getCustomProperties().getOrDefault("WindowSize", "8").trim()), 1, 64);
+                } catch (NumberFormatException ignored) {}
+                int maIdx = nextMovAvgIdx++;
+                writeWord(out, NativeMaraVm.OP_MOVING_AVG, winSize, enSlot, dst, inS);
+                writeU16(out, rstS);
+                writeU16(out, maIdx);
+            }
+            case "Main.Filters.Debounce" -> {
+                int dst = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                int inS = inSlotAt(inSlots, firstArg);
+                int tmsS = inSlotAt(inSlots, firstArg + 1);
+                int stIdx = nextStateIdx++;
+                writeWord(out, NativeMaraVm.OP_DEBOUNCE, 0, enSlot, dst, inS);
+                writeU16(out, tmsS);
+                writeU16(out, stIdx);
+            }
             case "Main.Switches.Sel" -> {
                 int dst = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
                 int g = inSlotAt(inSlots, firstArg);
@@ -307,16 +425,40 @@ public final class MflwEmitter {
                 int selSlot = inSlotAt(inSlots, firstArg);
                 int dataCount = Math.max(0, inSlots.length - (firstArg + 1));
                 if (dataCount > 0) {
-                    writeWord(out, NativeMaraVm.OP_MOV, 0, enSlot, dst, inSlotAt(inSlots, firstArg + 1));
+                    int loSlot = allocSlot(DataType.INT);
+                    addInitEntry(loSlot, DataType.INT, "0");
+                    int hiSlot = allocSlot(DataType.INT);
+                    addInitEntry(hiSlot, DataType.INT, Integer.toString(dataCount - 1));
+                    int clampedSel = allocSlot(DataType.INT);
+                    writeWord(out, NativeMaraVm.OP_CLAMP, 0, enSlot, clampedSel, selSlot);
+                    writeU16(out, loSlot);
+                    writeU16(out, hiSlot);
                     for (int idx = 0; idx < dataCount; idx++) {
                         int idxConstSlot = allocSlot(DataType.INT);
                         addInitEntry(idxConstSlot, DataType.INT, Integer.toString(idx));
                         int condSlot = allocSlot(DataType.BOOL);
-                        writeWord(out, NativeMaraVm.OP_CMP_EQ, 0, enSlot, condSlot, selSlot);
+                        writeWord(out, NativeMaraVm.OP_CMP_EQ, 0, enSlot, condSlot, clampedSel);
                         writeU16(out, idxConstSlot);
                         writeU16(out, 0);
                         writeWord(out, NativeMaraVm.OP_MOV, 0, condSlot, dst, inSlotAt(inSlots, firstArg + 1 + idx));
                     }
+                }
+            }
+            case "Main.Switches.Demux" -> {
+                int adrSlot = inSlotAt(inSlots, firstArg);
+                int inS = inSlotAt(inSlots, firstArg + 1);
+                int zeroSlot = allocSlot(DataType.INT);
+                addInitEntry(zeroSlot, DataType.INT, "0");
+                for (int idx = 0; idx < b.getOutputs().size(); idx++) {
+                    int outSlot = blockPinSlot.getOrDefault(b.getId() + ":OUT:" + idx, 0);
+                    int idxConstSlot = allocSlot(DataType.INT);
+                    addInitEntry(idxConstSlot, DataType.INT, Integer.toString(idx));
+                    int eqSlot = allocSlot(DataType.BOOL);
+                    writeWord(out, NativeMaraVm.OP_CMP_EQ, 0, enSlot, eqSlot, adrSlot);
+                    writeU16(out, idxConstSlot);
+                    writeU16(out, 0);
+                    writeWord(out, NativeMaraVm.OP_MOV, 0, enSlot, outSlot, zeroSlot);
+                    writeWord(out, NativeMaraVm.OP_MOV, 0, eqSlot, outSlot, inS);
                 }
             }
             case "Main.Timers.Timer" -> {
@@ -324,18 +466,54 @@ public final class MflwEmitter {
                 int et = blockPinSlot.getOrDefault(b.getId() + ":OUT:1", NativeMaraVm.SLOT_ALWAYS_ENABLED);
                 int inS = inSlotAt(inSlots, firstArg);
                 int ptS = inSlotAt(inSlots, firstArg + 1);
+                String modeStr = b.getCustomProperties().getOrDefault("TimerMode", "TON").trim().toUpperCase();
+                int modeFlag = "TOF".equals(modeStr) ? 1 : ("TP".equals(modeStr) ? 2 : 0);
                 int stIdx = nextStateIdx++;
-                writeWord(out, NativeMaraVm.OP_TON, 0, enSlot, q, inS);
+                writeWord(out, NativeMaraVm.OP_TON, modeFlag, enSlot, q, inS);
                 writeU16(out, ptS);
                 writeU16(out, et);
                 writeU16(out, stIdx);
                 writeU16(out, 0);
+            }
+            case "Main.Timers.PulseGen" -> {
+                int q = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                int tHiS = inSlotAt(inSlots, firstArg);
+                int tLoS = inSlotAt(inSlots, firstArg + 1);
+                int stIdx = nextStateIdx++;
+                writeWord(out, NativeMaraVm.OP_PULSE_GEN, 0, enSlot, q, tHiS);
+                writeU16(out, tLoS);
+                writeU16(out, stIdx);
+            }
+            case "Main.Timers.PulseLen" -> {
+                int q = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                int inS = inSlotAt(inSlots, firstArg);
+                int lenS = inSlotAt(inSlots, firstArg + 1);
+                int stIdx = nextStateIdx++;
+                writeWord(out, NativeMaraVm.OP_PULSE_LEN, 0, enSlot, q, inS);
+                writeU16(out, lenS);
+                writeU16(out, stIdx);
             }
             case "Main.Timers.SinglePulse" -> {
                 int q = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
                 int inS = inSlotAt(inSlots, firstArg);
                 int stIdx = nextStateIdx++;
                 writeWord(out, NativeMaraVm.OP_ONE_SHOT, 0, enSlot, q, inS);
+                writeU16(out, stIdx);
+                writeU16(out, 0);
+            }
+            case "Main.Timers.Counter" -> {
+                int q = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                int cv = blockPinSlot.getOrDefault(b.getId() + ":OUT:1", 0);
+                int cu = inSlotAt(inSlots, firstArg);
+                int cd = inSlotAt(inSlots, firstArg + 1);
+                int r = inSlotAt(inSlots, firstArg + 2);
+                int pv = inSlotAt(inSlots, firstArg + 3);
+                int stIdx = nextStateIdx++;
+                writeWord(out, NativeMaraVm.OP_CTUD, 0, enSlot, q, cu);
+                writeU16(out, cd);
+                writeU16(out, r);
+                writeU16(out, pv);
+                writeU16(out, cv);
                 writeU16(out, stIdx);
                 writeU16(out, 0);
             }
@@ -487,17 +665,121 @@ public final class MflwEmitter {
                 writeU16(out, s5);
                 writeU16(out, 0);
             }
+            case "Main.Execution.ReadReg" -> {
+                String regName = b.getCustomProperties().getOrDefault("RegisterName", "REG_0").trim().toUpperCase();
+                DataType outDt = b.getOutputs().isEmpty() ? DataType.INT : b.getOutputs().getFirst().getDataType();
+                int regSlot = getOrAllocRegSlot(regName, outDt);
+                int dst = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                String trigMode = b.getCustomProperties().getOrDefault("TriggerMode", "Continuous (While En=1)");
+                int effEn = enSlot;
+                if (trigMode.startsWith("Rising") && enSlot != NativeMaraVm.SLOT_ALWAYS_ENABLED) {
+                    int pulseEn = allocSlot(DataType.BOOL);
+                    int stIdx = nextStateIdx++;
+                    writeWord(out, NativeMaraVm.OP_ONE_SHOT, 0, NativeMaraVm.SLOT_ALWAYS_ENABLED, pulseEn, enSlot);
+                    writeU16(out, stIdx);
+                    writeU16(out, 0);
+                    effEn = pulseEn;
+                }
+                if ("true".equalsIgnoreCase(b.getCustomProperties().get("RetentiveEeprom"))) {
+                    int paramId = Math.clamp(parseIoChannel(regName), 0, 255);
+                    writeWord(out, NativeMaraVm.OP_RET_READ, 0, effEn, regSlot, paramId);
+                }
+                writeWord(out, NativeMaraVm.OP_MOV, 0, effEn, dst, regSlot);
+            }
+            case "Main.Execution.WriteReg" -> {
+                String regName = b.getCustomProperties().getOrDefault("RegisterName", "REG_0").trim().toUpperCase();
+                DataType inDt = b.getInputs().size() > 1 ? b.getInputs().get(1).getDataType() : DataType.INT;
+                int regSlot = getOrAllocRegSlot(regName, inDt);
+                int inS = inSlotAt(inSlots, firstArg);
+                int dst = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                String trigMode = b.getCustomProperties().getOrDefault("TriggerMode", "Continuous (While En=1)");
+                int effEn = enSlot;
+                if (trigMode.startsWith("Rising") && enSlot != NativeMaraVm.SLOT_ALWAYS_ENABLED) {
+                    int pulseEn = allocSlot(DataType.BOOL);
+                    int stIdx = nextStateIdx++;
+                    writeWord(out, NativeMaraVm.OP_ONE_SHOT, 0, NativeMaraVm.SLOT_ALWAYS_ENABLED, pulseEn, enSlot);
+                    writeU16(out, stIdx);
+                    writeU16(out, 0);
+                    effEn = pulseEn;
+                }
+                writeWord(out, NativeMaraVm.OP_MOV, 0, effEn, regSlot, inS);
+                if ("true".equalsIgnoreCase(b.getCustomProperties().get("RetentiveEeprom"))) {
+                    int paramId = Math.clamp(parseIoChannel(regName), 0, 255);
+                    writeWord(out, NativeMaraVm.OP_RET_WRITE, 0, effEn, regSlot, paramId);
+                }
+                if (dst != 0) {
+                    writeWord(out, NativeMaraVm.OP_MOV, 0, NativeMaraVm.SLOT_ALWAYS_ENABLED, dst, regSlot);
+                }
+            }
+            case "Main.Arrays.ArrayRead" -> {
+                String arrName = b.getCustomProperties().getOrDefault("ArrayName", "ARR_0").trim().toUpperCase();
+                int arrIdx = arrayNameToIdx.computeIfAbsent(arrName, k -> Math.min(arrayNameToIdx.size(), 7));
+                int idxS = inSlotAt(inSlots, firstArg);
+                int valS = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                int oobS = blockPinSlot.getOrDefault(b.getId() + ":OUT:1", NativeMaraVm.SLOT_ALWAYS_ENABLED);
+                writeWord(out, NativeMaraVm.OP_ARRAY_READ, arrIdx, enSlot, valS, idxS);
+                writeU16(out, oobS);
+                writeU16(out, 0);
+            }
+            case "Main.Arrays.ArrayWrite" -> {
+                String arrName = b.getCustomProperties().getOrDefault("ArrayName", "ARR_0").trim().toUpperCase();
+                int arrIdx = arrayNameToIdx.computeIfAbsent(arrName, k -> Math.min(arrayNameToIdx.size(), 7));
+                int idxS = inSlotAt(inSlots, firstArg);
+                int valS = inSlotAt(inSlots, firstArg + 1);
+                int oobS = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", NativeMaraVm.SLOT_ALWAYS_ENABLED);
+                writeWord(out, NativeMaraVm.OP_ARRAY_WRITE, arrIdx, enSlot, oobS, idxS);
+                writeU16(out, valS);
+                writeU16(out, 0);
+            }
+            case "Main.Safety.EStop" -> {
+                int safeS = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                int tripS = blockPinSlot.getOrDefault(b.getId() + ":OUT:1", NativeMaraVm.SLOT_ALWAYS_ENABLED);
+                int srcS = blockPinSlot.getOrDefault(b.getId() + ":OUT:2", NativeMaraVm.SLOT_ALWAYS_ENABLED);
+                int rstS = inSlotAt(inSlots, firstArg);
+                int stIdx = nextStateIdx++;
+                writeWord(out, NativeMaraVm.OP_ESTOP_CHECK, 0, enSlot, safeS, rstS);
+                writeU16(out, tripS);
+                writeU16(out, srcS);
+                writeU16(out, stIdx);
+                writeU16(out, 0);
+            }
+            case "Main.Execution.Interrupt" -> {
+                String source = b.getCustomProperties().getOrDefault("InterruptSource", "TIM_IC1").trim().toUpperCase();
+                String edgeMode = b.getCustomProperties().getOrDefault("TriggerEdge", "RISING").trim().toUpperCase();
+                String capMode = b.getCustomProperties().getOrDefault("CaptureMode", "PULSE_WIDTH_US").trim().toUpperCase();
+                String latchPolicy = b.getCustomProperties().getOrDefault("LatchPolicy", "HOLD_FIRST_UNTIL_RST").trim().toUpperCase();
+                int capBits = "EDGE_COUNT".equals(capMode) ? 1 : (capMode.startsWith("GPIO_STATE") ? 2 : 0);
+                int edgeBits = "FALLING".equals(edgeMode) ? 1 : ("BOTH".equals(edgeMode) ? 2 : 0);
+                int latchBit = "OVERWRITE_LATEST".equals(latchPolicy) ? 1 : 0;
+                int flags = (capBits & 0x03) | ((edgeBits & 0x03) << 2) | ((latchBit & 0x01) << 4);
+                int diChan = source.startsWith("EXTI_DI") ? parseIoChannel(source) : 0xFFFF;
+                int valS = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                int flgS = blockPinSlot.getOrDefault(b.getId() + ":OUT:1", NativeMaraVm.SLOT_ALWAYS_ENABLED);
+                int rstS = inSlotAt(inSlots, firstArg);
+                int stIdx = nextStateIdx++;
+                writeWord(out, NativeMaraVm.OP_INT_CAPTURE, flags, enSlot, valS, rstS);
+                writeU16(out, flgS);
+                writeU16(out, diChan);
+                writeU16(out, stIdx);
+                writeU16(out, 0);
+            }
             default -> {
                 if (id.startsWith("Macro.User.")) {
                     emitMacroInstance(out, b, id.substring("Macro.User.".length()), enSlot, firstArg, inSlots, blockPinSlot);
                 } else if ("Visual.Value".equals(id) && !b.getInputs().isEmpty()) {
                     int srcA = inSlotAt(inSlots, 0);
                     operandToSlot.put(b.getName() + ".In", srcA);
+                } else if ("Visual.Segment".equals(id)) {
+                    for (int i = 0; i < b.getInputs().size(); i++) {
+                        operandToSlot.put(b.getName() + "." + b.getInputs().get(i).getShortName(), inSlotAt(inSlots, i));
+                    }
                 }
             }
         }
 
         boolean alwaysEnOut = "Main.Timers.Timer".equals(id)
+                || "Main.Timers.PulseGen".equals(id)
+                || "Main.Timers.PulseLen".equals(id)
                 || "Main.Timers.SinglePulse".equals(id)
                 || "IO.PWM".equals(id)
                 || id.startsWith("Macro.User.");
@@ -624,6 +906,22 @@ public final class MflwEmitter {
             public void addConstInit(int slotId, DataType dt, String valStr) {
                 addInitEntry(slotId, dt, valStr);
             }
+
+            @Override
+            public int allocStateIdx() {
+                return nextStateIdx++;
+            }
+
+            @Override
+            public void emitIoReadPrefix(String name, int slotId) {}
+
+            @Override
+            public void emitIoWriteSuffix(String name, int slotId) {}
+
+            @Override
+            public int getOrAllocGlobalSlot(String name, DataType dt) {
+                return getOrAllocRegSlot(name, dt);
+            }
         });
 
         // Copy VAR_OUTPUT slots -> FBD block output pin slots
@@ -659,7 +957,254 @@ public final class MflwEmitter {
             public void addConstInit(int slotId, DataType dt, String valStr) {
                 addInitEntry(slotId, dt, valStr);
             }
+
+            @Override
+            public int allocStateIdx() {
+                return nextStateIdx++;
+            }
+
+            @Override
+            public void emitIoReadPrefix(String name, int slotId) {
+                String u = name.toUpperCase();
+                if (u.startsWith("DI")) {
+                    writeWord(out, NativeMaraVm.OP_IO_READ, NativeMaraVm.IO_DI, NativeMaraVm.SLOT_ALWAYS_ENABLED, slotId, parseIoChannel(u));
+                } else if (u.startsWith("AI")) {
+                    writeWord(out, NativeMaraVm.OP_IO_READ, NativeMaraVm.IO_AI, NativeMaraVm.SLOT_ALWAYS_ENABLED, slotId, parseIoChannel(u));
+                }
+            }
+
+            @Override
+            public void emitIoWriteSuffix(String name, int slotId) {
+                String u = name.toUpperCase();
+                if (u.startsWith("DO") || u.startsWith("DIO")) {
+                    writeWord(out, NativeMaraVm.OP_IO_WRITE, NativeMaraVm.IO_DO, NativeMaraVm.SLOT_ALWAYS_ENABLED, parseIoChannel(u), slotId);
+                } else if (u.startsWith("AO")) {
+                    writeWord(out, NativeMaraVm.OP_IO_WRITE, NativeMaraVm.IO_AO, NativeMaraVm.SLOT_ALWAYS_ENABLED, parseIoChannel(u), slotId);
+                }
+            }
+
+            @Override
+            public int getOrAllocGlobalSlot(String name, DataType dt) {
+                return getOrAllocRegSlot(name, dt);
+            }
         });
+    }
+
+    private int getOrAllocRegSlot(String name, DataType dt) {
+        String key = name.trim().toUpperCase();
+        Integer existing = regNameToSlot.get(key);
+        if (existing != null) return existing;
+        int slot = allocSlot(dt);
+        regNameToSlot.put(key, slot);
+        operandToSlot.putIfAbsent(name.trim(), slot);
+        operandToSlot.putIfAbsent(key, slot);
+        slotToOperand.putIfAbsent(slot, key);
+        return slot;
+    }
+
+    private void emitLdPage(ByteArrayOutputStream[] threadStreams, Page page) {
+        List<LadderRung> rungs = new ArrayList<>(page.getRungs());
+        rungs.sort(Comparator.comparingInt(LadderRung::getOrder));
+
+        for (LadderRung rung : rungs) {
+            int tid = Math.clamp(rung.getThreadId(), 1, 5);
+            ByteArrayOutputStream out = threadStreams[tid];
+            List<LadderElement> mainEls = rung.getMainElements();
+            int n = mainEls.size();
+
+            int[] nodePowerSlots = new int[n + 1];
+            int railSlot = allocSlot(DataType.BOOL);
+            addInitEntry(railSlot, DataType.BOOL, "1");
+            nodePowerSlots[0] = railSlot;
+
+            Map<LadderBranch, Integer> branchOutSlots = new HashMap<>();
+
+            for (int col = 0; col < n; col++) {
+                for (LadderBranch br : rung.getParallelBranches()) {
+                    if (br.getEndColumn() == col - 1 && br.getStartColumn() <= col - 1) {
+                        Integer brOut = branchOutSlots.get(br);
+                        if (brOut != null) {
+                            int merged = allocSlot(DataType.BOOL);
+                            writeWord(out, NativeMaraVm.OP_OR, 2, NativeMaraVm.SLOT_ALWAYS_ENABLED, merged, nodePowerSlots[col]);
+                            writeU16(out, brOut);
+                            writeU16(out, 0);
+                            nodePowerSlots[col] = merged;
+                        }
+                    }
+                }
+                for (LadderBranch br : rung.getParallelBranches()) {
+                    if (br.getStartColumn() == col) {
+                        int brPwr = nodePowerSlots[col];
+                        for (LadderElement bel : br.getElements()) {
+                            brPwr = emitLdSeriesElement(out, bel, brPwr);
+                        }
+                        branchOutSlots.put(br, brPwr);
+                    }
+                }
+                nodePowerSlots[col + 1] = emitLdSeriesElement(out, mainEls.get(col), nodePowerSlots[col]);
+            }
+
+            int finalPower = nodePowerSlots[n];
+            for (LadderBranch br : rung.getParallelBranches()) {
+                if (br.getEndColumn() >= n - 1 && (n == 0 || br.getStartColumn() < n)) {
+                    if (n == 0) {
+                        int brPwr = railSlot;
+                        for (LadderElement bel : br.getElements()) {
+                            brPwr = emitLdSeriesElement(out, bel, brPwr);
+                        }
+                        branchOutSlots.put(br, brPwr);
+                    }
+                    Integer brOut = branchOutSlots.get(br);
+                    if (brOut != null) {
+                        int merged = allocSlot(DataType.BOOL);
+                        writeWord(out, NativeMaraVm.OP_OR, 2, NativeMaraVm.SLOT_ALWAYS_ENABLED, merged, finalPower);
+                        writeU16(out, brOut);
+                        writeU16(out, 0);
+                        finalPower = merged;
+                    }
+                }
+            }
+
+            for (LadderElement coil : rung.getCoils()) {
+                emitLdCoil(out, coil, finalPower);
+            }
+        }
+    }
+
+    private int emitLdSeriesElement(ByteArrayOutputStream out, LadderElement el, int powerInSlot) {
+        LadderElement.Kind kind = el.getKind();
+        if (kind.isContact()) {
+            int opSlot = resolveLdOperandOrConst(out, el.getOperand(), DataType.BOOL);
+            int flag = switch (kind) {
+                case NO_CONTACT -> 0;
+                case NC_CONTACT -> 1;
+                case POS_EDGE_CONTACT -> 2;
+                case NEG_EDGE_CONTACT -> 3;
+                default -> 0;
+            };
+            int outSlot = allocSlot(DataType.BOOL);
+            int stIdx = (flag >= 2) ? nextStateIdx++ : 0;
+            writeWord(out, NativeMaraVm.OP_LD_CONTACT, flag, powerInSlot, outSlot, opSlot);
+            writeU16(out, stIdx);
+            writeU16(out, 0);
+            return outSlot;
+        }
+        if (kind == LadderElement.Kind.FUNCTION_BLOCK && el.getBlockInstance() != null) {
+            BlockInstance b = el.getBlockInstance();
+            Map<String, Integer> fbPinSlot = new HashMap<>();
+            for (int i = 0; i < b.getOutputs().size(); i++) {
+                PinInstance outPin = b.getOutputs().get(i);
+                int slotId = allocSlot(outPin.getDataType());
+                fbPinSlot.put(b.getId() + ":OUT:" + i, slotId);
+                operandToSlot.putIfAbsent(b.getName() + "." + outPin.getShortName(), slotId);
+            }
+            List<PinInstance> ins = b.getInputs();
+            int[] inSlots = new int[ins.size()];
+            for (int i = 0; i < ins.size(); i++) {
+                PinInstance pin = ins.get(i);
+                if (i == 0 && "En".equalsIgnoreCase(pin.getShortName())) {
+                    inSlots[i] = powerInSlot;
+                } else {
+                    inSlots[i] = resolveLdOperandOrConst(out, pin.getConstantValue(), pin.getDataType());
+                }
+            }
+            emitFbdBlockWithInputs(out, b, inSlots, fbPinSlot);
+
+            for (int i = 0; i < b.getOutputs().size(); i++) {
+                PinInstance outPin = b.getOutputs().get(i);
+                String targetOp = outPin.getConstantValue();
+                if (targetOp != null && !targetOp.isBlank() && !targetOp.equals("0")) {
+                    Integer outSlot = fbPinSlot.get(b.getId() + ":OUT:" + i);
+                    if (outSlot != null) {
+                        emitLdWriteOperand(out, targetOp, outPin.getDataType(), NativeMaraVm.SLOT_ALWAYS_ENABLED, outSlot);
+                    }
+                }
+            }
+            if (!b.getOutputs().isEmpty() && b.getOutputs().getFirst().getDataType() == DataType.BOOL) {
+                Integer qSlot = fbPinSlot.get(b.getId() + ":OUT:0");
+                if (qSlot != null) {
+                    int outPower = allocSlot(DataType.BOOL);
+                    writeWord(out, NativeMaraVm.OP_AND, 2, NativeMaraVm.SLOT_ALWAYS_ENABLED, outPower, powerInSlot);
+                    writeU16(out, qSlot);
+                    writeU16(out, 0);
+                    return outPower;
+                }
+            }
+            return powerInSlot;
+        }
+        return powerInSlot;
+    }
+
+    private void emitLdCoil(ByteArrayOutputStream out, LadderElement coil, int finalPower) {
+        if (coil.getKind() == LadderElement.Kind.ANALOG_COIL) {
+            int srcSlot = resolveLdOperandOrConst(out, coil.getSourceOperand(), DataType.INT);
+            emitLdWriteOperand(out, coil.getOperand(), DataType.INT, finalPower, srcSlot);
+            return;
+        }
+        String op = coil.getOperand();
+        int dstSlot = getOrAllocRegSlot(op, DataType.BOOL);
+        int flag = switch (coil.getKind()) {
+            case NORMAL_COIL -> 0;
+            case NEGATED_COIL -> 1;
+            case SET_COIL -> 2;
+            case RESET_COIL -> 3;
+            case POS_EDGE_COIL -> 4;
+            case NEG_EDGE_COIL -> 5;
+            default -> 0;
+        };
+        int stIdx = (flag >= 4) ? nextStateIdx++ : 0;
+        writeWord(out, NativeMaraVm.OP_LD_COIL, flag, finalPower, dstSlot, 0);
+        writeU16(out, stIdx);
+        writeU16(out, 0);
+
+        String u = op.trim().toUpperCase();
+        if (u.startsWith("DO") || u.startsWith("DIO")) {
+            writeWord(out, NativeMaraVm.OP_IO_WRITE, NativeMaraVm.IO_DO, NativeMaraVm.SLOT_ALWAYS_ENABLED, parseIoChannel(u), dstSlot);
+        }
+    }
+
+    private int resolveLdOperandOrConst(ByteArrayOutputStream out, String raw, DataType dt) {
+        if (raw == null || raw.isBlank()) {
+            int s = allocSlot(dt);
+            addInitEntry(s, dt, "0");
+            return s;
+        }
+        String t = raw.trim();
+        String u = t.toUpperCase();
+        if ("TRUE".equals(u) || "FALSE".equals(u)) {
+            int s = allocSlot(DataType.BOOL);
+            addInitEntry(s, DataType.BOOL, u);
+            return s;
+        }
+        try {
+            Double.parseDouble(t);
+            int s = allocSlot(dt);
+            addInitEntry(s, dt, t);
+            return s;
+        } catch (NumberFormatException ignored) {}
+
+        if (u.startsWith("DI")) {
+            int s = getOrAllocRegSlot(u, DataType.BOOL);
+            writeWord(out, NativeMaraVm.OP_IO_READ, NativeMaraVm.IO_DI, NativeMaraVm.SLOT_ALWAYS_ENABLED, s, parseIoChannel(u));
+            return s;
+        }
+        if (u.startsWith("AI")) {
+            int s = getOrAllocRegSlot(u, DataType.INT);
+            writeWord(out, NativeMaraVm.OP_IO_READ, NativeMaraVm.IO_AI, NativeMaraVm.SLOT_ALWAYS_ENABLED, s, parseIoChannel(u));
+            return s;
+        }
+        return getOrAllocRegSlot(t, dt);
+    }
+
+    private void emitLdWriteOperand(ByteArrayOutputStream out, String targetOp, DataType dt, int enSlot, int srcSlot) {
+        String u = targetOp.trim().toUpperCase();
+        int dstSlot = getOrAllocRegSlot(targetOp, dt);
+        writeWord(out, NativeMaraVm.OP_MOV, 0, enSlot, dstSlot, srcSlot);
+        if (u.startsWith("DO") || u.startsWith("DIO")) {
+            writeWord(out, NativeMaraVm.OP_IO_WRITE, NativeMaraVm.IO_DO, enSlot, parseIoChannel(u), srcSlot);
+        } else if (u.startsWith("AO")) {
+            writeWord(out, NativeMaraVm.OP_IO_WRITE, NativeMaraVm.IO_AO, enSlot, parseIoChannel(u), srcSlot);
+        }
     }
 
     private static int inSlotAt(int[] inSlots, int idx) {
