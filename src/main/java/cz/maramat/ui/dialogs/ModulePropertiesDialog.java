@@ -65,6 +65,13 @@ public class ModulePropertiesDialog extends JDialog {
             "PD0", "PD1", "PD2", "PD3", "PD4", "PD5", "PD6", "PD7"
     };
 
+    private static final String[] DIO_PIN_IDS = {
+            "DIO2", "DIO3", "DIO4", "DIO5", "DIO6", "DIO7",
+            "DIO9", "DIO10", "DIO11", "DIO12", "DIO13", "DIO14", "DIO15",
+            "DIO16", "DIO17", "DIO18", "DIO19", "DIO20", "DIO21",
+            "DIO22", "DIO23", "DIO24", "DIO25", "DIO26", "DIO27"
+    };
+
     public ModulePropertiesDialog(Frame owner, Page page, BlockInstance block) {
         this(owner, null, page, block);
     }
@@ -175,10 +182,92 @@ public class ModulePropertiesDialog extends JDialog {
             specificControls.put("DataType", dtBox);
         }
 
+        if ("Math.Div".equals(defId)) {
+            boolean modOut = Boolean.parseBoolean(block.getCustomProperties().getOrDefault("ModuloOut", "false"));
+            javax.swing.JCheckBox modBox = new javax.swing.JCheckBox("Enable Mod output pin", modOut);
+            addRow(p, gbc, row++, "Modulo out:", modBox);
+            specificControls.put("ModuloOut", modBox);
+        }
+
+        if ("Main.Conversion.PackBits".equals(defId) || "Main.Conversion.UnpackBits".equals(defId)) {
+            String order = block.getCustomProperties().getOrDefault("BitOrder", "LSB");
+            JComboBox<String> orderBox = new JComboBox<>(new String[]{"LSB", "MSB"});
+            orderBox.setSelectedItem("MSB".equalsIgnoreCase(order) ? "MSB" : "LSB");
+            addRow(p, gbc, row++, "Bit Order:", orderBox);
+            specificControls.put("BitOrder", orderBox);
+        }
+
+        if ("Main.Timers.DecodeDate".equals(defId) || "Main.Timers.EncodeDate".equals(defId)) {
+            cz.maramat.model.TimeZoneRule curRule = cz.maramat.model.TimeZoneRule.fromBlock(block);
+            List<String> tzIds = new ArrayList<>(cz.maramat.model.TimeZoneRule.PRESETS.keySet());
+            tzIds.add("Custom");
+            JComboBox<String> tzBox = new JComboBox<>(tzIds.toArray(new String[0]));
+            tzBox.setSelectedItem(tzIds.contains(curRule.id()) ? curRule.id() : "Custom");
+            addRow(p, gbc, row++, "Time Zone:", tzBox);
+            specificControls.put("TimeZone", tzBox);
+
+            JSpinner stdSp = new JSpinner(new SpinnerNumberModel(curRule.stdOffsetMin(), -720, 840, 15));
+            JSpinner dstSp = new JSpinner(new SpinnerNumberModel(curRule.dstOffsetMin(), -120, 120, 15));
+            JSpinner sMonSp = new JSpinner(new SpinnerNumberModel(curRule.startMonth(), 0, 12, 1));
+            JSpinner sWkSp  = new JSpinner(new SpinnerNumberModel(curRule.startWeek(), -1, 4, 1));
+            JSpinner sDowSp = new JSpinner(new SpinnerNumberModel(curRule.startDow(), 0, 31, 1));
+            JSpinner sHrSp  = new JSpinner(new SpinnerNumberModel(curRule.startHour(), 0, 24, 1));
+            JSpinner eMonSp = new JSpinner(new SpinnerNumberModel(curRule.endMonth(), 0, 12, 1));
+            JSpinner eWkSp  = new JSpinner(new SpinnerNumberModel(curRule.endWeek(), -1, 4, 1));
+            JSpinner eDowSp = new JSpinner(new SpinnerNumberModel(curRule.endDow(), 0, 31, 1));
+            JSpinner eHrSp  = new JSpinner(new SpinnerNumberModel(curRule.endHour(), 0, 24, 1));
+
+            addRow(p, gbc, row++, "Std Offset (min):", stdSp);
+            addRow(p, gbc, row++, "DST Delta (min):", dstSp);
+            addRow(p, gbc, row++, "DST Start Month (0=Off):", sMonSp);
+            addRow(p, gbc, row++, "DST Start Week (-1=Last):", sWkSp);
+            addRow(p, gbc, row++, "DST Start DoW/Day:", sDowSp);
+            addRow(p, gbc, row++, "DST Start Hour:", sHrSp);
+            addRow(p, gbc, row++, "DST End Month:", eMonSp);
+            addRow(p, gbc, row++, "DST End Week (-1=Last):", eWkSp);
+            addRow(p, gbc, row++, "DST End DoW/Day:", eDowSp);
+            addRow(p, gbc, row++, "DST End Hour:", eHrSp);
+
+            specificControls.put("TzStdOffsetMin", stdSp);
+            specificControls.put("TzDstOffsetMin", dstSp);
+            specificControls.put("TzDstStartMonth", sMonSp);
+            specificControls.put("TzDstStartWeek", sWkSp);
+            specificControls.put("TzDstStartDow", sDowSp);
+            specificControls.put("TzDstStartHour", sHrSp);
+            specificControls.put("TzDstEndMonth", eMonSp);
+            specificControls.put("TzDstEndWeek", eWkSp);
+            specificControls.put("TzDstEndDow", eDowSp);
+            specificControls.put("TzDstEndHour", eHrSp);
+
+            Runnable syncEditable = () -> {
+                boolean custom = "Custom".equals(tzBox.getSelectedItem());
+                for (JSpinner sp : List.of(stdSp, dstSp, sMonSp, sWkSp, sDowSp, sHrSp, eMonSp, eWkSp, eDowSp, eHrSp)) {
+                    sp.setEnabled(custom);
+                }
+                if (!custom) {
+                    cz.maramat.model.TimeZoneRule preset = cz.maramat.model.TimeZoneRule.PRESETS.getOrDefault(
+                            String.valueOf(tzBox.getSelectedItem()), cz.maramat.model.TimeZoneRule.UTC);
+                    stdSp.setValue(preset.stdOffsetMin());
+                    dstSp.setValue(preset.dstOffsetMin());
+                    sMonSp.setValue(preset.startMonth());
+                    sWkSp.setValue(preset.startWeek());
+                    sDowSp.setValue(preset.startDow());
+                    sHrSp.setValue(preset.startHour());
+                    eMonSp.setValue(preset.endMonth());
+                    eWkSp.setValue(preset.endWeek());
+                    eDowSp.setValue(preset.endDow());
+                    eHrSp.setValue(preset.endHour());
+                }
+            };
+            syncEditable.run();
+            tzBox.addActionListener(ev -> syncEditable.run());
+        }
+
         {
             for (Map.Entry<String, String> entry : block.getCustomProperties().entrySet()) {
                 String k = entry.getKey();
-                if (k.equals("InputCount") || k.equals("DataType")) continue;
+                if (k.equals("InputCount") || k.equals("DataType") || k.equals("ModuloOut") || k.equals("BitOrder")
+                        || k.equals("TimeZone") || k.startsWith("Tz")) continue;
                 String v = entry.getValue();
 
                 if (k.equals("InputType")) {
@@ -269,6 +358,75 @@ public class ModulePropertiesDialog extends JDialog {
                     chBox.setSelectedItem(v);
                     addRow(p, gbc, row++, "I/O Channel:", chBox);
                     specificControls.put(k, chBox);
+                } else if (k.equals("DeviceAddressHex") && "Comm.I2C.TMP75".equals(defId)) {
+                    JComboBox<String> addrBox = new JComboBox<>(new String[]{
+                            "0x48 (A2=0, A1=0, A0=0)",
+                            "0x49 (A2=0, A1=0, A0=1)",
+                            "0x4A (A2=0, A1=1, A0=0)",
+                            "0x4B (A2=0, A1=1, A0=1)",
+                            "0x4C (A2=1, A1=0, A0=0)",
+                            "0x4D (A2=1, A1=0, A0=1)",
+                            "0x4E (A2=1, A1=1, A0=0)",
+                            "0x4F (A2=1, A1=1, A0=1)"
+                    });
+                    addrBox.setEditable(true);
+                    String match = v;
+                    for (int i = 0; i < addrBox.getItemCount(); i++) {
+                        if (addrBox.getItemAt(i).startsWith(v)) {
+                            match = addrBox.getItemAt(i);
+                            break;
+                        }
+                    }
+                    addrBox.setSelectedItem(match);
+                    addRow(p, gbc, row++, "TMP75 I2C Address:", addrBox);
+                    specificControls.put(k, addrBox);
+                } else if (k.equals("OneWirePin") && defId.startsWith("Comm.DS18B20")) {
+                    JComboBox<String> pinBox = new JComboBox<>(DIO_PIN_IDS);
+                    pinBox.setSelectedItem(v);
+                    addRow(p, gbc, row++, "1-Wire DIO Pin:", pinBox);
+                    specificControls.put(k, pinBox);
+                } else if (k.equals("RomAddress") && defId.startsWith("Comm.DS18B20")) {
+                    JComboBox<String> romBox = new JComboBox<>(new String[]{
+                            "AUTO:0", "AUTO:1", "AUTO:2", "AUTO:3"
+                    });
+                    romBox.setEditable(true);
+                    romBox.setSelectedItem(v);
+                    JButton scanBtn = new JButton("Scan");
+                    scanBtn.addActionListener(ev -> scanOneWireIntoCombo(romBox));
+                    JPanel romPanel = new JPanel(new BorderLayout(4, 0));
+                    romPanel.add(romBox, BorderLayout.CENTER);
+                    romPanel.add(scanBtn, BorderLayout.EAST);
+                    addRow(p, gbc, row++, "Target ROM / Index:", romPanel);
+                    specificControls.put(k, romBox);
+                } else if (k.equals("ResolutionBits") && defId.startsWith("Comm.DS18B20")) {
+                    JComboBox<String> resBox = new JComboBox<>(new String[]{"9", "10", "11", "12"});
+                    resBox.setSelectedItem(v);
+                    addRow(p, gbc, row++, "Resolution (bits):", resBox);
+                    specificControls.put(k, resBox);
+                } else if ((k.equals("SclPin") || k.equals("SdaPin")) && "IO.CH455G".equals(defId)) {
+                    JComboBox<String> pinBox = new JComboBox<>(DIO_PIN_IDS);
+                    pinBox.setSelectedItem(v);
+                    addRow(p, gbc, row++, k.equals("SclPin") ? "SCL DIO Pin:" : "SDA DIO Pin:", pinBox);
+                    specificControls.put(k, pinBox);
+                } else if (k.equals("DisplayMode") && "IO.CH455G".equals(defId)) {
+                    JComboBox<String> modeBox = new JComboBox<>(new String[]{
+                            "Number (Float / Int)",
+                            "Raw Digits / Segments"
+                    });
+                    modeBox.setSelectedItem(v.startsWith("Raw") ? "Raw Digits / Segments" : "Number (Float / Int)");
+                    addRow(p, gbc, row++, "Display Mode:", modeBox);
+                    specificControls.put(k, modeBox);
+                } else if (k.equals("DigitMask") && "IO.CH455G".equals(defId)) {
+                    String norm = BlockInstance.normalizeDigitMask(v);
+                    JPanel maskPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+                    javax.swing.JCheckBox[] cbs = new javax.swing.JCheckBox[4];
+                    for (int i = 0; i < 4; i++) {
+                        cbs[i] = new javax.swing.JCheckBox("D" + i, norm.charAt(i) == '1');
+                        maskPanel.add(cbs[i]);
+                    }
+                    maskPanel.putClientProperty("digitCheckboxes", cbs);
+                    addRow(p, gbc, row++, "Active Digits:", maskPanel);
+                    specificControls.put(k, maskPanel);
                 } else {
                     JTextField tf = new JTextField(v, 12);
                     addRow(p, gbc, row++, k + ":", tf);
@@ -293,6 +451,46 @@ public class ModulePropertiesDialog extends JDialog {
         gbc.weighty = 1.0;
         p.add(new JPanel(), gbc);
         return p;
+    }
+
+    private void scanOneWireIntoCombo(JComboBox<String> romBox) {
+        int dioPin = 13;
+        JComponent pinComp = specificControls.get("OneWirePin");
+        if (pinComp instanceof JComboBox<?> pb && pb.getSelectedItem() != null) {
+            String digits = pb.getSelectedItem().toString().replaceAll("[^0-9]", "");
+            if (!digits.isEmpty()) {
+                try { dioPin = Integer.parseInt(digits); } catch (NumberFormatException ignored) {}
+            }
+        }
+        java.util.List<String> ports = cz.maramat.comm.MaraTransport.listSerialPorts();
+        if (ports.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "No USB serial port detected for Duino - S.", "1-Wire Bus Scan", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        String port = ports.size() == 1 ? ports.getFirst() : (String) JOptionPane.showInputDialog(
+                this, "Select Duino - S USB Port:", "1-Wire Bus Scan (DIO" + dioPin + ")",
+                JOptionPane.QUESTION_MESSAGE, null, ports.toArray(new String[0]), ports.getFirst()
+        );
+        if (port == null || port.isBlank()) return;
+
+        try (cz.maramat.comm.MaraProtClient client = new cz.maramat.comm.MaraProtClient(
+                new cz.maramat.comm.MaraTransport.SerialCdcTransport(port, 115200), 0)) {
+            client.connect();
+            java.util.List<String> roms = client.scanOneWireBus(dioPin);
+            if (roms.isEmpty()) {
+                JOptionPane.showMessageDialog(this, "No DS18B20 sensors found on DIO" + dioPin + ".", "1-Wire Bus Scan", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            Object cur = romBox.getEditor().getItem();
+            romBox.removeAllItems();
+            for (String r : roms) romBox.addItem(r);
+            romBox.addItem("AUTO:0");
+            romBox.addItem("AUTO:1");
+            romBox.setSelectedItem(roms.getFirst());
+            JOptionPane.showMessageDialog(this, "Found " + roms.size() + " DS18B20 sensor(s) on DIO" + dioPin + ".", "1-Wire Bus Scan", JOptionPane.INFORMATION_MESSAGE);
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(this, "Scan failed: " + ex.getMessage(), "1-Wire Bus Scan", JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     private String[] buildChannelOptionsForBlock(String defId) {
@@ -485,6 +683,12 @@ public class ModulePropertiesDialog extends JDialog {
             if (key.equals("InputCount") && comp instanceof JSpinner sp) {
                 int newCount = (Integer) sp.getValue();
                 block.setVariableInputCount(newCount);
+            } else if (key.equals("ModuloOut") && comp instanceof javax.swing.JCheckBox cb) {
+                boolean enabled = cb.isSelected();
+                block.setDivModuloOut(enabled);
+                if (!enabled) {
+                    page.getWires().removeIf(w -> w.getSourceBlockId().equals(block.getId()) && w.getSourcePinIndex() >= 2);
+                }
             } else if (key.equals("DataType") && comp instanceof JComboBox<?> cb) {
                 DataType dt = (DataType) cb.getSelectedItem();
                 if (dt != null) {
@@ -496,13 +700,31 @@ public class ModulePropertiesDialog extends JDialog {
                     String val = sel.toString().trim();
                     if (key.equals("Channel") && block.isIoRef()) {
                         block.setIoRefChannel(val);
+                    } else if (key.equals("DeviceAddressHex") && "Comm.I2C.TMP75".equals(block.getDefinitionId())) {
+                        block.getCustomProperties().put(key, val.split("\\s+")[0]);
                     } else {
                         block.getCustomProperties().put(key, val);
                     }
                 }
+            } else if (comp instanceof JPanel pnl && pnl.getClientProperty("digitCheckboxes") instanceof javax.swing.JCheckBox[] cbs) {
+                StringBuilder sb = new StringBuilder(4);
+                for (javax.swing.JCheckBox cb : cbs) {
+                    sb.append(cb.isSelected() ? '1' : '0');
+                }
+                block.getCustomProperties().put(key, sb.toString());
+            } else if (comp instanceof JSpinner sp) {
+                block.getCustomProperties().put(key, String.valueOf(sp.getValue()));
             } else if (comp instanceof JTextField tf) {
                 block.getCustomProperties().put(key, tf.getText().trim());
             }
+        }
+
+        if ("IO.CH455G".equals(block.getDefinitionId())) {
+            String mode = block.getCustomProperties().getOrDefault("DisplayMode", "Number (Float / Int)");
+            String mask = block.getCustomProperties().getOrDefault("DigitMask", "1111");
+            block.configureCh455gPins(mode, mask);
+            int maxIns = block.getInputs().size();
+            page.getWires().removeIf(w -> w.getTargetBlockId().equals(block.getId()) && w.getTargetPinIndex() >= maxIns);
         }
 
         page.updateWiresForBlock(block);

@@ -31,6 +31,9 @@ public final class MaraProtClient implements Closeable {
     public static final int OP_WATCH_POLL = 0x31;
     public static final int OP_SLOT_READ_BATCH = 0x32;
     public static final int OP_SLOT_WRITE_BATCH = 0x33;
+    public static final int OP_RTC_GET = 0x40;
+    public static final int OP_RTC_SET = 0x41;
+    public static final int OP_ONEWIRE_SCAN = 0x50;
     public static final int OP_FW_ENTER_ROM_DFU = 0xF3;
 
     public static final int CTRL_STOP = 0;
@@ -121,14 +124,22 @@ public final class MaraProtClient implements Closeable {
     }
 
     public synchronized int watchSubscribe(int[] slotIds) throws IOException {
-        ByteBuffer req = ByteBuffer.allocate(3 + (slotIds.length * 2)).order(ByteOrder.LITTLE_ENDIAN);
-        req.put((byte) 0);
-        req.putShort((short) slotIds.length);
-        for (int s : slotIds) {
-            req.putShort((short) s);
-        }
-        byte[] resp = transceive(OP_WATCH_SUBSCRIBE, req.array(), 1000);
-        return ByteBuffer.wrap(resp).order(ByteOrder.LITTLE_ENDIAN).getShort(2) & 0xFFFF;
+        final int maxSlotsPerChunk = 250; // 3 + 250*2 = 503 B <= 520 B PROT_MAX_PAYLOAD_BYTES
+        int epoch = 1;
+        int offset = 0;
+        do {
+            int count = Math.min(maxSlotsPerChunk, slotIds.length - offset);
+            ByteBuffer req = ByteBuffer.allocate(3 + (count * 2)).order(ByteOrder.LITTLE_ENDIAN);
+            req.put((byte) (offset == 0 ? 0 : 1));
+            req.putShort((short) count);
+            for (int i = 0; i < count; i++) {
+                req.putShort((short) slotIds[offset + i]);
+            }
+            byte[] resp = transceive(OP_WATCH_SUBSCRIBE, req.array(), 1000);
+            epoch = ByteBuffer.wrap(resp).order(ByteOrder.LITTLE_ENDIAN).getShort(2) & 0xFFFF;
+            offset += count;
+        } while (offset < slotIds.length);
+        return epoch;
     }
 
     public synchronized WatchUpdate watchPoll(int ackEpoch) throws IOException {
@@ -157,9 +168,36 @@ public final class MaraProtClient implements Closeable {
         return new WatchUpdate(newEpoch, vmState, estop, changed);
     }
 
+    public synchronized long getRtcUnixSec() throws IOException {
+        byte[] resp = transceive(OP_RTC_GET, new byte[0], 1000);
+        return ByteBuffer.wrap(resp).order(ByteOrder.LITTLE_ENDIAN).getLong(0);
+    }
+
+    public synchronized void setRtcUnixSec(long unixSec) throws IOException {
+        ByteBuffer req = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(unixSec);
+        transceive(OP_RTC_SET, req.array(), 1000);
+    }
+
     public synchronized void enterRomDfu() throws IOException {
         byte[] req = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(0xDF00B007).array();
         transceive(OP_FW_ENTER_ROM_DFU, req, 1000);
+    }
+
+    public synchronized java.util.List<String> scanOneWireBus(int dioPin) throws IOException {
+        byte[] resp = transceive(OP_ONEWIRE_SCAN, new byte[]{(byte) (dioPin & 0xFF)}, 2500);
+        java.util.List<String> roms = new java.util.ArrayList<>();
+        if (resp.length < 1) return roms;
+        int count = resp[0] & 0xFF;
+        for (int i = 0; i < count && (1 + (i * 8) + 8) <= resp.length; i++) {
+            int off = 1 + (i * 8);
+            StringBuilder sb = new StringBuilder();
+            sb.append(String.format("%02X-", resp[off] & 0xFF));
+            for (int b = 1; b < 8; b++) {
+                sb.append(String.format("%02X", resp[off + b] & 0xFF));
+            }
+            roms.add(sb.toString());
+        }
+        return roms;
     }
 
     public synchronized void writeSlot(int slotId, double value) throws IOException {

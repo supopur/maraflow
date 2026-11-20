@@ -67,6 +67,27 @@ static uint8_t sim_pwm_set(uint16_t channel, int32_t freq_hz, float dutyPct)
     return (dutyPct > 0.0f) ? 1U : 0U;
 }
 
+static int32_t sim_comm_exec(uint8_t busType, uint16_t descId, int64_t txVal, int64_t *p_rxVal, int32_t *p_err)
+{
+    (void)descId;
+    (void)txVal;
+    if (busType == VM_COMM_TMP75 || busType == VM_COMM_DS18B20) {
+        float simTemp = (busType == VM_COMM_TMP75) ? 25.0f : 22.5f;
+        uint32_t fBits = 0U;
+        memcpy(&fBits, &simTemp, sizeof(fBits));
+        if (p_rxVal != NULL) { *p_rxVal = (int64_t)(uint64_t)fBits; }
+        if (p_err != NULL)   { *p_err = 0; }
+        return 0;
+    }
+    if (busType == VM_COMM_CH455G) {
+        if (p_rxVal != NULL) { *p_rxVal = 0; }
+        if (p_err != NULL)   { *p_err = 0; }
+        return 0;
+    }
+    if (p_err != NULL) { *p_err = 1; }
+    return -1;
+}
+
 JNIEXPORT jlong JNICALL Java_cz_maramat_vm_NativeMaraVm_nativeCreate(JNIEnv *p_env, jclass cls)
 {
     (void)p_env;
@@ -88,7 +109,7 @@ JNIEXPORT jlong JNICALL Java_cz_maramat_vm_NativeMaraVm_nativeCreate(JNIEnv *p_e
         .rng_next        = NULL,
         .retentive_write = NULL,
         .retentive_read  = NULL,
-        .comm_exec       = NULL
+        .comm_exec       = sim_comm_exec
     };
 
     VM_Init(&p_ctx->vm, &hal);

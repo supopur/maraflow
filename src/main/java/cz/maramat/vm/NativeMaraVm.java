@@ -33,6 +33,8 @@ public final class NativeMaraVm implements AutoCloseable {
     public static final int OP_JMP_FALSE = 0x05;
     public static final int OP_MOV = 0x08;
     public static final int OP_CAST = 0x09;
+    public static final int OP_PACK8 = 0x0A;
+    public static final int OP_UNPACK8 = 0x0B;
     public static final int OP_AND = 0x10;
     public static final int OP_NAND = 0x11;
     public static final int OP_OR = 0x12;
@@ -68,14 +70,22 @@ public final class NativeMaraVm implements AutoCloseable {
     public static final int OP_TON = 0x50;
     public static final int OP_ONE_SHOT = 0x53;
     public static final int OP_CTUD = 0x54;
+    public static final int OP_RTC_GET = 0x60;
+    public static final int OP_DECODE_DATE = 0x61;
+    public static final int OP_ENCODE_DATE = 0x62;
     public static final int OP_IO_READ = 0x70;
     public static final int OP_IO_WRITE = 0x71;
     public static final int OP_IO_PWM = 0x72;
+    public static final int OP_COMM_EXEC = 0x75;
 
     public static final int IO_DI = 0;
     public static final int IO_DO = 1;
     public static final int IO_AI = 2;
     public static final int IO_AO = 3;
+
+    public static final int COMM_TMP75 = 1;
+    public static final int COMM_DS18B20 = 2;
+    public static final int COMM_CH455G = 3;
 
     public enum RunState {
         STOPPED, RUNNING, PAUSED, FAULT, ESTOP

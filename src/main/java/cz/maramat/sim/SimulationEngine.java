@@ -1110,6 +1110,8 @@ public class SimulationEngine {
                     PinInstance firstOut = b.getOutputs().getFirst();
                     firstOut.setRuntimeValue((propagateFbdWires && firstOut.isNegated() && firstOut.getDataType() == DataType.BOOL) ? 1.0 : 0.0);
                 }
+            } else if ("IO.CH455G".equals(defId) && !b.getOutputs().isEmpty()) {
+                b.getOutputs().getFirst().setRuntimeValue(0.0);
             }
             return;
         }
@@ -1172,6 +1174,19 @@ public class SimulationEngine {
                 if (!outs.isEmpty()) {
                     outs.getFirst().setRuntimeValue(duty > 0.0 ? 1.0 : 0.0);
                 }
+            }
+            case "IO.CH455G" -> {
+                if (!outs.isEmpty()) {
+                    outs.getFirst().setRuntimeValue(1.0);
+                }
+            }
+            case "Comm.I2C.TMP75" -> {
+                if (outs.size() > 0) outs.get(0).setRuntimeValue(25.0);
+                if (outs.size() > 1) outs.get(1).setRuntimeValue(1.0);
+            }
+            case "Comm.DS18B20.DS18B20Read" -> {
+                if (outs.size() > 0) outs.get(0).setRuntimeValue(22.5);
+                if (outs.size() > 1) outs.get(1).setRuntimeValue(1.0);
             }
             case "Bool.And", "Bool.Nand" -> {
                 boolean res = true;
@@ -1242,9 +1257,16 @@ public class SimulationEngine {
                 if (Math.abs(d) < 1e-12) {
                     outs.get(0).setRuntimeValue(0.0);
                     outs.get(1).setRuntimeValue(1.0);
+                    if (outs.size() > 2) outs.get(2).setRuntimeValue(0.0);
                 } else {
                     outs.get(0).setRuntimeValue(DataType.convertValue(a / d, DataType.FLOAT, outs.get(0).getDataType()));
                     outs.get(1).setRuntimeValue(0.0);
+                    if (outs.size() > 2) {
+                        double rem = (outs.get(2).getDataType() == DataType.FLOAT)
+                                ? (a % d)
+                                : (double) ((long) a % (long) d);
+                        outs.get(2).setRuntimeValue(DataType.convertValue(rem, DataType.FLOAT, outs.get(2).getDataType()));
+                    }
                 }
             }
             case "Math.Mod" -> {
@@ -1553,7 +1575,9 @@ public class SimulationEngine {
             }
             case "Main.Timers.DecodeDate" -> {
                 long ts = (long) (ins.size() > 1 ? ins.get(1).getRuntimeValue() : 0.0);
-                ZonedDateTime dt = Instant.ofEpochSecond(ts).atZone(ZoneOffset.UTC);
+                cz.maramat.model.TimeZoneRule tz = cz.maramat.model.TimeZoneRule.fromBlock(b);
+                long localTs = ts + tz.totalOffsetSecondsAtUtc(ts);
+                ZonedDateTime dt = Instant.ofEpochSecond(localTs).atZone(ZoneOffset.UTC);
                 if (outs.size() > 0) outs.get(0).setRuntimeValue(dt.getYear());
                 if (outs.size() > 1) outs.get(1).setRuntimeValue(dt.getMonthValue());
                 if (outs.size() > 2) outs.get(2).setRuntimeValue(dt.getDayOfMonth());
@@ -1564,30 +1588,37 @@ public class SimulationEngine {
             case "Main.Timers.EncodeDate" -> {
                 int yr = (int) (ins.size() > 1 ? ins.get(1).getRuntimeValue() : 2026);
                 int mon = Math.clamp((int) (ins.size() > 2 ? ins.get(2).getRuntimeValue() : 1), 1, 12);
-                int day = Math.clamp((int) (ins.size() > 3 ? ins.get(3).getRuntimeValue() : 1), 1, 28);
+                int day = Math.clamp((int) (ins.size() > 3 ? ins.get(3).getRuntimeValue() : 1), 1, 31);
                 int hr = Math.clamp((int) (ins.size() > 4 ? ins.get(4).getRuntimeValue() : 0), 0, 23);
                 int min = Math.clamp((int) (ins.size() > 5 ? ins.get(5).getRuntimeValue() : 0), 0, 59);
                 int sec = Math.clamp((int) (ins.size() > 6 ? ins.get(6).getRuntimeValue() : 0), 0, 59);
                 try {
-                    long epoch = ZonedDateTime.of(yr, mon, day, hr, min, sec, 0, ZoneOffset.UTC).toEpochSecond();
+                    cz.maramat.model.TimeZoneRule tz = cz.maramat.model.TimeZoneRule.fromBlock(b);
+                    long epoch = tz.localToUtc(yr, mon, day, hr, min, sec);
                     outs.getFirst().setRuntimeValue(DataType.convertValue(epoch, DataType.LONG, outs.getFirst().getDataType()));
                 } catch (Exception ignored) {
                     outs.getFirst().setRuntimeValue(0.0);
                 }
             }
             case "Main.Conversion.PackBits" -> {
+                boolean msb = "MSB".equalsIgnoreCase(b.getCustomProperties().getOrDefault("BitOrder", "LSB"));
+                int count = ins.size() - 1;
                 long packed = 0;
                 for (int i = 1; i < ins.size(); i++) {
                     if (ins.get(i).getRuntimeValue() != 0.0) {
-                        packed |= (1L << (i - 1));
+                        int bitIdx = msb ? (count - i) : (i - 1);
+                        packed |= (1L << bitIdx);
                     }
                 }
                 outs.getFirst().setRuntimeValue(DataType.convertValue(packed, DataType.LONG, outs.getFirst().getDataType()));
             }
             case "Main.Conversion.UnpackBits" -> {
+                boolean msb = "MSB".equalsIgnoreCase(b.getCustomProperties().getOrDefault("BitOrder", "LSB"));
+                int count = outs.size();
                 long val = (long) (ins.size() > 1 ? ins.get(1).getRuntimeValue() : 0.0);
-                for (int i = 0; i < outs.size(); i++) {
-                    boolean bitSet = ((val >> i) & 1L) != 0L;
+                for (int i = 0; i < count; i++) {
+                    int bitIdx = msb ? (count - 1 - i) : i;
+                    boolean bitSet = ((val >> bitIdx) & 1L) != 0L;
                     outs.get(i).setRuntimeValue(bitSet ? 1.0 : 0.0);
                 }
             }
