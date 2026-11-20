@@ -10,7 +10,7 @@ public final class MaraVm {
 
     public static final int MAGIC_MFLW = 0x574C464D;
     public static final int FORMAT_VERSION = 0x0001;
-    public static final int HEADER_SIZE_BYTES = 64;
+    public static final int HEADER_SIZE_BYTES = 72;
     public static final int THREAD_COUNT = 6;
     public static final int MAX_IMAGE_BYTES = 28672;
     public static final int MAX_BOOL_SLOTS = 2048;
