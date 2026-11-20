@@ -285,19 +285,21 @@ public final class MflwEmitter {
             }
             case "IO.IREF" -> {
                 int dst = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
-                int ch = parseIoChannel(b.getCustomProperties().getOrDefault("IoRef", "DI0"));
-                int kind = isAnalogRef(b.getCustomProperties().getOrDefault("IoRef", "DI0")) ? MaraVm.IO_AI : MaraVm.IO_DI;
+                String ref = b.getIoRefLabel();
+                int ch = parseIoChannel(ref);
+                int kind = isAnalogRef(ref) ? MaraVm.IO_AI : MaraVm.IO_DI;
                 writeWord(out, MaraVm.OP_IO_READ, kind, MaraVm.SLOT_ALWAYS_ENABLED, dst, ch);
             }
             case "IO.OREF" -> {
                 int srcA = resolveInput(b, 0, wiredSourceSlot);
-                int ch = parseIoChannel(b.getCustomProperties().getOrDefault("IoRef", "DO0"));
-                int kind = isAnalogRef(b.getCustomProperties().getOrDefault("IoRef", "DO0")) ? MaraVm.IO_AO : MaraVm.IO_DO;
+                String ref = b.getIoRefLabel();
+                int ch = parseIoChannel(ref);
+                int kind = isAnalogRef(ref) ? MaraVm.IO_AO : MaraVm.IO_DO;
                 writeWord(out, MaraVm.OP_IO_WRITE, kind, MaraVm.SLOT_ALWAYS_ENABLED, ch, srcA);
             }
             case "IO.PWM" -> {
                 int act = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
-                int ch = parseIoChannel(b.getCustomProperties().getOrDefault("IoRef", "PWM0"));
+                int ch = parseIoChannel(b.getIoRefLabel());
                 int frq = resolveInput(b, firstArg, wiredSourceSlot);
                 int dty = resolveInput(b, firstArg + 1, wiredSourceSlot);
                 writeWord(out, MaraVm.OP_IO_PWM, 0, enSlot, act, ch);

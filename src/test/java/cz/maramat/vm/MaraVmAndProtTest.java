@@ -27,7 +27,7 @@ class MaraVmAndProtTest {
         andBlock.getInputs().get(2).setConstantValue("1");
 
         BlockInstance oref = new BlockInstance(BlockCatalog.getById("IO.OREF"), "DoOut", 20, 10, 2, 20);
-        oref.getCustomProperties().put("IoRef", "DO3");
+        oref.setIoRefChannel("DO3");
 
         page.getBlocks().add(andBlock);
         page.getBlocks().add(oref);

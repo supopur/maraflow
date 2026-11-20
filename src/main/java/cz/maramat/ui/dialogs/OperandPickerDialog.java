@@ -92,14 +92,13 @@ public class OperandPickerDialog extends JDialog {
             }
         }
 
-        // 2. Hardware Digital Inputs
-        for (int i = 0; i < diCount; i++) {
-            allEntries.add(new OperandEntry("DI" + i, "Hardware DI", DataType.BOOL, "Hardware Digital Input #" + i + " (" + platform + ")"));
+        // 2. Hardware Digital Inputs / Outputs (F407PLC DIO2..DIO7, DIO9..DIO27)
+        int[] dioChannels = {2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27};
+        for (int ch : dioChannels) {
+            allEntries.add(new OperandEntry("DI" + ch, "Hardware DI", DataType.BOOL, "Hardware Digital Input DIO" + ch + " (" + platform + ")"));
         }
-
-        // 3. Hardware Digital Outputs
-        for (int i = 0; i < doCount; i++) {
-            allEntries.add(new OperandEntry("DO" + i, "Hardware DO", DataType.BOOL, "Hardware Digital Output #" + i + " (" + platform + ")"));
+        for (int ch : dioChannels) {
+            allEntries.add(new OperandEntry("DO" + ch, "Hardware DO", DataType.BOOL, "Hardware Digital Output DIO" + ch + " (" + platform + ")"));
         }
 
         // 4. Memory Bits / Internal Relays (M0..M31)
@@ -108,12 +107,15 @@ public class OperandPickerDialog extends JDialog {
         }
 
         // 5. Hardware Analog Inputs / Outputs / PWM
-        for (int i = 0; i < aiCount; i++) {
-            allEntries.add(new OperandEntry("AI" + i, "Hardware AI/AO", DataType.INT, "12-bit ADC Analog Input #" + i + " (0..4095)"));
+        for (int i = 0; i < 4; i++) {
+            allEntries.add(new OperandEntry("AI" + i, "Hardware AI/AO", DataType.INT, "12-bit ADC Analog Input AI" + i + " (0..4095)"));
         }
-        for (int i = 0; i < aoCount; i++) {
-            allEntries.add(new OperandEntry("AO" + i, "Hardware AI/AO", DataType.INT, "12-bit DAC Analog Output #" + i + " (0..4095)"));
-            allEntries.add(new OperandEntry("PWM" + i, "Hardware AI/AO", DataType.INT, "Timer PWM Duty Output #" + i + " (0..1000)"));
+        for (int i = 0; i < 2; i++) {
+            allEntries.add(new OperandEntry("AO" + i, "Hardware AI/AO", DataType.INT, "12-bit DAC Analog Output AO" + i + " (0..4095)"));
+        }
+        int[] pwmDios = {4, 5, 6, 7, 9, 10, 11, 12};
+        for (int i = 0; i < pwmDios.length; i++) {
+            allEntries.add(new OperandEntry("PWM" + i, "Hardware AI/AO", DataType.INT, "Timer PWM Output PWM" + i + " (DIO" + pwmDios[i] + ")"));
         }
 
         // 6. Virtual Numeric Registers (shared with ReadReg / WriteReg)

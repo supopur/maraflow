@@ -298,16 +298,23 @@ public class ModulePropertiesDialog extends JDialog {
     private String[] buildChannelOptionsForBlock(String defId) {
         return switch (defId) {
             case "IO.IREF" -> new String[]{
-                    "DI0", "DI1", "DI2", "DI3", "DI4", "DI5", "DI6", "DI7",
-                    "DI8", "DI9", "DI10", "DI11", "DI12", "DI13", "DI14", "DI15",
-                    "AI0", "AI1", "AI2", "AI3", "AI4", "AI5", "AI6", "AI7"
+                    "DI2", "DI3", "DI4", "DI5", "DI6", "DI7",
+                    "DI9", "DI10", "DI11", "DI12", "DI13", "DI14", "DI15",
+                    "DI16", "DI17", "DI18", "DI19", "DI20", "DI21",
+                    "DI22", "DI23", "DI24", "DI25", "DI26", "DI27",
+                    "AI0", "AI1", "AI2", "AI3"
             };
             case "IO.OREF" -> new String[]{
-                    "DO0", "DO1", "DO2", "DO3", "DO4", "DO5", "DO6", "DO7",
-                    "DO8", "DO9", "DO10", "DO11", "DO12", "DO13", "DO14", "DO15",
-                    "AO0", "AO1", "AO2", "AO3"
+                    "DO2", "DO3", "DO4", "DO5", "DO6", "DO7",
+                    "DO9", "DO10", "DO11", "DO12", "DO13", "DO14", "DO15",
+                    "DO16", "DO17", "DO18", "DO19", "DO20", "DO21",
+                    "DO22", "DO23", "DO24", "DO25", "DO26", "DO27",
+                    "AO0", "AO1"
             };
-            case "IO.PWM" -> new String[]{"PWM0", "PWM1", "PWM2", "PWM3"};
+            case "IO.PWM" -> new String[]{
+                    "PWM0", "PWM1", "PWM2", "PWM3",
+                    "PWM4", "PWM5", "PWM6", "PWM7"
+            };
             default -> STM32_PIN_IDS;
         };
     }
