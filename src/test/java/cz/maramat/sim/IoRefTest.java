@@ -93,4 +93,44 @@ class IoRefTest {
         assertEquals(1.0, sim.getOperandValue(project, "DO0"));
         assertEquals(1234.0, sim.getOperandValue(project, "AO0"));
     }
+
+    @Test
+    void irefDoesNotOverrideVisualButtonOrMaraviewPinWrites() {
+        Project project = new Project();
+        Page page = project.getPages().getFirst();
+        page.getBlocks().clear();
+        page.getWires().clear();
+
+        BlockInstance iref1 = new BlockInstance(BlockCatalog.getById("IO.IREF"), "IREF1", 2, 2, 2, 10);
+        iref1.setIoRefChannel("DI2");
+        BlockInstance iref2 = new BlockInstance(BlockCatalog.getById("IO.IREF"), "IREF2", 2, 4, 2, 20);
+        iref2.setIoRefChannel("DI3");
+        BlockInstance and1 = new BlockInstance(BlockCatalog.getById("Bool.And"), "And1", 10, 2, 2, 30);
+
+        page.getBlocks().add(iref1);
+        page.getBlocks().add(iref2);
+        page.getBlocks().add(and1);
+
+        page.getWires().add(new Wire(iref1.getId(), 0, and1.getId(), 1, "IREF1.Y",
+                iref1.getOutputPinAnchorGrid(0), and1.getInputPinAnchorGrid(1)));
+        page.getWires().add(new Wire(iref2.getId(), 0, and1.getId(), 2, "IREF2.Y",
+                iref2.getOutputPinAnchorGrid(0), and1.getInputPinAnchorGrid(2)));
+
+        // Bind a Visual Button to And1.X1 (which is also wired to IREF1)
+        cz.maramat.model.GraphicElement vBtn = new cz.maramat.model.GraphicElement(
+                cz.maramat.model.GraphicElement.Kind.VISUAL_BUTTON, 4, 8, 5, 2);
+        vBtn.setBoundTargetPin("And1.X1");
+        vBtn.setActiveState(true);
+        page.getGraphics().add(vBtn);
+
+        SimulationEngine sim = new SimulationEngine(() -> {});
+        // Drive And1.X2 from Maraview / external setOperandValue (which is also wired to IREF2)
+        sim.setOperandValue(project, "And1.X2", 1.0);
+
+        sim.stepOnceForTesting(project, 10.0);
+
+        assertEquals(1.0, and1.getInputs().get(1).getRuntimeValue(), "Visual Button on And1.X1 must not be overwritten by IREF1");
+        assertEquals(1.0, and1.getInputs().get(2).getRuntimeValue(), "Maraview write on And1.X2 must not be overwritten by IREF2");
+        assertEquals(1.0, and1.getOutputs().getFirst().getRuntimeValue(), "And1.Y should evaluate to 1.0");
+    }
 }

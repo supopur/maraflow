@@ -83,6 +83,7 @@ public class StVariable {
 
     public void setInitialValue(String initialValue) {
         this.initialValue = (initialValue == null || initialValue.isBlank()) ? "0" : initialValue.trim();
+        this.runtimeValue = this.dataType.toNumericValue(this.initialValue);
     }
 
     public String getDescription() {

@@ -1,7 +1,7 @@
 package cz.maramat.compiler;
 
 import cz.maramat.model.DataType;
-import cz.maramat.vm.MaraVm;
+import cz.maramat.vm.NativeMaraVm;
 
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
@@ -173,7 +173,7 @@ final class StBytecodeCompiler {
                     int valSlot = parseExpr();
                     Integer dstSlot = varSlots.get(name.toUpperCase());
                     if (dstSlot != null) {
-                        writeWord(MaraVm.OP_MOV, 0, MaraVm.SLOT_ALWAYS_ENABLED, dstSlot, valSlot);
+                        writeWord(NativeMaraVm.OP_MOV, 0, NativeMaraVm.SLOT_ALWAYS_ENABLED, dstSlot, valSlot);
                     }
                     match(Tok.SEMI);
                 }
@@ -188,20 +188,20 @@ final class StBytecodeCompiler {
         List<Integer> endJumps = new ArrayList<>();
         int condSlot = parseExpr();
         match(Tok.THEN);
-        int jmpFalsePos = emitJumpPlaceholder(MaraVm.OP_JMP_FALSE, condSlot);
+        int jmpFalsePos = emitJumpPlaceholder(NativeMaraVm.OP_JMP_FALSE, condSlot);
         parseStmtList(Tok.ELSIF, Tok.ELSE, Tok.END_IF);
 
         while (match(Tok.ELSIF)) {
-            endJumps.add(emitJumpPlaceholder(MaraVm.OP_JMP, 0));
+            endJumps.add(emitJumpPlaceholder(NativeMaraVm.OP_JMP, 0));
             patchJumpHere(jmpFalsePos);
             int c2 = parseExpr();
             match(Tok.THEN);
-            jmpFalsePos = emitJumpPlaceholder(MaraVm.OP_JMP_FALSE, c2);
+            jmpFalsePos = emitJumpPlaceholder(NativeMaraVm.OP_JMP_FALSE, c2);
             parseStmtList(Tok.ELSIF, Tok.ELSE, Tok.END_IF);
         }
 
         if (match(Tok.ELSE)) {
-            endJumps.add(emitJumpPlaceholder(MaraVm.OP_JMP, 0));
+            endJumps.add(emitJumpPlaceholder(NativeMaraVm.OP_JMP, 0));
             patchJumpHere(jmpFalsePos);
             parseStmtList(Tok.END_IF);
         } else {
@@ -227,11 +227,11 @@ final class StBytecodeCompiler {
             int litSlot = allocator.allocTempSlot(DataType.INT);
             allocator.addConstInit(litSlot, DataType.INT, numText);
             int eqSlot = allocator.allocTempSlot(DataType.BOOL);
-            writeWord(MaraVm.OP_CMP_EQ, 0, MaraVm.SLOT_ALWAYS_ENABLED, eqSlot, selSlot);
+            writeWord(NativeMaraVm.OP_CMP_EQ, 0, NativeMaraVm.SLOT_ALWAYS_ENABLED, eqSlot, selSlot);
             writeU16(litSlot);
             writeU16(0);
 
-            int jmpNextCase = emitJumpPlaceholder(MaraVm.OP_JMP_FALSE, eqSlot);
+            int jmpNextCase = emitJumpPlaceholder(NativeMaraVm.OP_JMP_FALSE, eqSlot);
             // Parse statements until next integer case label, ELSE, or END_CASE
             while (peek().type != Tok.ELSE && peek().type != Tok.END_CASE && peek().type != Tok.EOF) {
                 if (peek().type == Tok.NUMBER && (pos + 1 < tokens.size()) && tokens.get(pos + 1).type == Tok.COLON) {
@@ -246,7 +246,7 @@ final class StBytecodeCompiler {
                         int valSlot = parseExpr();
                         Integer dstSlot = varSlots.get(name.toUpperCase());
                         if (dstSlot != null) {
-                            writeWord(MaraVm.OP_MOV, 0, MaraVm.SLOT_ALWAYS_ENABLED, dstSlot, valSlot);
+                            writeWord(NativeMaraVm.OP_MOV, 0, NativeMaraVm.SLOT_ALWAYS_ENABLED, dstSlot, valSlot);
                         }
                         match(Tok.SEMI);
                     }
@@ -254,7 +254,7 @@ final class StBytecodeCompiler {
                     next();
                 }
             }
-            endJumps.add(emitJumpPlaceholder(MaraVm.OP_JMP, 0));
+            endJumps.add(emitJumpPlaceholder(NativeMaraVm.OP_JMP, 0));
             patchJumpHere(jmpNextCase);
         }
 
@@ -271,9 +271,9 @@ final class StBytecodeCompiler {
         int loopStart = out.size();
         int condSlot = parseExpr();
         match(Tok.DO);
-        int jmpExit = emitJumpPlaceholder(MaraVm.OP_JMP_FALSE, condSlot);
+        int jmpExit = emitJumpPlaceholder(NativeMaraVm.OP_JMP_FALSE, condSlot);
         parseStmtList(Tok.END_WHILE);
-        int jmpBack = emitJumpPlaceholder(MaraVm.OP_JMP, 0);
+        int jmpBack = emitJumpPlaceholder(NativeMaraVm.OP_JMP, 0);
         patchJumpTarget(jmpBack, loopStart);
         patchJumpHere(jmpExit);
         match(Tok.END_WHILE);
@@ -287,7 +287,7 @@ final class StBytecodeCompiler {
         while (match(Tok.OR)) {
             int right = parseXor();
             int dst = allocator.allocTempSlot(DataType.BOOL);
-            writeWord(MaraVm.OP_OR, 2, MaraVm.SLOT_ALWAYS_ENABLED, dst, left);
+            writeWord(NativeMaraVm.OP_OR, 2, NativeMaraVm.SLOT_ALWAYS_ENABLED, dst, left);
             writeU16(right);
             writeU16(0);
             left = dst;
@@ -300,7 +300,7 @@ final class StBytecodeCompiler {
         while (match(Tok.XOR)) {
             int right = parseAnd();
             int dst = allocator.allocTempSlot(DataType.BOOL);
-            writeWord(MaraVm.OP_XOR, 2, MaraVm.SLOT_ALWAYS_ENABLED, dst, left);
+            writeWord(NativeMaraVm.OP_XOR, 2, NativeMaraVm.SLOT_ALWAYS_ENABLED, dst, left);
             writeU16(right);
             writeU16(0);
             left = dst;
@@ -313,7 +313,7 @@ final class StBytecodeCompiler {
         while (match(Tok.AND)) {
             int right = parseCmp();
             int dst = allocator.allocTempSlot(DataType.BOOL);
-            writeWord(MaraVm.OP_AND, 2, MaraVm.SLOT_ALWAYS_ENABLED, dst, left);
+            writeWord(NativeMaraVm.OP_AND, 2, NativeMaraVm.SLOT_ALWAYS_ENABLED, dst, left);
             writeU16(right);
             writeU16(0);
             left = dst;
@@ -328,15 +328,15 @@ final class StBytecodeCompiler {
             Tok op = next().type;
             int right = parseAdd();
             int vmOp = switch (op) {
-                case EQ -> MaraVm.OP_CMP_EQ;
-                case NEQ -> MaraVm.OP_CMP_NE;
-                case LT -> MaraVm.OP_CMP_LT;
-                case LTE -> MaraVm.OP_CMP_LE;
-                case GT -> MaraVm.OP_CMP_GT;
-                default -> MaraVm.OP_CMP_GE;
+                case EQ -> NativeMaraVm.OP_CMP_EQ;
+                case NEQ -> NativeMaraVm.OP_CMP_NE;
+                case LT -> NativeMaraVm.OP_CMP_LT;
+                case LTE -> NativeMaraVm.OP_CMP_LE;
+                case GT -> NativeMaraVm.OP_CMP_GT;
+                default -> NativeMaraVm.OP_CMP_GE;
             };
             int dst = allocator.allocTempSlot(DataType.BOOL);
-            writeWord(vmOp, 0, MaraVm.SLOT_ALWAYS_ENABLED, dst, left);
+            writeWord(vmOp, 0, NativeMaraVm.SLOT_ALWAYS_ENABLED, dst, left);
             writeU16(right);
             writeU16(0);
             left = dst;
@@ -351,7 +351,7 @@ final class StBytecodeCompiler {
             int right = parseMul();
             DataType dt = isFloatSlot(left) || isFloatSlot(right) ? DataType.FLOAT : DataType.INT;
             int dst = allocator.allocTempSlot(dt);
-            writeWord(op == Tok.PLUS ? MaraVm.OP_ADD : MaraVm.OP_SUB, 0, MaraVm.SLOT_ALWAYS_ENABLED, dst, left);
+            writeWord(op == Tok.PLUS ? NativeMaraVm.OP_ADD : NativeMaraVm.OP_SUB, 0, NativeMaraVm.SLOT_ALWAYS_ENABLED, dst, left);
             writeU16(right);
             writeU16(0);
             left = dst;
@@ -367,13 +367,13 @@ final class StBytecodeCompiler {
             DataType dt = isFloatSlot(left) || isFloatSlot(right) ? DataType.FLOAT : DataType.INT;
             int dst = allocator.allocTempSlot(dt);
             if (op == Tok.STAR) {
-                writeWord(MaraVm.OP_MUL, 0, MaraVm.SLOT_ALWAYS_ENABLED, dst, left);
+                writeWord(NativeMaraVm.OP_MUL, 0, NativeMaraVm.SLOT_ALWAYS_ENABLED, dst, left);
                 writeU16(right);
                 writeU16(0);
             } else {
-                writeWord(op == Tok.SLASH ? MaraVm.OP_DIV : MaraVm.OP_MOD, 0, MaraVm.SLOT_ALWAYS_ENABLED, dst, left);
+                writeWord(op == Tok.SLASH ? NativeMaraVm.OP_DIV : NativeMaraVm.OP_MOD, 0, NativeMaraVm.SLOT_ALWAYS_ENABLED, dst, left);
                 writeU16(right);
-                writeU16(MaraVm.SLOT_ALWAYS_ENABLED);
+                writeU16(NativeMaraVm.SLOT_ALWAYS_ENABLED);
             }
             left = dst;
         }
@@ -384,13 +384,13 @@ final class StBytecodeCompiler {
         if (match(Tok.NOT)) {
             int sub = parseUnary();
             int dst = allocator.allocTempSlot(DataType.BOOL);
-            writeWord(MaraVm.OP_NOT, 0, MaraVm.SLOT_ALWAYS_ENABLED, dst, sub);
+            writeWord(NativeMaraVm.OP_NOT, 0, NativeMaraVm.SLOT_ALWAYS_ENABLED, dst, sub);
             return dst;
         }
         if (match(Tok.MINUS)) {
             int sub = parseUnary();
             int dst = allocator.allocTempSlot(isFloatSlot(sub) ? DataType.FLOAT : DataType.INT);
-            writeWord(MaraVm.OP_NEG, 0, MaraVm.SLOT_ALWAYS_ENABLED, dst, sub);
+            writeWord(NativeMaraVm.OP_NEG, 0, NativeMaraVm.SLOT_ALWAYS_ENABLED, dst, sub);
             return dst;
         }
         return parsePrimary();
@@ -431,12 +431,12 @@ final class StBytecodeCompiler {
     }
 
     private static boolean isFloatSlot(int slotId) {
-        return ((slotId >>> MaraVm.SLOT_TYPE_SHIFT) & 0x3) == MaraVm.TYPE_FLOAT;
+        return ((slotId >>> NativeMaraVm.SLOT_TYPE_SHIFT) & 0x3) == NativeMaraVm.TYPE_FLOAT;
     }
 
     private int emitJumpPlaceholder(int opcode, int condSlot) {
         int off = out.size();
-        writeWord(opcode, 0, MaraVm.SLOT_ALWAYS_ENABLED, condSlot, 0);
+        writeWord(opcode, 0, NativeMaraVm.SLOT_ALWAYS_ENABLED, condSlot, 0);
         return off;
     }
 

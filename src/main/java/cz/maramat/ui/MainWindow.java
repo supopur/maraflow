@@ -4,7 +4,7 @@ import cz.maramat.comm.MaraProtClient;
 import cz.maramat.compiler.BytecodeCompiler;
 import cz.maramat.compiler.BytecodeCompiler.CompilationReport;
 import cz.maramat.compiler.MflwEmitter;
-import cz.maramat.vm.MaraVm;
+import cz.maramat.vm.NativeMaraVm;
 import cz.maramat.help.HelpContext;
 import cz.maramat.help.diagram.HelpCodeExporter;
 import cz.maramat.io.MflProjectSerializer;
@@ -129,6 +129,7 @@ public class MainWindow extends JFrame {
         this.scopePanel = new ScopePanel(() -> this.project);
 
         this.simEngine = new SimulationEngine(this::onSimulationTickUiUpdate);
+        this.simEngine.setOnStopHook(this::stopPlcWatchLoop);
         this.simEngine.addScopeListener(scopePanel::recordSample);
         this.simBridgeServer = new SimulatorBridgeServer(
                 this.simEngine,
@@ -199,6 +200,9 @@ public class MainWindow extends JFrame {
         stEditorPanel = new StEditorPanel(project, project.getPages().getFirst(), () -> {
             if (simEngine.getState() != SimulationEngine.State.STOPPED) {
                 simEngine.stopSimulation(project);
+                if (MainWindow.this.stEditorPanel != null) {
+                    MainWindow.this.stEditorPanel.resetVariableTable();
+                }
                 editorToolbar.updateSimState(simEngine.getState());
                 plcLogPanel.appendLog("Simulation / Watch stopped due to ST edit.");
             }
@@ -443,6 +447,7 @@ public class MainWindow extends JFrame {
     }
 
     private void onSimulationTickUiUpdate() {
+        boolean stopped = simEngine.getState() == SimulationEngine.State.STOPPED;
         if (fbdCanvas != null) {
             fbdCanvas.repaint();
         }
@@ -450,10 +455,14 @@ public class MainWindow extends JFrame {
             ladderCanvas.repaint();
         }
         if (stEditorPanel != null) {
-            stEditorPanel.refreshRuntimeValues();
+            if (stopped) {
+                stEditorPanel.resetVariableTable();
+            } else {
+                stEditorPanel.refreshRuntimeValues();
+            }
         }
         for (FloatingPageWindow fpw : floatingPageWindows) {
-            fpw.refreshSimulationState();
+            fpw.refreshSimulationState(stopped);
         }
         if (editorToolbar != null) {
             editorToolbar.updateSimState(simEngine.getState());
@@ -1014,6 +1023,7 @@ public class MainWindow extends JFrame {
             @Override
             public void onSimStop() {
                 simEngine.stopSimulation(project);
+                stEditorPanel.resetVariableTable();
                 plcLogPanel.appendLog("Simulation / Watch stopped.");
                 editorToolbar.updateSimState(simEngine.getState());
             }
@@ -1613,6 +1623,7 @@ public class MainWindow extends JFrame {
         if (simEngine.getState() == SimulationEngine.State.WATCH_MODE) {
             stopPlcWatchLoop();
             simEngine.stopSimulation(project);
+            stEditorPanel.resetVariableTable();
             plcLogPanel.appendLog("Exited PLC Watch Mode.");
             editorToolbar.updateSimState(simEngine.getState());
             return;
@@ -1671,6 +1682,9 @@ public class MainWindow extends JFrame {
                 int epoch = client.watchSubscribe(slotIds);
                 while (simEngine.getState() == SimulationEngine.State.WATCH_MODE && !Thread.currentThread().isInterrupted()) {
                     MaraProtClient.WatchUpdate upd = client.watchPoll(epoch);
+                    if (simEngine.getState() != SimulationEngine.State.WATCH_MODE || Thread.currentThread().isInterrupted()) {
+                        break;
+                    }
                     epoch = upd.newEpoch();
                     if (!upd.changedSlots().isEmpty()) {
                         for (var entry : upd.changedSlots().entrySet()) {
@@ -1688,6 +1702,7 @@ public class MainWindow extends JFrame {
                 javax.swing.SwingUtilities.invokeLater(() -> {
                     plcLogPanel.appendLog("Watch Mode disconnected: " + ex.getMessage());
                     simEngine.stopSimulation(project);
+                    stEditorPanel.resetVariableTable();
                     editorToolbar.updateSimState(simEngine.getState());
                 });
             } finally {
@@ -1697,13 +1712,13 @@ public class MainWindow extends JFrame {
     }
 
     private static double decodeSlotValue(int slotId, byte[] raw) {
-        int type = (slotId >>> MaraVm.SLOT_TYPE_SHIFT) & 0x3;
+        int type = (slotId >>> NativeMaraVm.SLOT_TYPE_SHIFT) & 0x3;
         java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN);
         return switch (type) {
-            case MaraVm.TYPE_BOOL -> (raw[0] != 0) ? 1.0 : 0.0;
-            case MaraVm.TYPE_INT -> bb.getInt(0);
-            case MaraVm.TYPE_LONG -> (double) bb.getLong(0);
-            case MaraVm.TYPE_FLOAT -> bb.getFloat(0);
+            case NativeMaraVm.TYPE_BOOL -> (raw[0] != 0) ? 1.0 : 0.0;
+            case NativeMaraVm.TYPE_INT -> bb.getInt(0);
+            case NativeMaraVm.TYPE_LONG -> (double) bb.getLong(0);
+            case NativeMaraVm.TYPE_FLOAT -> bb.getFloat(0);
             default -> 0.0;
         };
     }

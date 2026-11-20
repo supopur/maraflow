@@ -124,6 +124,17 @@ public final class HelpCodeExporter {
                 sb.append(" channel=").append(formatAttrValue(ch));
             }
 
+            List<String> negPins = new ArrayList<>();
+            for (PinInstance p : b.getInputs()) {
+                if (p.isNegated()) negPins.add(p.getShortName());
+            }
+            for (PinInstance p : b.getOutputs()) {
+                if (p.isNegated()) negPins.add(p.getShortName());
+            }
+            if (!negPins.isEmpty()) {
+                sb.append(" neg=").append(String.join(",", negPins));
+            }
+
             List<String> nonDefaults = new ArrayList<>();
             List<PinInstance> inputs = b.getInputs();
             for (int pIdx = 0; pIdx < inputs.size(); pIdx++) {

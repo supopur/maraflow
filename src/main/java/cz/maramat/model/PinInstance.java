@@ -7,6 +7,7 @@ public class PinInstance {
     private final boolean input;
     private String constantValue;
     private double runtimeValue;
+    private boolean negated;
 
     public PinInstance(String shortName, String fullName, DataType dataType, boolean input, String defaultConstant) {
         setShortName(shortName);
@@ -15,10 +16,12 @@ public class PinInstance {
         this.input = input;
         this.constantValue = (defaultConstant != null) ? defaultConstant : dataType.getDefaultConstant();
         this.runtimeValue = dataType.toNumericValue(this.constantValue);
+        this.negated = false;
     }
 
     public PinInstance copy() {
         PinInstance p = new PinInstance(shortName, fullName, dataType, input, constantValue);
+        p.negated = this.negated;
         p.runtimeValue = this.runtimeValue;
         return p;
     }
@@ -49,10 +52,30 @@ public class PinInstance {
 
     public void setDataType(DataType dataType) {
         this.dataType = dataType;
+        if (dataType != DataType.BOOL) {
+            this.negated = false;
+        }
     }
 
     public boolean isInput() {
         return input;
+    }
+
+    public boolean isNegated() {
+        return negated;
+    }
+
+    public void setNegated(boolean negated) {
+        boolean next = (this.dataType == DataType.BOOL) && negated;
+        if (this.negated != next) {
+            this.negated = next;
+            if (this.input) {
+                double v = dataType.toNumericValue(this.constantValue);
+                this.runtimeValue = this.negated ? ((v == 0.0) ? 1.0 : 0.0) : v;
+            } else {
+                this.runtimeValue = (this.runtimeValue == 0.0) ? 1.0 : 0.0;
+            }
+        }
     }
 
     public String getConstantValue() {
@@ -61,7 +84,11 @@ public class PinInstance {
 
     public void setConstantValue(String constantValue) {
         this.constantValue = dataType.validateAndNormalizeConstant(constantValue);
-        this.runtimeValue = dataType.toNumericValue(this.constantValue);
+        double v = dataType.toNumericValue(this.constantValue);
+        if (this.negated && this.dataType == DataType.BOOL) {
+            v = (v == 0.0) ? 1.0 : 0.0;
+        }
+        this.runtimeValue = v;
     }
 
     public double getRuntimeValue() {

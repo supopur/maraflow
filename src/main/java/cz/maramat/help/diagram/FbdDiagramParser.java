@@ -112,6 +112,7 @@ public final class FbdDiagramParser {
         Integer variableInputCount = null;
         String primaryDataType = null;
         Map<String, String> customProperties = new LinkedHashMap<>();
+        List<String> negatedPins = new ArrayList<>();
 
         if (!rest.isEmpty()) {
             Matcher cm = CONST_BLOCK.matcher(rest);
@@ -143,6 +144,12 @@ public final class FbdDiagramParser {
                         case "inputs" -> variableInputCount = Integer.parseInt(v);
                         case "type" -> primaryDataType = v.toUpperCase(java.util.Locale.ROOT);
                         case "channel" -> customProperties.put("Channel", v);
+                        case "neg" -> {
+                            for (String pn : v.split(",")) {
+                                String t = pn.trim();
+                                if (!t.isEmpty()) negatedPins.add(t);
+                            }
+                        }
                         default -> throw new IllegalArgumentException("Line " + lineNo + ": unexpected block attribute: " + k);
                     }
                 }
@@ -150,7 +157,7 @@ public final class FbdDiagramParser {
         }
 
         return new BlockNode(alias, catalogId, gx, gy, displayName, constants,
-                customInputs, customOutputs, variableInputCount, primaryDataType, customProperties);
+                customInputs, customOutputs, variableInputCount, primaryDataType, customProperties, negatedPins);
     }
 
     private static List<String> splitAttrs(String rest) {

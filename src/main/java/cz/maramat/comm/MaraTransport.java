@@ -1,6 +1,6 @@
 package cz.maramat.comm;
 
-import com.fazecast.jSerialComm.SerialPort;
+import com.fazecast.jSerialComm .SerialPort;
 
 import java.io.Closeable;
 import java.io.IOException;

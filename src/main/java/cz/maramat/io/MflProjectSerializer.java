@@ -264,6 +264,9 @@ public final class MflProjectSerializer {
             props.setProperty(bp + "in." + ii + ".full", pin.getFullName());
             props.setProperty(bp + "in." + ii + ".type", pin.getDataType().name());
             props.setProperty(bp + "in." + ii + ".const", pin.getConstantValue());
+            if (pin.isNegated()) {
+                props.setProperty(bp + "in." + ii + ".negated", "true");
+            }
         }
 
         props.setProperty(bp + "outCount", Integer.toString(b.getOutputs().size()));
@@ -273,6 +276,9 @@ public final class MflProjectSerializer {
             props.setProperty(bp + "out." + oi + ".full", pin.getFullName());
             props.setProperty(bp + "out." + oi + ".type", pin.getDataType().name());
             props.setProperty(bp + "out." + oi + ".const", pin.getConstantValue());
+            if (pin.isNegated()) {
+                props.setProperty(bp + "out." + oi + ".negated", "true");
+            }
         }
     }
 
@@ -545,7 +551,9 @@ public final class MflProjectSerializer {
                 String fn = props.getProperty(bp + "in." + ii + ".full", sn);
                 DataType dt = DataType.valueOf(props.getProperty(bp + "in." + ii + ".type", "BOOL"));
                 String cv = props.getProperty(bp + "in." + ii + ".const", dt.getDefaultConstant());
-                b.getInputs().add(new PinInstance(sn, fn, dt, true, cv));
+                PinInstance pin = new PinInstance(sn, fn, dt, true, cv);
+                pin.setNegated(Boolean.parseBoolean(props.getProperty(bp + "in." + ii + ".negated", "false")));
+                b.getInputs().add(pin);
             }
         }
 
@@ -557,7 +565,9 @@ public final class MflProjectSerializer {
                 String fn = props.getProperty(bp + "out." + oi + ".full", sn);
                 DataType dt = DataType.valueOf(props.getProperty(bp + "out." + oi + ".type", "BOOL"));
                 String cv = props.getProperty(bp + "out." + oi + ".const", dt.getDefaultConstant());
-                b.getOutputs().add(new PinInstance(sn, fn, dt, false, cv));
+                PinInstance pin = new PinInstance(sn, fn, dt, false, cv);
+                pin.setNegated(Boolean.parseBoolean(props.getProperty(bp + "out." + oi + ".negated", "false")));
+                b.getOutputs().add(pin);
             }
         }
         return b;

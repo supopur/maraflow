@@ -39,8 +39,25 @@ public record FbdDiagramSpec(
             List<PinSpec> customOutputs,
             Integer variableInputCount,
             String primaryDataType,
-            Map<String, String> customProperties
+            Map<String, String> customProperties,
+            List<String> negatedPins
     ) {
+        public BlockNode(
+                String alias,
+                String catalogId,
+                int gridX,
+                int gridY,
+                String displayName,
+                Map<String, String> pinConstants,
+                List<PinSpec> customInputs,
+                List<PinSpec> customOutputs,
+                Integer variableInputCount,
+                String primaryDataType,
+                Map<String, String> customProperties
+        ) {
+            this(alias, catalogId, gridX, gridY, displayName, pinConstants, customInputs, customOutputs, variableInputCount, primaryDataType, customProperties, List.of());
+        }
+
         public BlockNode(
                 String alias,
                 String catalogId,
@@ -49,7 +66,7 @@ public record FbdDiagramSpec(
                 String displayName,
                 Map<String, String> pinConstants
         ) {
-            this(alias, catalogId, gridX, gridY, displayName, pinConstants, List.of(), List.of(), null, null, Map.of());
+            this(alias, catalogId, gridX, gridY, displayName, pinConstants, List.of(), List.of(), null, null, Map.of(), List.of());
         }
     }
 

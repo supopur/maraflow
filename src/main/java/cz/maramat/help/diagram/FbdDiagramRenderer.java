@@ -126,6 +126,12 @@ public final class FbdDiagramRenderer {
                 int pinIdx = findPinIndex(inst.getInputs(), e.getKey(), node.alias());
                 inst.getInputs().get(pinIdx).setConstantValue(e.getValue());
             }
+            if (node.negatedPins() != null) {
+                for (String negPinName : node.negatedPins()) {
+                    PinInstance pin = findOutputOrInputPin(inst, negPinName, node.alias());
+                    pin.setNegated(true);
+                }
+            }
 
             page.getBlocks().add(inst);
             byAlias.put(node.alias(), inst);

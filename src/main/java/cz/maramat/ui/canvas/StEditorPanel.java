@@ -968,8 +968,23 @@ public class StEditorPanel extends JPanel {
         }
     }
 
+    public void resetVariableTable() {
+        if (varTable.isEditing()) {
+            varTable.getCellEditor().cancelCellEditing();
+        }
+        if (page != null) {
+            for (StVariable v : page.getStVariables()) {
+                v.resetRuntimeState();
+            }
+        }
+        varTableModel.fireTableDataChanged();
+    }
+
     private void onCodeEdited() {
         if (suppressEvents || highlighting || page == null) return;
+        if (onStateChanged != null) {
+            onStateChanged.run();
+        }
         String newCode = codePane.getText();
         page.setStCode(newCode);
         if (project != null) project.setDirty(true);

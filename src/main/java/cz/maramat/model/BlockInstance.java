@@ -250,19 +250,43 @@ public class BlockInstance {
 
         if (definitionId.equals("Main.Switches.Mux")) {
             DataType dt = DataType.valueOf(customProperties.getOrDefault("DataType", "INT"));
+            List<PinInstance> oldChannels = new ArrayList<>();
+            for (int i = 2; i < inputs.size(); i++) {
+                oldChannels.add(inputs.get(i));
+            }
             while (inputs.size() > 2) {
                 inputs.removeLast();
             }
             for (int i = 0; i < count; i++) {
-                inputs.add(new PinInstance("X" + i, "Channel " + i, dt, true, dt.getDefaultConstant()));
+                PinInstance np = new PinInstance("X" + i, "Channel " + i, dt, true, dt.getDefaultConstant());
+                if (i < oldChannels.size()) {
+                    try {
+                        np.setConstantValue(oldChannels.get(i).getConstantValue());
+                    } catch (Exception ignored) {
+                    }
+                    np.setNegated(oldChannels.get(i).isNegated());
+                }
+                inputs.add(np);
             }
         } else {
             DataType dt = inputs.size() > 1 ? inputs.get(1).getDataType() : DataType.BOOL;
+            List<PinInstance> oldDataIns = new ArrayList<>();
+            for (int i = 1; i < inputs.size(); i++) {
+                oldDataIns.add(inputs.get(i));
+            }
             while (inputs.size() > 1) {
                 inputs.removeLast();
             }
             for (int i = 1; i <= count; i++) {
-                inputs.add(new PinInstance("X" + i, "Input " + i, dt, true, dt.getDefaultConstant()));
+                PinInstance np = new PinInstance("X" + i, "Input " + i, dt, true, dt.getDefaultConstant());
+                if (i - 1 < oldDataIns.size()) {
+                    try {
+                        np.setConstantValue(oldDataIns.get(i - 1).getConstantValue());
+                    } catch (Exception ignored) {
+                    }
+                    np.setNegated(oldDataIns.get(i - 1).isNegated());
+                }
+                inputs.add(np);
             }
         }
     }
@@ -321,13 +345,21 @@ public class BlockInstance {
                     np.setConstantValue(oldInputs.get(i).getConstantValue());
                 } catch (Exception ignored) {
                 }
+                np.setNegated(oldInputs.get(i).isNegated());
             }
             this.inputs.add(np);
         }
 
+        List<PinInstance> oldOutputs = new ArrayList<>(this.outputs);
         this.outputs.clear();
-        for (PinSpec ps : def.getDefaultOutputs()) {
-            this.outputs.add(new PinInstance(ps.shortName(), ps.fullName(), ps.dataType(), false, ps.defaultConstant()));
+        List<PinSpec> defOuts = def.getDefaultOutputs();
+        for (int i = 0; i < defOuts.size(); i++) {
+            PinSpec ps = defOuts.get(i);
+            PinInstance np = new PinInstance(ps.shortName(), ps.fullName(), ps.dataType(), false, ps.defaultConstant());
+            if (i < oldOutputs.size()) {
+                np.setNegated(oldOutputs.get(i).isNegated());
+            }
+            this.outputs.add(np);
         }
     }
 
@@ -449,16 +481,23 @@ public class BlockInstance {
         this.internalState1 = 0.0;
         this.internalState2 = 0.0;
         for (PinInstance p : inputs) {
-            p.setRuntimeValue(p.getDataType().toNumericValue(p.getConstantValue()));
+            double v = p.getDataType().toNumericValue(p.getConstantValue());
+            if (p.isNegated() && p.getDataType() == DataType.BOOL) {
+                v = (v == 0.0) ? 1.0 : 0.0;
+            }
+            p.setRuntimeValue(v);
         }
         for (PinInstance p : outputs) {
             if (definitionId.startsWith("Visual.Vars.")) {
                 String defaultVal = customProperties.getOrDefault("ValA", "0");
                 customProperties.put("CurrentValue", defaultVal);
                 double v = p.getDataType().toNumericValue(defaultVal);
+                if (p.isNegated() && p.getDataType() == DataType.BOOL) {
+                    v = (v == 0.0) ? 1.0 : 0.0;
+                }
                 p.setRuntimeValue(v);
             } else {
-                p.setRuntimeValue(0.0);
+                p.setRuntimeValue((p.isNegated() && p.getDataType() == DataType.BOOL) ? 1.0 : 0.0);
             }
         }
     }

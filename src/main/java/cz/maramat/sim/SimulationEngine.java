@@ -66,6 +66,7 @@ public class SimulationEngine {
     private final List<ScopeSampleListener> scopeListeners = new CopyOnWriteArrayList<>();
     private volatile boolean externalWatchActive = false;
     private volatile java.util.function.BiConsumer<String, Double> watchWriteForwarder;
+    private volatile Runnable onStopHook;
 
     public interface ScopeSampleListener {
         void onScanCompleted(Project project, double simTimeSeconds);
@@ -168,11 +169,13 @@ public class SimulationEngine {
     }
 
     public void setOperandValueFromPlc(Project project, String operand, double value) {
+        if (state != State.WATCH_MODE) return;
         applyOperandValue(project, operand, value, false);
     }
 
     private void applyOperandValue(Project project, String operand, double value, boolean forwardToPlc) {
         if (operand == null || operand.isBlank()) return;
+        if (!forwardToPlc && state != State.WATCH_MODE) return;
         String key = operand.trim();
         if (forwardToPlc && state == State.WATCH_MODE && externalWatchActive) {
             var fwd = this.watchWriteForwarder;
@@ -195,18 +198,45 @@ public class SimulationEngine {
                                 && !b.getOutputs().isEmpty()) {
                             PinInstance out = b.getOutputs().getFirst();
                             double converted = DataType.convertValue(value, DataType.FLOAT, out.getDataType());
-                            out.setRuntimeValue(converted);
                             b.getCustomProperties().put("CurrentValue", formatOperandValue(out.getDataType(), converted));
+                            if (out.isNegated() && out.getDataType() == DataType.BOOL) {
+                                converted = (converted == 0.0) ? 1.0 : 0.0;
+                            }
+                            out.setRuntimeValue(converted);
+                            if (!forwardToPlc) {
+                                propagateWatchedOutputWires(page, b, 0, out);
+                            }
                         } else {
-                            for (PinInstance out : b.getOutputs()) {
+                            for (int oi = 0; oi < b.getOutputs().size(); oi++) {
+                                PinInstance out = b.getOutputs().get(oi);
                                 if (out.getShortName().equalsIgnoreCase(right)) {
-                                    out.setRuntimeValue(DataType.convertValue(value, DataType.FLOAT, out.getDataType()));
+                                    double converted = DataType.convertValue(value, DataType.FLOAT, out.getDataType());
+                                    if (b.isInputRef()) {
+                                        if (out.isNegated() && out.getDataType() == DataType.BOOL) {
+                                            converted = (converted == 0.0) ? 1.0 : 0.0;
+                                        }
+                                        externallyDrivenInputPins.add((b.getName() + "." + out.getShortName()).toUpperCase());
+                                    }
+                                    out.setRuntimeValue(converted);
+                                    if (b.isInputRef()) {
+                                        String ch = b.getIoRefLabel();
+                                        if (!ch.isBlank()) {
+                                            virtualRegisters.put(ch, converted);
+                                            virtualRegisters.put(ch.toUpperCase(), converted);
+                                        }
+                                    }
+                                    if (!forwardToPlc) {
+                                        propagateWatchedOutputWires(page, b, oi, out);
+                                    }
                                 }
                             }
                             for (PinInstance in : b.getInputs()) {
                                 if (in.getShortName().equalsIgnoreCase(right)) {
                                     double converted = DataType.convertValue(value, DataType.FLOAT, in.getDataType());
-                                    in.setRuntimeValue(converted);
+                                    double effectiveIn = (in.isNegated() && in.getDataType() == DataType.BOOL)
+                                            ? (converted == 0.0 ? 1.0 : 0.0)
+                                            : converted;
+                                    in.setRuntimeValue(effectiveIn);
                                     String fullPin = (b.getName() + "." + in.getShortName()).toUpperCase();
                                     externallyDrivenInputPins.add(fullPin);
                                     for (GraphicElement ge : page.getGraphics()) {
@@ -224,6 +254,8 @@ public class SimulationEngine {
                         if (stVar != null) {
                             double converted = DataType.convertValue(value, DataType.FLOAT, stVar.getDataType());
                             stVar.setRuntimeValue(converted);
+                            virtualRegisters.put(stVar.getName(), converted);
+                            virtualRegisters.put(stVar.getName().toUpperCase(), converted);
                             updateStPersistentVar(page, stVar.getName(), converted);
                         }
                     }
@@ -241,6 +273,29 @@ public class SimulationEngine {
         }
 
         requestUiRepaint();
+    }
+
+    private void propagateWatchedOutputWires(Page page, BlockInstance srcBlock, int srcPinIdx, PinInstance srcOutPin) {
+        for (Wire w : page.getWires()) {
+            if (w.getSourceBlockId().equals(srcBlock.getId()) && w.getSourcePinIndex() == srcPinIdx) {
+                BlockInstance dstBlock = page.findBlockById(w.getTargetBlockId());
+                if (dstBlock != null && w.getTargetPinIndex() < dstBlock.getInputs().size()) {
+                    PinInstance inPin = dstBlock.getInputs().get(w.getTargetPinIndex());
+                    double converted = DataType.convertValue(srcOutPin.getRuntimeValue(), srcOutPin.getDataType(), inPin.getDataType());
+                    if (inPin.isNegated() && inPin.getDataType() == DataType.BOOL) {
+                        converted = (converted == 0.0) ? 1.0 : 0.0;
+                    }
+                    inPin.setRuntimeValue(converted);
+                    if (dstBlock.isOutputRef()) {
+                        String ch = dstBlock.getIoRefLabel();
+                        if (!ch.isBlank()) {
+                            virtualRegisters.put(ch, converted);
+                            virtualRegisters.put(ch.toUpperCase(), converted);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private void updateStPersistentVar(Page page, String varName, double converted) {
@@ -295,9 +350,15 @@ public class SimulationEngine {
     }
 
     public void stopSimulation(Project project) {
+        Runnable hook = this.onStopHook;
+        if (hook != null) {
+            hook.run();
+        }
         synchronized (lifecycleLock) {
             this.activeProject = project;
             state = State.STOPPED;
+            this.externalWatchActive = false;
+            this.watchWriteForwarder = null;
             workerRunning.set(false);
             synchronized (pauseLock) {
                 pauseLock.notifyAll();
@@ -317,6 +378,10 @@ public class SimulationEngine {
             resetAllBlocks(project);
         }
         requestUiRepaint();
+    }
+
+    public void setOnStopHook(Runnable onStopHook) {
+        this.onStopHook = onStopHook;
     }
 
     public void setExternalWatchActive(boolean externalWatchActive) {
@@ -620,7 +685,22 @@ public class SimulationEngine {
                         for (int i = 0; i < targetBlock.getInputs().size(); i++) {
                             PinInstance pin = targetBlock.getInputs().get(i);
                             if (pin.getShortName().equalsIgnoreCase(pName)) {
-                                pin.setRuntimeValue(ge.isActiveState() ? 1.0 : 0.0);
+                                double v = ge.isActiveState() ? 1.0 : 0.0;
+                                if (pin.isNegated() && pin.getDataType() == DataType.BOOL) {
+                                    v = (v == 0.0) ? 1.0 : 0.0;
+                                }
+                                pin.setRuntimeValue(v);
+                            }
+                        }
+                        if (targetBlock.isInputRef()) {
+                            for (PinInstance outPin : targetBlock.getOutputs()) {
+                                if (outPin.getShortName().equalsIgnoreCase(pName)) {
+                                    double v = ge.isActiveState() ? 1.0 : 0.0;
+                                    if (outPin.isNegated() && outPin.getDataType() == DataType.BOOL) {
+                                        v = (v == 0.0) ? 1.0 : 0.0;
+                                    }
+                                    outPin.setRuntimeValue(v);
+                                }
                             }
                         }
                     }
@@ -710,7 +790,8 @@ public class SimulationEngine {
                         && Boolean.TRUE.equals(blockPendingRstClear.remove(b.getId()))) {
                     b.setInternalState2(0.0);
                     if (b.getOutputs().size() > 1) {
-                        b.getOutputs().get(1).setRuntimeValue(0.0);
+                        PinInstance flgOut = b.getOutputs().get(1);
+                        flgOut.setRuntimeValue((flgOut.isNegated() && flgOut.getDataType() == DataType.BOOL) ? 1.0 : 0.0);
                     }
                 }
             }
@@ -906,12 +987,30 @@ public class SimulationEngine {
         }
     }
 
+    private static boolean isPinDrivenByVisualButton(Page page, PageScanIndex index, String targetPinKeyUpper) {
+        if (index != null) {
+            return !index.visualButtonTargetsUpper().isEmpty()
+                    && index.visualButtonTargetsUpper().contains(targetPinKeyUpper);
+        }
+        for (GraphicElement ge : page.getGraphics()) {
+            if (ge.getKind() == GraphicElement.Kind.VISUAL_BUTTON
+                    && ge.getBoundTargetPin().equalsIgnoreCase(targetPinKeyUpper)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void evaluateBlock(Project project, Page page, PageScanIndex index, BlockInstance b, double dtMs, double simTimeSeconds, boolean propagateFbdWires, int depth) {
         if (depth > 8) return;
         List<PinInstance> ins = b.getInputs();
         if (propagateFbdWires) {
             for (int i = 0; i < ins.size(); i++) {
                 PinInstance inPin = ins.get(i);
+                String targetPinKey = (b.getName() + "." + inPin.getShortName()).toUpperCase();
+                boolean drivenByVisualButton = isPinDrivenByVisualButton(page, index, targetPinKey);
+                boolean drivenExternally = externallyDrivenInputPins.contains(targetPinKey);
+
                 Wire w = (index != null)
                         ? index.wireByTargetPin().get(b.getId() + ":" + i)
                         : page.findWireToInputPin(b.getId(), i);
@@ -921,29 +1020,42 @@ public class SimulationEngine {
                             : page.findBlockById(w.getSourceBlockId());
                     if (srcBlock != null && w.getSourcePinIndex() < srcBlock.getOutputs().size()) {
                         PinInstance outPin = srcBlock.getOutputs().get(w.getSourcePinIndex());
-                        double converted = DataType.convertValue(outPin.getRuntimeValue(), outPin.getDataType(), inPin.getDataType());
-                        inPin.setRuntimeValue(converted);
-                    }
-                } else {
-                    boolean drivenByVisualButton;
-                    if (index != null) {
-                        drivenByVisualButton = !index.visualButtonTargetsUpper().isEmpty()
-                                && index.visualButtonTargetsUpper().contains((b.getName() + "." + inPin.getShortName()).toUpperCase());
-                    } else {
-                        drivenByVisualButton = false;
-                        String targetRef = b.getName() + "." + inPin.getShortName();
-                        for (GraphicElement ge : page.getGraphics()) {
-                            if (ge.getKind() == GraphicElement.Kind.VISUAL_BUTTON
-                                    && ge.getBoundTargetPin().equalsIgnoreCase(targetRef)) {
-                                drivenByVisualButton = true;
-                                break;
+                        if (drivenByVisualButton || drivenExternally) {
+                            if (srcBlock.isInputRef()) {
+                                double rawDriven = inPin.getRuntimeValue();
+                                if (inPin.isNegated() && inPin.getDataType() == DataType.BOOL) {
+                                    rawDriven = (rawDriven == 0.0) ? 1.0 : 0.0;
+                                }
+                                outPin.setRuntimeValue(DataType.convertValue(rawDriven, inPin.getDataType(), outPin.getDataType()));
+                            }
+                            continue;
+                        }
+                        if (srcBlock.isInputRef()) {
+                            String ch = srcBlock.getCustomProperties().getOrDefault("Channel", "DI0").trim();
+                            String irefOutKey = (srcBlock.getName() + "." + outPin.getShortName()).toUpperCase();
+                            boolean chDriven = !ch.isEmpty() && (virtualRegisters.containsKey(ch.toUpperCase()) || virtualRegisters.containsKey(ch));
+                            boolean irefPinDriven = externallyDrivenInputPins.contains(irefOutKey) || isPinDrivenByVisualButton(page, index, irefOutKey);
+                            if (!chDriven && !irefPinDriven) {
+                                double constVal = inPin.getDataType().toNumericValue(inPin.getConstantValue());
+                                if (inPin.isNegated() && inPin.getDataType() == DataType.BOOL) {
+                                    constVal = (constVal == 0.0) ? 1.0 : 0.0;
+                                }
+                                inPin.setRuntimeValue(constVal);
+                                continue;
                             }
                         }
+                        double converted = DataType.convertValue(outPin.getRuntimeValue(), outPin.getDataType(), inPin.getDataType());
+                        if (inPin.isNegated() && inPin.getDataType() == DataType.BOOL) {
+                            converted = (converted == 0.0) ? 1.0 : 0.0;
+                        }
+                        inPin.setRuntimeValue(converted);
                     }
-                    String targetPinKey = (b.getName() + "." + inPin.getShortName()).toUpperCase();
-                    if (!drivenByVisualButton && !externallyDrivenInputPins.contains(targetPinKey)) {
-                        inPin.setRuntimeValue(inPin.getDataType().toNumericValue(inPin.getConstantValue()));
+                } else if (!drivenByVisualButton && !drivenExternally) {
+                    double constVal = inPin.getDataType().toNumericValue(inPin.getConstantValue());
+                    if (inPin.isNegated() && inPin.getDataType() == DataType.BOOL) {
+                        constVal = (constVal == 0.0) ? 1.0 : 0.0;
                     }
+                    inPin.setRuntimeValue(constVal);
                 }
             }
         }
@@ -971,6 +1083,9 @@ public class SimulationEngine {
                 double cur = getOperandValue(project, regName);
                 outPin.setRuntimeValue(DataType.convertValue(cur, DataType.FLOAT, outPin.getDataType()));
             }
+            if (propagateFbdWires) {
+                applyOutputPinNegations(b);
+            }
             return;
         }
         if (defId.equals("Main.Execution.ReadReg")) {
@@ -981,6 +1096,9 @@ public class SimulationEngine {
                 PinInstance outPin = b.getOutputs().getFirst();
                 double raw = getOperandValue(project, regName);
                 outPin.setRuntimeValue(DataType.convertValue(raw, DataType.FLOAT, outPin.getDataType()));
+                if (propagateFbdWires) {
+                    applyOutputPinNegations(b);
+                }
             }
             return;
         }
@@ -989,7 +1107,8 @@ public class SimulationEngine {
             if ("Main.Timers.SinglePulse".equals(defId)) {
                 b.setPrevTriggerState(false);
                 if (!b.getOutputs().isEmpty()) {
-                    b.getOutputs().getFirst().setRuntimeValue(0.0);
+                    PinInstance firstOut = b.getOutputs().getFirst();
+                    firstOut.setRuntimeValue((propagateFbdWires && firstOut.isNegated() && firstOut.getDataType() == DataType.BOOL) ? 1.0 : 0.0);
                 }
             }
             return;
@@ -1003,11 +1122,39 @@ public class SimulationEngine {
         List<PinInstance> outs = b.getOutputs();
         switch (defId) {
             case "IO.IREF" -> {
-                String ch = b.getCustomProperties().getOrDefault("Channel", "DI0");
+                String ch = b.getCustomProperties().getOrDefault("Channel", "DI0").trim();
                 if (!outs.isEmpty()) {
                     PinInstance outPin = outs.getFirst();
-                    double val = getOperandValue(project, ch);
-                    outPin.setRuntimeValue(outPin.getDataType() == DataType.BOOL ? (val != 0.0 ? 1.0 : 0.0) : val);
+                    String irefOutKey = (b.getName() + "." + outPin.getShortName()).toUpperCase();
+                    if (externallyDrivenInputPins.contains(irefOutKey) || isPinDrivenByVisualButton(page, index, irefOutKey)) {
+                        return;
+                    }
+                    boolean chDriven = !ch.isEmpty() && (virtualRegisters.containsKey(ch.toUpperCase()) || virtualRegisters.containsKey(ch));
+                    if (chDriven) {
+                        double val = getOperandValue(project, ch);
+                        outPin.setRuntimeValue(outPin.getDataType() == DataType.BOOL ? (val != 0.0 ? 1.0 : 0.0) : val);
+                    } else {
+                        for (Wire w : page.getWires()) {
+                            if (w.getSourceBlockId().equals(b.getId()) && w.getSourcePinIndex() == 0) {
+                                BlockInstance dst = (index != null)
+                                        ? index.blocksById().get(w.getTargetBlockId())
+                                        : page.findBlockById(w.getTargetBlockId());
+                                if (dst != null && w.getTargetPinIndex() < dst.getInputs().size()) {
+                                    PinInstance dstIn = dst.getInputs().get(w.getTargetPinIndex());
+                                    String dstKey = (dst.getName() + "." + dstIn.getShortName()).toUpperCase();
+                                    if (externallyDrivenInputPins.contains(dstKey) || isPinDrivenByVisualButton(page, index, dstKey)) {
+                                        double raw = dstIn.getRuntimeValue();
+                                        if (dstIn.isNegated() && dstIn.getDataType() == DataType.BOOL) {
+                                            raw = (raw == 0.0) ? 1.0 : 0.0;
+                                        }
+                                        outPin.setRuntimeValue(DataType.convertValue(raw, dstIn.getDataType(), outPin.getDataType()));
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        return;
+                    }
                 }
             }
             case "IO.OREF" -> {
@@ -1466,6 +1613,17 @@ public class SimulationEngine {
             default -> {
             }
         }
+        if (propagateFbdWires) {
+            applyOutputPinNegations(b);
+        }
+    }
+
+    private static void applyOutputPinNegations(BlockInstance b) {
+        for (PinInstance outPin : b.getOutputs()) {
+            if (outPin.isNegated() && outPin.getDataType() == DataType.BOOL) {
+                outPin.setRuntimeValue(outPin.getRuntimeValue() == 0.0 ? 1.0 : 0.0);
+            }
+        }
     }
 
     private void evaluateInterruptBlock(Project project, BlockInstance b, List<PinInstance> ins, List<PinInstance> outs) {
@@ -1590,6 +1748,9 @@ public class SimulationEngine {
                 if (macroInputPinIdx < macroBlock.getInputs().size()) {
                     PinInstance srcIn = macroBlock.getInputs().get(macroInputPinIdx++);
                     double converted = DataType.convertValue(srcIn.getRuntimeValue(), srcIn.getDataType(), outPin.getDataType());
+                    if (outPin.isNegated() && outPin.getDataType() == DataType.BOOL) {
+                        converted = (converted == 0.0) ? 1.0 : 0.0;
+                    }
                     outPin.setRuntimeValue(converted);
                 }
             }
@@ -1617,10 +1778,16 @@ public class SimulationEngine {
                 } else {
                     inPin.setRuntimeValue(inPin.getDataType().toNumericValue(inPin.getConstantValue()));
                 }
+                if (inPin.isNegated() && inPin.getDataType() == DataType.BOOL) {
+                    inPin.setRuntimeValue(inPin.getRuntimeValue() == 0.0 ? 1.0 : 0.0);
+                }
 
                 if (macroOutputPinIdx < macroBlock.getOutputs().size()) {
                     PinInstance dstOut = macroBlock.getOutputs().get(macroOutputPinIdx++);
                     double converted = DataType.convertValue(inPin.getRuntimeValue(), inPin.getDataType(), dstOut.getDataType());
+                    if (dstOut.isNegated() && dstOut.getDataType() == DataType.BOOL) {
+                        converted = (converted == 0.0) ? 1.0 : 0.0;
+                    }
                     dstOut.setRuntimeValue(converted);
                 }
             }
@@ -1696,7 +1863,11 @@ public class SimulationEngine {
                 defVar.setRuntimeValue(converted);
                 if (defVar.getScope() == StVariable.Scope.VAR_OUTPUT && outPinIdx < macroBlock.getOutputs().size()) {
                     PinInstance outPin = macroBlock.getOutputs().get(outPinIdx++);
-                    outPin.setRuntimeValue(DataType.convertValue(converted, defVar.getDataType(), outPin.getDataType()));
+                    double outVal = DataType.convertValue(converted, defVar.getDataType(), outPin.getDataType());
+                    if (outPin.isNegated() && outPin.getDataType() == DataType.BOOL) {
+                        outVal = (outVal == 0.0) ? 1.0 : 0.0;
+                    }
+                    outPin.setRuntimeValue(outVal);
                 }
             }
         }

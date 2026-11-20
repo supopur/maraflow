@@ -784,7 +784,7 @@ public final class FbdRenderer {
                 g2.setColor(Color.BLACK);
                 String sName = pin.getShortName();
                 int ty = py + (g + pinFm.getAscent() - pinFm.getDescent()) / 2;
-                g2.drawString(sName, bx + 2, ty);
+                drawPinLabelWithOverline(g2, pinFm, sName, bx + 2, py, g, pin.isNegated());
 
                 if (!page.isInputPinConnected(b.getId(), i)) {
                     String constText = "(=" + pin.getConstantValue() + ")";
@@ -813,7 +813,7 @@ public final class FbdRenderer {
                 String sName = pin.getShortName();
                 int sw = pinFm.stringWidth(sName);
                 int ty = py + (g + pinFm.getAscent() - pinFm.getDescent()) / 2;
-                g2.drawString(sName, bx + bw - sw - 2, ty);
+                drawPinLabelWithOverline(g2, pinFm, sName, bx + bw - sw - 2, py, g, pin.isNegated());
 
                 if (showLiveOutputs) {
                     String liveStr = "(" + pin.getFormattedRuntimeValue(true) + ")";
@@ -966,9 +966,8 @@ public final class FbdRenderer {
         FontMetrics fm = g2.getFontMetrics();
         String label = b.getIoRefLabel();
         int textX = isInput ? (bx + Math.max(3, g / 3)) : (bx + g + Math.max(2, g / 4));
-        int textY = by + (bh + fm.getAscent() - fm.getDescent()) / 2;
         g2.setColor(activeBool ? Color.WHITE : Color.BLACK);
-        g2.drawString(label, textX, textY);
+        drawPinLabelWithOverline(g2, fm, label, textX, by, bh, pin != null && pin.isNegated());
 
         if (!opts.exporting() && opts.selectedBlockIds().contains(b.getId())) {
             g2.setColor(new Color(0x00, 0x55, 0xE5));
@@ -977,6 +976,21 @@ public final class FbdRenderer {
             g2.drawRect(bx - 2, by - 2, bw + 4, bh + 4);
             g2.setStroke(oldStroke);
         }
+    }
+
+    private static void drawPinLabelWithOverline(Graphics2D g2, FontMetrics fm, String text, int tx, int py, int g, boolean negated) {
+        int baseTy = py + (g + fm.getAscent() - fm.getDescent()) / 2;
+        if (!negated) {
+            g2.drawString(text, tx, baseTy);
+            return;
+        }
+        int ty = Math.min(py + g - 1, baseTy + Math.max(1, g / 12));
+        g2.drawString(text, tx, ty);
+        int capHeight = Math.max(4, (int) Math.round(fm.getAscent() * 0.72));
+        int gap = Math.max(1, g / 12);
+        int barY = Math.max(py + 1, Math.min(ty - capHeight - gap, py + Math.max(1, g / 5)));
+        int sw = Math.max(2, fm.stringWidth(text));
+        g2.drawLine(tx, barY, tx + sw - 1, barY);
     }
 
     private static void paint7SegmentCourtyard(Graphics2D g2, BlockInstance b, int x, int y, int w, int h, int g) {

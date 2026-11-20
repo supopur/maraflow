@@ -50,6 +50,39 @@ class FbdRendererGoldenTest {
         verifyOrRecordGolden(canvas, p3, "graphics_hidden.png");
     }
 
+    @Test
+    void negatedPinRendersOverlineInsidePinCell() {
+        Page page = new Page("NegTest");
+        BlockInstance b = new BlockInstance(BlockCatalog.getById("Bool.And"), "And1", 4, 2, 2, 1);
+        page.getBlocks().add(b);
+
+        Rectangle bounds = FbdRenderer.computeExportBounds(page, GRID_PX);
+        BufferedImage imgNormal = new BufferedImage(bounds.width, bounds.height, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D gNormal = imgNormal.createGraphics();
+        gNormal.translate(-bounds.x, -bounds.y);
+        FbdRenderer.paintPage(gNormal, page, GRID_PX, FbdRenderer.RenderOptions.forExport());
+        gNormal.dispose();
+
+        b.getInputs().get(1).setNegated(true);
+        b.getOutputs().get(0).setNegated(true);
+
+        BufferedImage imgNeg = new BufferedImage(bounds.width, bounds.height, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D gNeg = imgNeg.createGraphics();
+        gNeg.translate(-bounds.x, -bounds.y);
+        FbdRenderer.paintPage(gNeg, page, GRID_PX, FbdRenderer.RenderOptions.forExport());
+        gNeg.dispose();
+
+        int diffPixels = 0;
+        for (int y = 0; y < bounds.height; y++) {
+            for (int x = 0; x < bounds.width; x++) {
+                if (imgNormal.getRGB(x, y) != imgNeg.getRGB(x, y)) {
+                    diffPixels++;
+                }
+            }
+        }
+        assertTrue(diffPixels > 0, "Negated input and output pins should render overline pixels inside the pin cells");
+    }
+
     private void verifyOrRecordGolden(FbdCanvas canvas, Page page, String name) throws Exception {
         Rectangle bounds = canvas.computeExportBounds(page, GRID_PX);
         BufferedImage img = new BufferedImage(bounds.width, bounds.height, BufferedImage.TYPE_INT_ARGB);

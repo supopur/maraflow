@@ -1,6 +1,6 @@
 package cz.maramat.comm;
 
-import cz.maramat.vm.MaraVm;
+import cz.maramat.vm.NativeMaraVm;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -96,7 +96,7 @@ public final class MaraProtClient implements Closeable {
     }
 
     public synchronized void uploadImage(byte[] image, boolean autoStart, IntConsumer progressPct) throws IOException {
-        int fullCrc = MaraVm.calcCrc32(image, 0, image.length);
+        int fullCrc = NativeMaraVm.calcCrc32(image, 0, image.length);
         ByteBuffer beginReq = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN)
                 .putInt(image.length)
                 .putInt(fullCrc)
@@ -147,7 +147,7 @@ public final class MaraProtClient implements Closeable {
         for (int i = 0; i < count && pos + 2 <= resp.length; i++) {
             int slotId = bb.getShort(pos) & 0xFFFF;
             pos += 2;
-            int sz = MaraVm.getSlotSize(slotId);
+            int sz = NativeMaraVm.getSlotSize(slotId);
             if (sz <= 0 || pos + sz > resp.length) break;
             byte[] val = new byte[sz];
             System.arraycopy(resp, pos, val, 0, sz);
@@ -163,17 +163,17 @@ public final class MaraProtClient implements Closeable {
     }
 
     public synchronized void writeSlot(int slotId, double value) throws IOException {
-        int type = (slotId >>> MaraVm.SLOT_TYPE_SHIFT) & 0x3;
-        int valSize = MaraVm.getSlotSize(slotId);
+        int type = (slotId >>> NativeMaraVm.SLOT_TYPE_SHIFT) & 0x3;
+        int valSize = NativeMaraVm.getSlotSize(slotId);
         if (valSize <= 0) return;
         ByteBuffer req = ByteBuffer.allocate(4 + valSize).order(ByteOrder.LITTLE_ENDIAN);
         req.putShort((short) 1);
         req.putShort((short) slotId);
         switch (type) {
-            case MaraVm.TYPE_BOOL -> req.put((byte) (value != 0.0 ? 1 : 0));
-            case MaraVm.TYPE_INT -> req.putInt((int) Math.round(value));
-            case MaraVm.TYPE_LONG -> req.putLong(Math.round(value));
-            case MaraVm.TYPE_FLOAT -> req.putFloat((float) value);
+            case NativeMaraVm.TYPE_BOOL -> req.put((byte) (value != 0.0 ? 1 : 0));
+            case NativeMaraVm.TYPE_INT -> req.putInt((int) Math.round(value));
+            case NativeMaraVm.TYPE_LONG -> req.putLong(Math.round(value));
+            case NativeMaraVm.TYPE_FLOAT -> req.putFloat((float) value);
         }
         transceive(OP_SLOT_WRITE_BATCH, req.array(), 1000);
     }

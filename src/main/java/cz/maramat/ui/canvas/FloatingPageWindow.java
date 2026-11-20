@@ -199,6 +199,10 @@ public class FloatingPageWindow {
     }
 
     public void refreshSimulationState() {
+        refreshSimulationState(false);
+    }
+
+    public void refreshSimulationState(boolean stopped) {
         if (fbdCanvas != null) {
             fbdCanvas.repaint();
         }
@@ -206,7 +210,11 @@ public class FloatingPageWindow {
             ladderCanvas.repaint();
         }
         if (stEditorPanel != null) {
-            stEditorPanel.refreshRuntimeValues();
+            if (stopped) {
+                stEditorPanel.resetVariableTable();
+            } else {
+                stEditorPanel.refreshRuntimeValues();
+            }
         }
     }
 

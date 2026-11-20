@@ -1243,7 +1243,7 @@ public class FbdCanvas extends JPanel {
         return list;
     }
 
-    private void showPinScopeContextMenu(PinHit pinHit, int mx, int my) {
+    private void showPinScopeContextMenu(Page page, PinHit pinHit, int mx, int my) {
         PinInstance pin = pinHit.isInput
                 ? pinHit.block.getInputs().get(pinHit.pinIndex)
                 : pinHit.block.getOutputs().get(pinHit.pinIndex);
@@ -1251,6 +1251,24 @@ public class FbdCanvas extends JPanel {
         boolean onScope = editListener.isPinOnScope(ref);
 
         JPopupMenu menu = new JPopupMenu();
+
+        boolean isBool = pin.getDataType() == DataType.BOOL;
+        JMenuItem negateItem = new JMenuItem(
+                isBool
+                        ? (pin.isNegated() ? "Remove Negation ('" + ref + "')" : "Negate Pin ('" + ref + "')")
+                        : "Negate Pin (BOOL only)"
+        );
+        negateItem.setEnabled(isBool);
+        negateItem.addActionListener(e -> {
+            exitSimOrWatchBeforeStructuralEdit();
+            Page before = page.copy();
+            pin.setNegated(!pin.isNegated());
+            editListener.onAfterPageEdit((pin.isNegated() ? "Negate Pin " : "Unnegate Pin ") + ref, before, page);
+            repaint();
+        });
+        menu.add(negateItem);
+        menu.addSeparator();
+
         JMenuItem item = new JMenuItem((onScope ? "Remove '" : "Add '") + ref + "' " + (onScope ? "from Scope" : "to Scope"));
         item.addActionListener(e -> editListener.onTogglePinOnScope(ref));
         menu.add(item);
@@ -1376,7 +1394,7 @@ public class FbdCanvas extends JPanel {
     private void handleRightClick(Page page, int mx, int my, int gx, int gy) {
         PinHit pinHit = findPinAtPixel(page, mx, my);
         if (pinHit != null) {
-            showPinScopeContextMenu(pinHit, mx, my);
+            showPinScopeContextMenu(page, pinHit, mx, my);
             return;
         }
         WireHit hit = findWireOrFlagAtPixel(page, mx, my);
@@ -1987,7 +2005,8 @@ public class FbdCanvas extends JPanel {
             PinInstance p = pinHit.isInput
                     ? pinHit.block.getInputs().get(pinHit.pinIndex)
                     : pinHit.block.getOutputs().get(pinHit.pinIndex);
-            return p.getFullName() + " [" + p.getDataType().getDisplayName() + "] (Right-click to Add/Remove on Scope)";
+            String negTag = p.isNegated() ? " [NEGATED]" : "";
+            return p.getFullName() + " [" + p.getDataType().getDisplayName() + "]" + negTag + " (Right-click for Pin Options)";
         }
 
         if (simEngine.isShowingLiveOutputs()) {
