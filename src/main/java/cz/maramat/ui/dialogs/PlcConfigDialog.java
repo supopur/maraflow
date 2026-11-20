@@ -50,9 +50,7 @@ public class PlcConfigDialog extends JDialog {
     private EStopRulesTableModel rulesTableModel;
 
     private static final String[] TARGET_PLATFORMS = {
-            "STM32F407-Maraflow-Std",
-            "STM32F407-Maraflow-IO64",
-            "STM32F407-Maraflow-Mini"
+            "Duino - S"
     };
 
     private static final String[] DI_CHANNELS = {

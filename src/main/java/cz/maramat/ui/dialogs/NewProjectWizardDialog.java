@@ -84,9 +84,7 @@ public class NewProjectWizardDialog extends JDialog {
     private JButton finishBtn;
 
     private static final String[] PLATFORMS = {
-            "STM32F407-Maraflow-Std",
-            "STM32F407-Maraflow-IO64",
-            "STM32F407-Maraflow-Mini"
+            "Duino - S"
     };
 
     public NewProjectWizardDialog(Frame owner) {

@@ -158,6 +158,17 @@ public final class BlockCatalog {
                 List.of(pin("Cnt", "Quadrature Count", DataType.LONG, "0"), pin("Vel", "Pulse Velocity", DataType.INT, "0")),
                 3, 2, false, false, 0.60
         ));
+        reg(new BlockDefinition(
+                "IO.CH455G", "I/O", "CH455G", "CH455G",
+                List.of(
+                        enPin(),
+                        pin("Val", "Display Value", DataType.FLOAT, "0"),
+                        pin("Dec", "Decimal Places (0-3)", DataType.INT, "1"),
+                        pin("Brt", "Brightness (1-8)", DataType.INT, "8")
+                ),
+                List.of(pin("Act", "Display Active", DataType.BOOL, "1")),
+                4, 4, false, false, 0.30
+        ));
 
         // 4. Communication
         // Modbus RTU
@@ -204,9 +215,15 @@ public final class BlockCatalog {
                 "Comm.DS18B20.DS18B20Read", "Communication/DS18B20", "DS18B20", "DS18B20",
                 List.of(enPin()),
                 List.of(pin("Tmp", "Temperature (deg C)", DataType.FLOAT, "20"), pin("Ok", "Sensor CRC OK", DataType.BOOL, "1")),
-                4, 2, false, false, 1.50
+                4, 2, false, false, 0.25
         ));
         // I2C
+        reg(new BlockDefinition(
+                "Comm.I2C.TMP75", "Communication/I2C", "TMP75", "TMP75",
+                List.of(enPin()),
+                List.of(pin("Tmp", "Temperature (deg C)", DataType.FLOAT, "25"), pin("Ok", "Sensor I2C ACK OK", DataType.BOOL, "1")),
+                4, 2, false, false, 0.20
+        ));
         reg(new BlockDefinition(
                 "Comm.I2C.I2CRead", "Communication/I2C", "I2CRead", "I2CRd",
                 List.of(enPin()),

@@ -32,7 +32,8 @@ public class CommunicationDialog extends JDialog {
     public enum Mode {
         SETTINGS_ONLY,
         UPLOAD,
-        WATCH
+        WATCH,
+        SYNC_RTC
     }
 
     private boolean connectionSucceeded = false;
@@ -66,13 +67,14 @@ public class CommunicationDialog extends JDialog {
             "/dev/ttyACM0", "/dev/ttyUSB0", "/dev/ttyUSB1", "COM1", "COM3", "COM4"
     };
     private static final String[] TARGET_PLATFORMS = {
-            "STM32F407-Maraflow-Std", "STM32F407-Maraflow-IO64", "STM32F407-Maraflow-Mini"
+            "Duino - S"
     };
 
     public CommunicationDialog(Frame owner, Project project, Mode mode) {
         super(owner, switch (mode) {
             case UPLOAD -> "Communication - Upload Bytecode to PLC";
             case WATCH -> "Communication - Connect Watch Mode";
+            case SYNC_RTC -> "Communication - Set PLC RTC / Time";
             case SETTINGS_ONLY -> "Communication Settings";
         }, true);
         this.project = project;
@@ -117,6 +119,7 @@ public class CommunicationDialog extends JDialog {
         String okLabel = switch (mode) {
             case UPLOAD -> "Upload";
             case WATCH -> "Connect & Watch";
+            case SYNC_RTC -> "Set RTC Time";
             case SETTINGS_ONLY -> "OK";
         };
         JButton okBtn = new JButton(okLabel, VectorIcons.greenCheckIcon());
@@ -246,15 +249,21 @@ public class CommunicationDialog extends JDialog {
         MaraProtClient client = new MaraProtClient(transport, stationId);
         try {
             client.connect();
-            MaraProtClient.PlcInfo info = client.getInfo();
-            this.compiledProgram = BytecodeCompiler.compileProgram(project);
-            if (mode == Mode.UPLOAD || mode == Mode.WATCH) {
-                client.uploadImage(compiledProgram.image(), true, null);
-            }
-            if (mode == Mode.UPLOAD) {
+            if (mode == Mode.SYNC_RTC) {
+                long epochSec = java.time.Instant.now().getEpochSecond();
+                client.setRtcUnixSec(epochSec);
                 client.close();
             } else {
-                this.connectedClient = client;
+                MaraProtClient.PlcInfo info = client.getInfo();
+                this.compiledProgram = BytecodeCompiler.compileProgram(project);
+                if (mode == Mode.UPLOAD || mode == Mode.WATCH) {
+                    client.uploadImage(compiledProgram.image(), true, null);
+                }
+                if (mode == Mode.UPLOAD) {
+                    client.close();
+                } else {
+                    this.connectedClient = client;
+                }
             }
             connectionSucceeded = true;
             dispose();

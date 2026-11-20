@@ -293,7 +293,7 @@ public final class MflProjectSerializer {
         project.setProjectName(props.getProperty("project.name", "test"));
         project.setAuthor(props.getProperty("project.author", ""));
         project.setDescription(props.getProperty("project.description", ""));
-        project.setTargetPlatform(props.getProperty("project.targetPlatform", "STM32F407-Maraflow-Std"));
+        project.setTargetPlatform(props.getProperty("project.targetPlatform", "Duino - S"));
         project.setDefaultThreadId(Integer.parseInt(props.getProperty("project.defaultThreadId", "2")));
         project.setPrimaryLanguage(IecLanguage.fromCode(props.getProperty("project.primaryLanguage", "FBD")));
 

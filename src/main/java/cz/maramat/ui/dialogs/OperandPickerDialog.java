@@ -78,7 +78,7 @@ public class OperandPickerDialog extends JDialog {
 
     private void populateOperandCatalog() {
         allEntries.clear();
-        String platform = project != null ? project.getTargetPlatform() : "STM32F407-Maraflow-Std";
+        String platform = project != null ? project.getTargetPlatform() : "Duino - S";
         int diCount = platform.contains("IO64") ? 32 : (platform.contains("Mini") ? 8 : 16);
         int doCount = platform.contains("IO64") ? 32 : (platform.contains("Mini") ? 8 : 16);
         int aiCount = platform.contains("Mini") ? 4 : 8;

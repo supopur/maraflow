@@ -18,7 +18,7 @@ public class Project {
     private String description = "";
     private File projectFile = null;
     private boolean dirty = true;
-    private String targetPlatform = "STM32F407-Maraflow-Std";
+    private String targetPlatform = "Duino - S";
     private int defaultThreadId = 2;
     private IecLanguage primaryLanguage = IecLanguage.FBD;
     private final EStopConfig eStopConfig = new EStopConfig();
@@ -33,7 +33,7 @@ public class Project {
 
     public Project(String projectName, String targetPlatform, IecLanguage initialLanguage, int defaultThreadId) {
         this.projectName = (projectName == null || projectName.isBlank()) ? "Untitled" : projectName.trim();
-        this.targetPlatform = (targetPlatform == null || targetPlatform.isBlank()) ? "STM32F407-Maraflow-Std" : targetPlatform;
+        this.targetPlatform = normalizeTargetPlatform(targetPlatform);
         this.primaryLanguage = (initialLanguage == null) ? IecLanguage.FBD : initialLanguage;
         this.defaultThreadId = Math.clamp(defaultThreadId, 1, 5);
         initDefaultSymbolicTags();
@@ -122,7 +122,7 @@ public class Project {
     }
 
     public static Project createDefaultLadderSampleProject() {
-        Project p = new Project("motor_control_ld", "STM32F407-Maraflow-Std", IecLanguage.LD, 2);
+        Project p = new Project("motor_control_ld", "Duino - S", IecLanguage.LD, 2);
         p.setDirty(true);
         Page page1 = p.getPages().getFirst();
         page1.setName("Main_LD");
@@ -184,7 +184,7 @@ public class Project {
     }
 
     public static Project createDefaultStSampleProject() {
-        Project p = new Project("ultrasonic_st_control", "STM32F407-Maraflow-Std", IecLanguage.ST, 2);
+        Project p = new Project("ultrasonic_st_control", "Duino - S", IecLanguage.ST, 2);
         p.setDirty(true);
         Page page1 = p.getPages().getFirst();
         page1.setName("Main_ST");
@@ -419,7 +419,14 @@ public class Project {
     }
 
     public void setTargetPlatform(String targetPlatform) {
-        this.targetPlatform = targetPlatform;
+        this.targetPlatform = normalizeTargetPlatform(targetPlatform);
+    }
+
+    public static String normalizeTargetPlatform(String platform) {
+        if (platform == null || platform.isBlank() || platform.startsWith("STM32F407-Maraflow")) {
+            return "Duino - S";
+        }
+        return platform.trim();
     }
 
     public int getDefaultThreadId() {

@@ -93,6 +93,11 @@ public class BlockInstance {
             customProperties.put("Channel", "DO0");
         } else if (definitionId.equals("IO.PWM")) {
             customProperties.put("Channel", "PWM0");
+        } else if (definitionId.equals("IO.CH455G")) {
+            customProperties.put("SclPin", "DIO2");
+            customProperties.put("SdaPin", "DIO3");
+            customProperties.put("DisplayMode", "Number (Float / Int)");
+            customProperties.put("DigitMask", "1111");
         } else if (definitionId.startsWith("IO.")) {
             customProperties.put("HardwareChannel", "CH0 (PA0)");
         } else if (definitionId.startsWith("Comm.Modbus")) {
@@ -108,9 +113,11 @@ public class BlockInstance {
             customProperties.put("JsonKey", "value");
             customProperties.put("TimeoutMs", "1000");
         } else if (definitionId.startsWith("Comm.DS18B20")) {
-            customProperties.put("OneWirePin", "PC4");
-            customProperties.put("RomAddress", "28-000000000001");
+            customProperties.put("OneWirePin", "DIO13");
+            customProperties.put("RomAddress", "AUTO:0");
             customProperties.put("ResolutionBits", "12");
+        } else if (definitionId.equals("Comm.I2C.TMP75")) {
+            customProperties.put("DeviceAddressHex", "0x48");
         } else if (definitionId.startsWith("Comm.I2C")) {
             customProperties.put("DeviceAddressHex", "0x48");
             customProperties.put("RegisterAddressHex", "0x00");
@@ -313,6 +320,90 @@ public class BlockInstance {
         }
     }
 
+    public void setDivModuloOut(boolean enabled) {
+        if (!"Math.Div".equals(definitionId)) return;
+        customProperties.put("ModuloOut", Boolean.toString(enabled));
+        if (enabled) {
+            if (outputs.size() < 3) {
+                DataType dt = outputs.isEmpty() ? DataType.INT : outputs.get(0).getDataType();
+                outputs.add(new PinInstance("Mod", "Modulo Remainder", dt, false, dt.getDefaultConstant()));
+            }
+        } else {
+            while (outputs.size() > 2) {
+                outputs.remove(outputs.size() - 1);
+            }
+        }
+    }
+
+    public static String normalizeDigitMask(String rawMask) {
+        if (rawMask == null || rawMask.isBlank()) return "1111";
+        StringBuilder sb = new StringBuilder(4);
+        String trimmed = rawMask.trim();
+        for (int i = 0; i < 4; i++) {
+            char c = (i < trimmed.length()) ? trimmed.charAt(i) : '0';
+            sb.append((c == '1' || c == 'T' || c == 't' || c == 'X' || c == 'x') ? '1' : '0');
+        }
+        return sb.toString();
+    }
+
+    public static int parseDigitMaskBits(String rawMask) {
+        String norm = normalizeDigitMask(rawMask);
+        int mask = 0;
+        for (int i = 0; i < 4; i++) {
+            if (norm.charAt(i) == '1') {
+                mask |= (1 << i);
+            }
+        }
+        return mask;
+    }
+
+    public void configureCh455gPins(String displayMode, String rawDigitMask) {
+        if (!"IO.CH455G".equals(definitionId)) return;
+        String mode = (displayMode != null && displayMode.startsWith("Raw"))
+                ? "Raw Digits / Segments"
+                : "Number (Float / Int)";
+        String normMask = normalizeDigitMask(rawDigitMask);
+        customProperties.put("DisplayMode", mode);
+        customProperties.put("DigitMask", normMask);
+
+        Map<String, PinInstance> oldByShort = new LinkedHashMap<>();
+        for (PinInstance p : inputs) {
+            oldByShort.put(p.getShortName(), p);
+        }
+
+        List<PinInstance> nextIns = new ArrayList<>();
+        nextIns.add(copyOrCreatePin(oldByShort, "En", "Enable Execution", DataType.BOOL, "1"));
+        if (mode.startsWith("Raw")) {
+            for (int i = 0; i < 4; i++) {
+                if (normMask.charAt(i) == '1') {
+                    nextIns.add(copyOrCreatePin(oldByShort, "D" + i, "Digit " + i + " (0-F / -1=Blank / -2=- / 0x100+Seg)", DataType.INT, "0"));
+                }
+            }
+            nextIns.add(copyOrCreatePin(oldByShort, "DpMask", "Decimal Point Bitmask (0-15)", DataType.INT, "0"));
+            nextIns.add(copyOrCreatePin(oldByShort, "Brt", "Brightness (1-8)", DataType.INT, "8"));
+        } else {
+            nextIns.add(copyOrCreatePin(oldByShort, "Val", "Display Value", DataType.FLOAT, "0"));
+            nextIns.add(copyOrCreatePin(oldByShort, "Dec", "Decimal Places (0-3)", DataType.INT, "1"));
+            nextIns.add(copyOrCreatePin(oldByShort, "Brt", "Brightness (1-8)", DataType.INT, "8"));
+        }
+
+        inputs.clear();
+        inputs.addAll(nextIns);
+    }
+
+    private static PinInstance copyOrCreatePin(Map<String, PinInstance> oldByShort, String shortName, String fullName, DataType dt, String defVal) {
+        PinInstance old = oldByShort.get(shortName);
+        PinInstance np = new PinInstance(shortName, fullName, dt, true, defVal);
+        if (old != null) {
+            try {
+                np.setConstantValue(old.getConstantValue());
+            } catch (Exception ignored) {
+            }
+            np.setNegated(old.isNegated());
+        }
+        return np;
+    }
+
     public String getId() {
         return id;
     }
@@ -360,6 +451,12 @@ public class BlockInstance {
                 np.setNegated(oldOutputs.get(i).isNegated());
             }
             this.outputs.add(np);
+        }
+        if ("Math.Div".equals(definitionId) && "true".equalsIgnoreCase(customProperties.get("ModuloOut"))) {
+            setDivModuloOut(true);
+            if (oldOutputs.size() > 2 && this.outputs.size() > 2) {
+                this.outputs.get(2).setNegated(oldOutputs.get(2).isNegated());
+            }
         }
     }
 
