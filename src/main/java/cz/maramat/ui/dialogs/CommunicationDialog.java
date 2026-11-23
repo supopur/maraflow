@@ -16,10 +16,13 @@ import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPasswordField;
+import javax.swing.JProgressBar;
 import javax.swing.JSpinner;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextField;
 import javax.swing.SpinnerNumberModel;
+import javax.swing.SwingUtilities;
+import javax.swing.SwingWorker;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -33,7 +36,8 @@ public class CommunicationDialog extends JDialog {
         SETTINGS_ONLY,
         UPLOAD,
         WATCH,
-        SYNC_RTC
+        SYNC_RTC,
+        UNIT_CONFIG
     }
 
     private boolean connectionSucceeded = false;
@@ -55,7 +59,7 @@ public class CommunicationDialog extends JDialog {
     private JPasswordField rs485PassField;
 
     private JTextField ethIpField;
-    private JSpinner ethPortSpinner;
+    private JTextField ethPortField;
     private JSpinner ethUnitSpinner;
     private JPasswordField ethPassField;
     private JComboBox<String> detectedPlcTargetBox;
@@ -75,6 +79,7 @@ public class CommunicationDialog extends JDialog {
             case UPLOAD -> "Communication - Upload Bytecode to PLC";
             case WATCH -> "Communication - Connect Watch Mode";
             case SYNC_RTC -> "Communication - Set PLC RTC / Time";
+            case UNIT_CONFIG -> "Communication - Connect to Unit";
             case SETTINGS_ONLY -> "Communication Settings";
         }, true);
         this.project = project;
@@ -120,6 +125,7 @@ public class CommunicationDialog extends JDialog {
             case UPLOAD -> "Upload";
             case WATCH -> "Connect & Watch";
             case SYNC_RTC -> "Set RTC Time";
+            case UNIT_CONFIG -> "Connect & Read";
             case SETTINGS_ONLY -> "OK";
         };
         JButton okBtn = new JButton(okLabel, VectorIcons.greenCheckIcon());
@@ -148,15 +154,16 @@ public class CommunicationDialog extends JDialog {
         String[] portItems = detectedPorts.isEmpty() ? SERIAL_PORTS : detectedPorts.toArray(new String[0]);
         usbPortBox = new JComboBox<>(portItems);
         usbPortBox.setEditable(true);
-        if (!detectedPorts.isEmpty()) {
+        String savedUsbPort = AppSettings.get().getDefaultSerialPort();
+        if (savedUsbPort != null && !savedUsbPort.isBlank()) {
+            usbPortBox.setSelectedItem(savedUsbPort);
+        } else if (!detectedPorts.isEmpty()) {
             usbPortBox.setSelectedIndex(0);
-        } else {
-            usbPortBox.setSelectedItem(AppSettings.get().getDefaultSerialPort());
         }
         usbBaudBox = new JComboBox<>(BAUD_RATES);
         usbBaudBox.setSelectedItem(AppSettings.get().getDefaultBaudRate());
-        usbAddrSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 254, 1));
-        usbPassField = new JPasswordField("admin", 14);
+        usbAddrSpinner = new JSpinner(new SpinnerNumberModel(AppSettings.get().getLastUsbStationId(), 0, 254, 1));
+        usbPassField = new JPasswordField(AppSettings.get().loadCommPassword("usb", "admin"), 14);
 
         addRow(p, gbc, 0, "USB Port:", usbPortBox);
         addRow(p, gbc, 1, "Baud Rate:", usbBaudBox);
@@ -172,12 +179,13 @@ public class CommunicationDialog extends JDialog {
 
         rs485PortBox = new JComboBox<>(SERIAL_PORTS);
         rs485PortBox.setEditable(true);
-        rs485PortBox.setSelectedItem(AppSettings.get().getDefaultSerialPort());
+        rs485PortBox.setSelectedItem(AppSettings.get().getLastRs485Port());
         rs485BaudBox = new JComboBox<>(BAUD_RATES);
-        rs485BaudBox.setSelectedItem(AppSettings.get().getDefaultBaudRate());
+        rs485BaudBox.setSelectedItem(AppSettings.get().getLastRs485Baud());
         rs485ParityBox = new JComboBox<>(new String[]{"None (8N1)", "Even (8E1)", "Odd (8O1)"});
-        rs485StationSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 247, 1));
-        rs485PassField = new JPasswordField("admin", 14);
+        rs485ParityBox.setSelectedItem(AppSettings.get().getLastRs485Parity());
+        rs485StationSpinner = new JSpinner(new SpinnerNumberModel(AppSettings.get().getLastRs485StationId(), 1, 247, 1));
+        rs485PassField = new JPasswordField(AppSettings.get().loadCommPassword("rs485", "admin"), 14);
 
         addRow(p, gbc, 0, "RS485 Port:", rs485PortBox);
         addRow(p, gbc, 1, "Baud Rate:", rs485BaudBox);
@@ -192,13 +200,13 @@ public class CommunicationDialog extends JDialog {
         p.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
         GridBagConstraints gbc = createGbc();
 
-        ethIpField = new JTextField("192.168.1.50", 15);
-        ethPortSpinner = new JSpinner(new SpinnerNumberModel(5020, 1, 65535, 1));
-        ethUnitSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 254, 1));
-        ethPassField = new JPasswordField("admin", 14);
+        ethIpField = new JTextField(AppSettings.get().getLastTcpIp(), 15);
+        ethPortField = PlcConfigDialog.createDigitsOnlyField(String.valueOf(AppSettings.get().getLastTcpPort()), 8);
+        ethUnitSpinner = new JSpinner(new SpinnerNumberModel(AppSettings.get().getLastTcpUnitId(), 0, 254, 1));
+        ethPassField = new JPasswordField(AppSettings.get().loadCommPassword("tcp", "admin"), 14);
 
         addRow(p, gbc, 0, "PLC IP Address:", ethIpField);
-        addRow(p, gbc, 1, "TCP Port:", ethPortSpinner);
+        addRow(p, gbc, 1, "TCP Port:", ethPortField);
         addRow(p, gbc, 2, "Unit / Station ID:", ethUnitSpinner);
         addRow(p, gbc, 3, "PLC Password:", ethPassField);
         return p;
@@ -237,8 +245,8 @@ public class CommunicationDialog extends JDialog {
                 return;
             }
         }
+        saveInputsToSettings();
         if (mode == Mode.SETTINGS_ONLY) {
-            AppSettings.get().setDefaultCommMethod(methodTabs.getTitleAt(methodTabs.getSelectedIndex()));
             connectionSucceeded = true;
             dispose();
             return;
@@ -246,24 +254,29 @@ public class CommunicationDialog extends JDialog {
 
         MaraTransport transport = createSelectedTransport();
         int stationId = getSelectedStationId();
+        String password = getSelectedPassword();
         MaraProtClient client = new MaraProtClient(transport, stationId);
+
+        if (mode == Mode.UPLOAD || mode == Mode.WATCH) {
+            executeUploadWithProgress(client, password);
+            return;
+        }
+
         try {
             client.connect();
+            client.authenticate(password);
             if (mode == Mode.SYNC_RTC) {
                 long epochSec = java.time.Instant.now().getEpochSecond();
                 client.setRtcUnixSec(epochSec);
                 client.close();
+            } else if (mode == Mode.UNIT_CONFIG) {
+                client.getInfo();
+                client.readUnitConfig(project.getUnitConfig());
+                this.connectedClient = client;
             } else {
-                MaraProtClient.PlcInfo info = client.getInfo();
+                client.getInfo();
                 this.compiledProgram = BytecodeCompiler.compileProgram(project);
-                if (mode == Mode.UPLOAD || mode == Mode.WATCH) {
-                    client.uploadImage(compiledProgram.image(), true, null);
-                }
-                if (mode == Mode.UPLOAD) {
-                    client.close();
-                } else {
-                    this.connectedClient = client;
-                }
+                this.connectedClient = client;
             }
             connectionSucceeded = true;
             dispose();
@@ -278,11 +291,121 @@ public class CommunicationDialog extends JDialog {
         }
     }
 
+    private void executeUploadWithProgress(MaraProtClient client, String password) {
+        this.compiledProgram = BytecodeCompiler.compileProgram(project);
+        byte[] image = compiledProgram.image();
+
+        JDialog progressDlg = new JDialog(this, "Uploading Program to PLC", true);
+        JPanel p = new JPanel(new BorderLayout(8, 8));
+        p.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
+        JLabel statusLbl = new JLabel("Connecting to PLC...");
+        JProgressBar bar = new JProgressBar(0, 100);
+        bar.setStringPainted(true);
+        bar.setPreferredSize(new Dimension(340, 22));
+        JLabel bytesLbl = new JLabel("0 / " + image.length + " bytes");
+        p.add(statusLbl, BorderLayout.NORTH);
+        p.add(bar, BorderLayout.CENTER);
+        p.add(bytesLbl, BorderLayout.SOUTH);
+        progressDlg.setContentPane(p);
+        progressDlg.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
+        progressDlg.pack();
+        progressDlg.setLocationRelativeTo(this);
+
+        SwingWorker<Void, int[]> worker = new SwingWorker<>() {
+            @Override
+            protected Void doInBackground() throws Exception {
+                client.connect();
+                client.authenticate(password);
+                SwingUtilities.invokeLater(() -> statusLbl.setText("Uploading bytecode (" + image.length + " B)..."));
+                client.getInfo();
+                client.uploadImage(image, true, pct -> {
+                    int sent = (int) ((pct / 100.0) * image.length);
+                    publish(new int[]{pct, sent});
+                });
+                if (mode == Mode.UPLOAD) {
+                    client.close();
+                }
+                return null;
+            }
+
+            @Override
+            protected void process(java.util.List<int[]> chunks) {
+                int[] latest = chunks.get(chunks.size() - 1);
+                bar.setValue(latest[0]);
+                bytesLbl.setText(latest[1] + " / " + image.length + " bytes (" + latest[0] + "%)");
+                if (latest[0] >= 100) {
+                    statusLbl.setText("Verifying CRC & starting VM...");
+                }
+            }
+
+            @Override
+            protected void done() {
+                progressDlg.dispose();
+                try {
+                    get();
+                    if (mode == Mode.WATCH) {
+                        connectedClient = client;
+                    }
+                    connectionSucceeded = true;
+                    dispose();
+                } catch (Exception ex) {
+                    try { client.close(); } catch (Exception ignored) {}
+                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                    JOptionPane.showMessageDialog(
+                            CommunicationDialog.this,
+                            "MaraProt upload failed:\n" + cause.getMessage(),
+                            "Upload Error",
+                            JOptionPane.ERROR_MESSAGE
+                    );
+                }
+            }
+        };
+        worker.execute();
+        progressDlg.setVisible(true);
+    }
+
+    private void saveInputsToSettings() {
+        AppSettings s = AppSettings.get();
+        s.setDefaultCommMethod(methodTabs.getTitleAt(methodTabs.getSelectedIndex()));
+        s.setDefaultSerialPort(String.valueOf(usbPortBox.getSelectedItem()).trim());
+        s.setDefaultBaudRate(String.valueOf(usbBaudBox.getSelectedItem()).trim());
+        s.setLastUsbStationId(((Number) usbAddrSpinner.getValue()).intValue());
+        s.saveCommPassword("usb", new String(usbPassField.getPassword()));
+
+        s.setLastRs485Port(String.valueOf(rs485PortBox.getSelectedItem()).trim());
+        s.setLastRs485Baud(String.valueOf(rs485BaudBox.getSelectedItem()).trim());
+        s.setLastRs485Parity(String.valueOf(rs485ParityBox.getSelectedItem()).trim());
+        s.setLastRs485StationId(((Number) rs485StationSpinner.getValue()).intValue());
+        s.saveCommPassword("rs485", new String(rs485PassField.getPassword()));
+
+        s.setLastTcpIp(ethIpField.getText().trim());
+        s.setLastTcpPort(parseTcpPort());
+        s.setLastTcpUnitId(((Number) ethUnitSpinner.getValue()).intValue());
+        s.saveCommPassword("tcp", new String(ethPassField.getPassword()));
+        s.save();
+    }
+
+    private int parseTcpPort() {
+        try {
+            int p = Integer.parseInt(ethPortField.getText().trim());
+            return (p >= 1 && p <= 65535) ? p : 5020;
+        } catch (NumberFormatException e) {
+            return 5020;
+        }
+    }
+
+    private String getSelectedPassword() {
+        int tab = methodTabs.getSelectedIndex();
+        if (tab == 1) return new String(rs485PassField.getPassword());
+        if (tab == 2) return new String(ethPassField.getPassword());
+        return new String(usbPassField.getPassword());
+    }
+
     private MaraTransport createSelectedTransport() {
         int tab = methodTabs.getSelectedIndex();
         if (tab == 2) {
             String host = ethIpField.getText().trim();
-            int port = ((Number) ethPortSpinner.getValue()).intValue();
+            int port = parseTcpPort();
             return new MaraTransport.TcpTransport(host, port);
         }
         if (tab == 1) {

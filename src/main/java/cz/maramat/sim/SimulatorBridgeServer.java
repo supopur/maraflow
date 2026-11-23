@@ -1,37 +1,40 @@
 package cz.maramat.sim;
 
+import cz.maramat.comm.MaraProtClient;
 import cz.maramat.model.Project;
 
-import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
-import java.io.PrintWriter;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.URLDecoder;
-import java.net.URLEncoder;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.security.SecureRandom;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 /**
- * Lightweight TCP bridge server exposing a running Maraflow SimulationEngine
- * to external SCADA tools such as Maraview.
+ * MaraProt v1 TCP server exposing a running Maraflow SimulationEngine
+ * to external SCADA tools such as Maraview using the same binary protocol
+ * and authentication/encryption as physical F407PLC hardware.
  */
 public class SimulatorBridgeServer {
 
     public static final int DEFAULT_PORT = 18502;
+    public static final int OP_OPERAND_READ_BATCH = 0x60;
+    public static final int OP_OPERAND_WRITE_BATCH = 0x61;
 
     private final SimulationEngine simEngine;
     private final Supplier<Project> projectSupplier;
     private final Runnable onStateChanged;
+    private final long startTimeMs = System.currentTimeMillis();
+    private final SecureRandom rng = new SecureRandom();
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final Set<Socket> activeClients = ConcurrentHashMap.newKeySet();
@@ -63,7 +66,7 @@ public class SimulatorBridgeServer {
         this.serverSocket = ss;
         this.running.set(true);
         this.acceptThread = Thread.ofVirtual()
-                .name("Maraflow-Sim-Bridge-Accept")
+                .name("Maraflow-Sim-MaraProt-Accept")
                 .start(() -> acceptLoop(ss));
     }
 
@@ -111,18 +114,14 @@ public class SimulatorBridgeServer {
     }
 
     private void acceptLoop(ServerSocket ss) {
-        while (running.get() && !ss.isClosed()) {
+        while (running.get()) {
             try {
                 Socket client = ss.accept();
-                if (!running.get()) {
-                    try { client.close(); } catch (IOException ignored) {}
-                    break;
-                }
                 client.setTcpNoDelay(true);
-                client.setSoTimeout(5000);
+                client.setSoTimeout(30_000);
                 activeClients.add(client);
                 Thread.ofVirtual()
-                        .name("Maraflow-Sim-Bridge-Client")
+                        .name("Maraflow-Sim-MaraProt-Client")
                         .start(() -> handleClient(client));
             } catch (IOException ex) {
                 if (running.get()) {
@@ -132,34 +131,18 @@ public class SimulatorBridgeServer {
         }
     }
 
-    static final class ClientSession {
-        List<String> subscribedOperands = List.of();
-        double[] lastSentValues = new double[0];
-        boolean forceFullSnapshot = true;
-        Project lastProject = null;
-    }
-
     private void handleClient(Socket client) {
         ClientSession session = new ClientSession();
         try (Socket sock = client;
-             BufferedReader in = new BufferedReader(new InputStreamReader(sock.getInputStream(), StandardCharsets.UTF_8));
-             PrintWriter out = new PrintWriter(new OutputStreamWriter(sock.getOutputStream(), StandardCharsets.UTF_8), true)) {
+             InputStream in = sock.getInputStream();
+             OutputStream out = sock.getOutputStream()) {
             while (running.get()) {
-                String line;
-                try {
-                    line = in.readLine();
-                } catch (java.net.SocketTimeoutException timeout) {
-                    continue;
-                }
-                if (line == null) break;
-                String trimmed = line.trim();
-                if (trimmed.isEmpty()) {
-                    continue;
-                }
-                String response = processCommand(trimmed, session);
-                out.println(response);
-                if ("OK BYE".equals(response)) {
-                    break;
+                byte[] frame = readNextFrame(in);
+                if (frame == null) break;
+                byte[] resp = processFrame(frame, session);
+                if (resp != null) {
+                    out.write(resp);
+                    out.flush();
                 }
             }
         } catch (IOException ignored) {
@@ -168,171 +151,274 @@ public class SimulatorBridgeServer {
         }
     }
 
-    String processCommand(String line) {
-        return processCommand(line, new ClientSession());
+    private static byte[] readNextFrame(InputStream in) throws IOException {
+        int state = 0;
+        byte[] hdr = new byte[MaraProtClient.HEADER_BYTES];
+        while (state < 2) {
+            int b;
+            try {
+                b = in.read();
+            } catch (java.net.SocketTimeoutException e) {
+                continue;
+            }
+            if (b < 0) return null;
+            if (state == 0 && b == MaraProtClient.MAGIC_0) {
+                hdr[0] = (byte) b;
+                state = 1;
+            } else if (state == 1 && b == MaraProtClient.MAGIC_1) {
+                hdr[1] = (byte) b;
+                state = 2;
+            } else {
+                state = (b == MaraProtClient.MAGIC_0) ? 1 : 0;
+            }
+        }
+        readExact(in, hdr, 2, MaraProtClient.HEADER_BYTES - 2);
+        int payloadLen = (hdr[8] & 0xFF) | ((hdr[9] & 0xFF) << 8);
+        if (payloadLen > 1024) {
+            throw new IOException("Payload too large: " + payloadLen);
+        }
+        byte[] frame = new byte[MaraProtClient.HEADER_BYTES + payloadLen + MaraProtClient.CRC_BYTES];
+        System.arraycopy(hdr, 0, frame, 0, MaraProtClient.HEADER_BYTES);
+        readExact(in, frame, MaraProtClient.HEADER_BYTES, payloadLen + MaraProtClient.CRC_BYTES);
+        return frame;
     }
 
-    String processCommand(String line, ClientSession session) {
-        String[] parts = line.split("\\s+");
-        String cmd = parts[0].toUpperCase();
-        Project project = (projectSupplier != null) ? projectSupplier.get() : null;
-
-        try {
-            return switch (cmd) {
-                case "PING" -> "OK PONG";
-                case "QUIT" -> "OK BYE";
-                case "STATUS" -> {
-                    String projName = (project != null && project.getProjectName() != null) ? project.getProjectName() : "";
-                    yield "OK state=" + simEngine.getState().name()
-                            + " estop=" + (simEngine.isEStopActive() ? "1" : "0")
-                            + " speed=" + simEngine.getSpeedMultiplier()
-                            + " project=" + encode(projName);
-                }
-                case "START" -> {
-                    if (project == null) {
-                        yield "ERR No active project";
-                    }
-                    simEngine.startSimulation(project);
-                    notifyStateChanged();
-                    yield "OK state=" + simEngine.getState().name();
-                }
-                case "PAUSE" -> {
-                    simEngine.pauseSimulation();
-                    notifyStateChanged();
-                    yield "OK state=" + simEngine.getState().name();
-                }
-                case "STOP" -> {
-                    if (project != null) {
-                        simEngine.stopSimulation(project);
-                    }
-                    notifyStateChanged();
-                    yield "OK state=" + simEngine.getState().name();
-                }
-                case "ESTOP" -> {
-                    if (parts.length < 2) {
-                        yield "ERR Usage: ESTOP <0|1>";
-                    }
-                    boolean pressed = parseDouble(parts[1]) != 0.0;
-                    simEngine.setManualEStopButtonPressed(pressed);
-                    notifyStateChanged();
-                    yield "OK estop=" + (simEngine.isEStopActive() ? "1" : "0");
-                }
-                case "ESTOP_RESET" -> {
-                    simEngine.manualResetEStop();
-                    notifyStateChanged();
-                    yield "OK estop=" + (simEngine.isEStopActive() ? "1" : "0");
-                }
-                case "SPEED" -> {
-                    if (parts.length < 2) {
-                        yield "ERR Usage: SPEED <multiplier>";
-                    }
-                    double mult = parseDouble(parts[1]);
-                    simEngine.setSpeedMultiplier(mult);
-                    notifyStateChanged();
-                    yield "OK speed=" + simEngine.getSpeedMultiplier();
-                }
-                case "GET" -> {
-                    if (parts.length < 2) {
-                        yield "ERR Usage: GET <operand>";
-                    }
-                    String op = decode(parts[1]);
-                    double val = simEngine.getOperandValue(project, op);
-                    yield "OK " + val;
-                }
-                case "SET" -> {
-                    if (parts.length < 3) {
-                        yield "ERR Usage: SET <operand> <value>";
-                    }
-                    String op = decode(parts[1]);
-                    double val = parseDouble(parts[2]);
-                    simEngine.setOperandValue(project, op, val);
-                    yield "OK";
-                }
-                case "MGET" -> {
-                    StringBuilder sb = new StringBuilder("OK");
-                    for (int i = 1; i < parts.length; i++) {
-                        String op = decode(parts[i]);
-                        double val = simEngine.getOperandValue(project, op);
-                        sb.append(' ').append(val);
-                    }
-                    yield sb.toString();
-                }
-                case "SUB" -> {
-                    List<String> ops = new ArrayList<>(Math.max(0, parts.length - 1));
-                    for (int i = 1; i < parts.length; i++) {
-                        ops.add(decode(parts[i]));
-                    }
-                    session.subscribedOperands = ops;
-                    session.lastSentValues = new double[ops.size()];
-                    Arrays.fill(session.lastSentValues, Double.NaN);
-                    session.forceFullSnapshot = true;
-                    session.lastProject = project;
-                    yield "OK " + ops.size();
-                }
-                case "POLL" -> {
-                    if (session.lastProject != project) {
-                        session.lastProject = project;
-                        session.forceFullSnapshot = true;
-                    }
-                    String projName = (project != null && project.getProjectName() != null) ? project.getProjectName() : "";
-                    StringBuilder sb = new StringBuilder(128);
-                    sb.append("OK state=").append(simEngine.getState().name())
-                            .append(" estop=").append(simEngine.isEStopActive() ? "1" : "0")
-                            .append(" speed=").append(simEngine.getSpeedMultiplier())
-                            .append(" project=").append(encode(projName))
-                            .append(" |");
-                    List<String> ops = session.subscribedOperands;
-                    for (int i = 0; i < ops.size(); i++) {
-                        double v = simEngine.getOperandValue(project, ops.get(i));
-                        if (session.forceFullSnapshot || Double.compare(v, session.lastSentValues[i]) != 0) {
-                            session.lastSentValues[i] = v;
-                            sb.append(' ').append(i).append('=').append(v);
-                        }
-                    }
-                    session.forceFullSnapshot = false;
-                    yield sb.toString();
-                }
-                case "MSET" -> {
-                    java.util.List<String> ops = new java.util.ArrayList<>(parts.length);
-                    double[] vals = new double[parts.length];
-                    int count = 0;
-                    for (int i = 1; i < parts.length; i++) {
-                        int eq = parts[i].indexOf('=');
-                        if (eq <= 0) {
-                            yield "ERR Invalid MSET pair: " + parts[i];
-                        }
-                        ops.add(decode(parts[i].substring(0, eq)));
-                        vals[count++] = parseDouble(parts[i].substring(eq + 1));
-                    }
-                    for (int i = 0; i < count; i++) {
-                        simEngine.setOperandValue(project, ops.get(i), vals[i]);
-                    }
-                    yield "OK";
-                }
-                default -> "ERR Unknown command: " + cmd;
-            };
-        } catch (Exception ex) {
-            return "ERR " + ex.getMessage();
+    private static void readExact(InputStream in, byte[] buf, int off, int len) throws IOException {
+        int read = 0;
+        while (read < len) {
+            int n = in.read(buf, off + read, len - read);
+            if (n < 0) throw new IOException("EOF");
+            read += n;
         }
+    }
+
+    byte[] processFrame(byte[] frame, ClientSession session) throws IOException {
+        int verFlags = frame[2] & 0xFF;
+        int stationId = frame[3] & 0xFF;
+        int seqId = (frame[4] & 0xFF) | ((frame[5] & 0xFF) << 8);
+        int opcode = frame[6] & 0xFF;
+        int payloadLen = (frame[8] & 0xFF) | ((frame[9] & 0xFF) << 8);
+
+        int crcCalc = MaraProtClient.calcCrc16(frame, MaraProtClient.HEADER_BYTES + payloadLen);
+        int crcRx = (frame[MaraProtClient.HEADER_BYTES + payloadLen] & 0xFF)
+                | ((frame[MaraProtClient.HEADER_BYTES + payloadLen + 1] & 0xFF) << 8);
+        if (crcCalc != crcRx) {
+            return buildResponse(stationId, seqId, opcode, 1, new byte[0], false, session);
+        }
+
+        byte[] payload = new byte[payloadLen];
+        if (payloadLen > 0) {
+            System.arraycopy(frame, MaraProtClient.HEADER_BYTES, payload, 0, payloadLen);
+        }
+
+        boolean reqEncrypted = (verFlags & MaraProtClient.FLAG_ENCRYPTED) != 0;
+        if (reqEncrypted) {
+            if (!session.authValid || session.sessionKey == null) {
+                return buildResponse(stationId, seqId, opcode, 7, new byte[0], false, session);
+            }
+            if (payload.length > 0) {
+                MaraProtClient.cryptPayload(session.sessionKey, seqId, 0x01, payload);
+            }
+        }
+
+        Project project = (projectSupplier != null) ? projectSupplier.get() : null;
+        String password = resolvePassword(project);
+        boolean authRequired = !password.isEmpty();
+
+        if (authRequired && !session.authValid
+                && opcode != MaraProtClient.OP_PING
+                && opcode != MaraProtClient.OP_GET_INFO
+                && opcode != MaraProtClient.OP_AUTH_CHALLENGE
+                && opcode != MaraProtClient.OP_AUTH_VERIFY) {
+            return buildResponse(stationId, seqId, opcode, 7, new byte[0], false, session);
+        }
+
+        return switch (opcode) {
+            case MaraProtClient.OP_PING -> {
+                int echo = (payload.length >= 4)
+                        ? ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN).getInt(0) : 0;
+                int uptime = (int) (System.currentTimeMillis() - startTimeMs);
+                byte[] out = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+                        .putInt(echo).putInt(uptime).array();
+                yield buildResponse(stationId, seqId, opcode, 0, out, reqEncrypted, session);
+            }
+            case MaraProtClient.OP_GET_INFO -> {
+                ByteBuffer bb = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN);
+                bb.putShort((short) 0x0001);
+                bb.putShort((short) 0x0002);
+                bb.putInt(0x00010000);
+                bb.put((byte) 1); // TCP_IP
+                bb.putShort((short) 520);
+                bb.put((byte) mapVmState());
+                bb.putInt(0);
+                bb.putInt(0);
+                byte[] name = "MaraFlow Sim".getBytes(StandardCharsets.US_ASCII);
+                byte[] name24 = new byte[24];
+                System.arraycopy(name, 0, name24, 0, Math.min(name.length, 23));
+                bb.put(name24);
+                yield buildResponse(stationId, seqId, opcode, 0, bb.array(), reqEncrypted, session);
+            }
+            case MaraProtClient.OP_AUTH_CHALLENGE -> {
+                rng.nextBytes(session.challenge);
+                session.authValid = !authRequired;
+                byte[] out = new byte[17];
+                out[0] = (byte) (authRequired ? 1 : 0);
+                System.arraycopy(session.challenge, 0, out, 1, 16);
+                yield buildResponse(stationId, seqId, opcode, 0, out, false, session);
+            }
+            case MaraProtClient.OP_AUTH_VERIFY -> {
+                if (!authRequired) {
+                    session.authValid = true;
+                    yield buildResponse(stationId, seqId, opcode, 0, new byte[]{1}, false, session);
+                }
+                if (payload.length < 32) {
+                    yield buildResponse(stationId, seqId, opcode, 3, new byte[0], false, session);
+                }
+                byte[] key = MaraProtClient.sha256Two(password.getBytes(StandardCharsets.UTF_8), session.challenge);
+                byte[] expected = MaraProtClient.sha256Two(key, session.challenge);
+                if (!java.security.MessageDigest.isEqual(expected, payload)) {
+                    session.authValid = false;
+                    yield buildResponse(stationId, seqId, opcode, 7, new byte[0], false, session);
+                }
+                session.sessionKey = key;
+                session.authValid = true;
+                yield buildResponse(stationId, seqId, opcode, 0, new byte[]{1}, false, session);
+            }
+            case MaraProtClient.OP_VM_STATUS -> {
+                ByteBuffer bb = ByteBuffer.allocate(32).order(ByteOrder.LITTLE_ENDIAN);
+                bb.put((byte) mapVmState());
+                bb.put((byte) (simEngine.isEStopActive() ? 1 : 0));
+                bb.putShort((short) 0);
+                bb.putInt(0);
+                for (int i = 0; i < 5; i++) bb.putInt(0);
+                bb.putShort((short) 0);
+                bb.putShort((short) 0);
+                yield buildResponse(stationId, seqId, opcode, 0, bb.array(), reqEncrypted, session);
+            }
+            case MaraProtClient.OP_VM_CONTROL -> {
+                if (payload.length < 1) {
+                    yield buildResponse(stationId, seqId, opcode, 3, new byte[0], reqEncrypted, session);
+                }
+                int action = payload[0] & 0xFF;
+                switch (action) {
+                    case MaraProtClient.CTRL_STOP -> {
+                        if (project != null) simEngine.stopSimulation(project);
+                    }
+                    case MaraProtClient.CTRL_START -> {
+                        if (project != null) simEngine.startSimulation(project);
+                    }
+                    case MaraProtClient.CTRL_PAUSE -> simEngine.pauseSimulation();
+                    case MaraProtClient.CTRL_ESTOP_RESET -> simEngine.manualResetEStop();
+                    default -> {
+                    }
+                }
+                notifyStateChanged();
+                byte[] out = new byte[]{(byte) mapVmState(), (byte) (simEngine.isEStopActive() ? 1 : 0)};
+                yield buildResponse(stationId, seqId, opcode, 0, out, reqEncrypted, session);
+            }
+            case OP_OPERAND_READ_BATCH -> {
+                if (payload.length < 2) {
+                    yield buildResponse(stationId, seqId, opcode, 3, new byte[0], reqEncrypted, session);
+                }
+                ByteBuffer inBb = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
+                int count = inBb.getShort() & 0xFFFF;
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                bos.write(count & 0xFF);
+                bos.write((count >>> 8) & 0xFF);
+                for (int i = 0; i < count && inBb.remaining() >= 2; i++) {
+                    int len = inBb.getShort() & 0xFFFF;
+                    if (len > inBb.remaining()) break;
+                    byte[] nameBytes = new byte[len];
+                    inBb.get(nameBytes);
+                    String name = new String(nameBytes, StandardCharsets.UTF_8);
+                    double val = simEngine.getOperandValue(project, name);
+                    byte[] valBytes = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putDouble(val).array();
+                    bos.write(valBytes, 0, 8);
+                }
+                yield buildResponse(stationId, seqId, opcode, 0, bos.toByteArray(), reqEncrypted, session);
+            }
+            case OP_OPERAND_WRITE_BATCH -> {
+                if (payload.length < 2) {
+                    yield buildResponse(stationId, seqId, opcode, 3, new byte[0], reqEncrypted, session);
+                }
+                ByteBuffer inBb = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
+                int count = inBb.getShort() & 0xFFFF;
+                int applied = 0;
+                for (int i = 0; i < count && inBb.remaining() >= 2; i++) {
+                    int len = inBb.getShort() & 0xFFFF;
+                    if (len + 8 > inBb.remaining()) break;
+                    byte[] nameBytes = new byte[len];
+                    inBb.get(nameBytes);
+                    double val = inBb.getDouble();
+                    simEngine.setOperandValue(project, new String(nameBytes, StandardCharsets.UTF_8), val);
+                    applied++;
+                }
+                byte[] out = new byte[]{(byte) (applied & 0xFF), (byte) ((applied >>> 8) & 0xFF)};
+                yield buildResponse(stationId, seqId, opcode, 0, out, reqEncrypted, session);
+            }
+            default -> buildResponse(stationId, seqId, opcode, 2, new byte[0], reqEncrypted, session);
+        };
+    }
+
+    private byte[] buildResponse(int stationId, int seqId, int opcode, int status,
+                                 byte[] payload, boolean encrypt, ClientSession session) throws IOException {
+        byte[] wirePayload = payload;
+        int verFlags = MaraProtClient.VERSION_1 | MaraProtClient.FLAG_RESPONSE;
+        if (status != 0) {
+            verFlags |= MaraProtClient.FLAG_ERROR;
+        }
+        if (encrypt && session.authValid && session.sessionKey != null && wirePayload.length > 0) {
+            wirePayload = wirePayload.clone();
+            MaraProtClient.cryptPayload(session.sessionKey, seqId, 0x02, wirePayload);
+            verFlags |= MaraProtClient.FLAG_ENCRYPTED;
+        }
+        int pLen = wirePayload.length;
+        byte[] frame = new byte[MaraProtClient.HEADER_BYTES + pLen + MaraProtClient.CRC_BYTES];
+        frame[0] = (byte) MaraProtClient.MAGIC_0;
+        frame[1] = (byte) MaraProtClient.MAGIC_1;
+        frame[2] = (byte) verFlags;
+        frame[3] = (byte) (stationId & 0xFF);
+        frame[4] = (byte) (seqId & 0xFF);
+        frame[5] = (byte) ((seqId >>> 8) & 0xFF);
+        frame[6] = (byte) (opcode & 0xFF);
+        frame[7] = (byte) (status & 0xFF);
+        frame[8] = (byte) (pLen & 0xFF);
+        frame[9] = (byte) ((pLen >>> 8) & 0xFF);
+        if (pLen > 0) {
+            System.arraycopy(wirePayload, 0, frame, MaraProtClient.HEADER_BYTES, pLen);
+        }
+        int crc = MaraProtClient.calcCrc16(frame, MaraProtClient.HEADER_BYTES + pLen);
+        frame[MaraProtClient.HEADER_BYTES + pLen] = (byte) (crc & 0xFF);
+        frame[MaraProtClient.HEADER_BYTES + pLen + 1] = (byte) ((crc >>> 8) & 0xFF);
+        return frame;
+    }
+
+    private int mapVmState() {
+        if (simEngine.isEStopActive()) return 4;
+        return switch (simEngine.getState()) {
+            case STOPPED -> 0;
+            case RUNNING -> 1;
+            case PAUSED -> 2;
+            default -> 0;
+        };
+    }
+
+    private String resolvePassword(Project project) {
+        if (project != null && project.getUnitConfig() != null) {
+            return project.getUnitConfig().getAccessPassword();
+        }
+        return "admin";
     }
 
     private void notifyStateChanged() {
         if (onStateChanged != null) {
-            javax.swing.SwingUtilities.invokeLater(onStateChanged);
+            onStateChanged.run();
         }
     }
 
-    private static double parseDouble(String s) {
-        if ("true".equalsIgnoreCase(s)) return 1.0;
-        if ("false".equalsIgnoreCase(s)) return 0.0;
-        return Double.parseDouble(s);
-    }
-
-    private static String encode(String s) {
-        return URLEncoder.encode(s == null ? "" : s, StandardCharsets.UTF_8);
-    }
-
-    private static String decode(String s) {
-        return URLDecoder.decode(s == null ? "" : s, StandardCharsets.UTF_8);
+    static final class ClientSession {
+        final byte[] challenge = new byte[16];
+        byte[] sessionKey;
+        boolean authValid = false;
     }
 }

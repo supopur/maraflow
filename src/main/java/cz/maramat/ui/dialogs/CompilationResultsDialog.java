@@ -1,5 +1,6 @@
 package cz.maramat.ui.dialogs;
 
+import cz.maramat.compiler.BytecodeCompiler;
 import cz.maramat.compiler.BytecodeCompiler.CompilationReport;
 import cz.maramat.model.DataType;
 import cz.maramat.ui.icons.VectorIcons;
@@ -64,9 +65,9 @@ public class CompilationResultsDialog extends JDialog {
         gbc.fill = GridBagConstraints.HORIZONTAL;
 
         int r = 0;
-        addMetricBar(barsPanel, gbc, r++, "Memory Usage (RAM):", report.ramUsedBytes(), report.ramMaxBytes(), "B");
-        addMetricBar(barsPanel, gbc, r++, "Flash Usage (Program):", report.flashUsedBytes(), report.flashMaxBytes(), "B");
-        addMetricBar(barsPanel, gbc, r++, "EEPROM Usage (64KiB):", report.eepromUsedBytes(), report.eepromMaxBytes(), "B");
+        addMetricBar(barsPanel, gbc, r++, "Program RAM Usage:", report.ramUsedBytes(), report.ramMaxBytes(), "B");
+        addMetricBar(barsPanel, gbc, r++, "Program Bytecode (Flash):", report.flashUsedBytes(), report.flashMaxBytes(), "B");
+        addMetricBar(barsPanel, gbc, r++, "EEPROM Usage (32KiB):", report.eepromUsedBytes(), report.eepromMaxBytes(), "B");
         addMetricBar(barsPanel, gbc, r++, "Thread 1 (1s) Exec Time:", report.threadEstUs()[1], report.threadMaxUs()[1], "us");
         addMetricBar(barsPanel, gbc, r++, "Thread 2 (100ms) Exec Time:", report.threadEstUs()[2], report.threadMaxUs()[2], "us");
         addMetricBar(barsPanel, gbc, r++, "Thread 3 (20ms) Exec Time:", report.threadEstUs()[3], report.threadMaxUs()[3], "us");

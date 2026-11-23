@@ -458,7 +458,7 @@ public class EditorToolbar extends JToolBar {
         watchBtn.addActionListener(e -> listener.onWatchToggle());
         add(watchBtn);
 
-        JButton plcConfigBtn = createActionBtn(VectorIcons.plcConfigGearIcon(), "Unit / PLC Configuration");
+        JButton plcConfigBtn = createActionBtn(VectorIcons.plcConfigGearIcon(), "Unit Config");
         plcConfigBtn.addActionListener(e -> listener.onPlcConfig());
         add(plcConfigBtn);
 

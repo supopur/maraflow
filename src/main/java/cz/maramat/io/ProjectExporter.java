@@ -812,8 +812,8 @@ public final class ProjectExporter {
 
         // 2. Memory & CPU Utilization + RAM Variable Usage Graph
         y = drawSectionHeader(g2, x, y, cw, "2. Hardware Usage Estimates");
-        y = drawMetricBar(g2, x, y, cw, "RAM Usage", report.ramUsedBytes(), report.ramMaxBytes(), "B", new Color(0x0F, 0x60, 0xAA));
-        y = drawMetricBar(g2, x, y, cw, "Flash Estimate", report.flashUsedBytes(), report.flashMaxBytes(), "B", new Color(0x16, 0xA3, 0x4A));
+        y = drawMetricBar(g2, x, y, cw, "Program RAM", report.ramUsedBytes(), report.ramMaxBytes(), "B", new Color(0x0F, 0x60, 0xAA));
+        y = drawMetricBar(g2, x, y, cw, "Program Bytecode", report.flashUsedBytes(), report.flashMaxBytes(), "B", new Color(0x16, 0xA3, 0x4A));
         y = drawMetricBar(g2, x, y, cw, "EEPROM Usage", report.eepromUsedBytes(), report.eepromMaxBytes(), "B", new Color(0xD9, 0x77, 0x06));
         y = drawMetricBar(g2, x, y, cw, "Total CPU Load", report.totalCpuPercent(), 100, "%", new Color(0xDC, 0x26, 0x26));
         y += 6;

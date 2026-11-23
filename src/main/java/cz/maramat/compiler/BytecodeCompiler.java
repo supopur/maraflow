@@ -24,6 +24,16 @@ import java.util.Map;
 
 public final class BytecodeCompiler {
 
+    public static final int TARGET_SRAM_MAX_BYTES = 131_072;      // STM32F407 128 KiB Main SRAM
+    public static final int TARGET_SRAM_FW_BYTES = 82_096;        // Static firmware .data+.bss+heap/stack (-Os)
+    public static final int TARGET_CCMRAM_MAX_BYTES = 65_536;     // STM32F407 64 KiB CCMRAM
+    public static final int TARGET_CCMRAM_FW_BYTES = 59_824;      // Static g_plc_hal_vm + g_plc_hal_prot
+    public static final int TARGET_FLASH_MAX_BYTES = 524_288;     // STM32F407 512 KiB Flash
+    public static final int TARGET_FLASH_FW_BYTES = 196_256;      // Static firmware .text+.rodata+.data (-Os)
+    public static final int TARGET_VM_IMAGE_MAX_BYTES = 28_672;   // VM_MAX_IMAGE_BYTES (28 KiB)
+    public static final int TARGET_EEPROM_MAX_BYTES = 32_768;     // BL24C256A 32 KiB I2C EEPROM
+    public static final int TARGET_VM_SLOT_RAM_MAX_BYTES = 20_480; // 2048B+4096B+2048B+4096B+8192B state
+
     public record CompilationReport(
             int ramUsedBytes,
             int ramMaxBytes,
@@ -206,14 +216,26 @@ public final class BytecodeCompiler {
         int totalDataRam = ramByType.values().stream().mapToInt(Integer::intValue).sum();
         int totalRam = totalDataRam + vmOverhead;
 
+        MflwEmitter.EmittedProgram emitted = MflwEmitter.emit(project);
+        byte[] image = emitted.image();
+
         if (ladderRungCount > 0) {
             logs.add("Info: Compiled " + ladderRungCount + " IEC 61131-3 Ladder rung(s) (" + ladderContactCoilCount + " contacts/coils).");
         }
         if (stPageCount > 0) {
             logs.add("Info: Compiled " + stPageCount + " IEC 61131-3 Structured Text (ST) unit(s).");
         }
-        logs.add("Info: Building constant arrays in rom memory (" + flashBytes + " bytes).");
-        logs.add("Info: Building parameters array in eeprom memory (" + eepromBytes + " / 65536 bytes).");
+        logs.add("Info: Building bytecode image (" + image.length + " / " + TARGET_VM_IMAGE_MAX_BYTES + " bytes max).");
+        logs.add("Info: Target STM32F407 SRAM: " + TARGET_SRAM_FW_BYTES + " / " + TARGET_SRAM_MAX_BYTES
+                + " B, CCMRAM: " + TARGET_CCMRAM_FW_BYTES + " / " + TARGET_CCMRAM_MAX_BYTES
+                + " B, Flash: " + TARGET_FLASH_FW_BYTES + " / " + TARGET_FLASH_MAX_BYTES + " B.");
+        logs.add("Info: Building parameters array in 32KiB EEPROM (" + eepromBytes + " / " + TARGET_EEPROM_MAX_BYTES + " bytes).");
+        if (image.length > TARGET_VM_IMAGE_MAX_BYTES) {
+            logs.add("Error: Bytecode image (" + image.length + " B) exceeds Duino - S limit (" + TARGET_VM_IMAGE_MAX_BYTES + " B)!");
+        }
+        if (eepromBytes > TARGET_EEPROM_MAX_BYTES) {
+            logs.add("Error: EEPROM usage (" + eepromBytes + " B) exceeds BL24C256A capacity (" + TARGET_EEPROM_MAX_BYTES + " B)!");
+        }
         if (typeCastCount > 0) {
             logs.add("Info: Inserted " + typeCastCount + " implicit data-type conversion opcode(s).");
         }
@@ -234,13 +256,10 @@ public final class BytecodeCompiler {
         int cpuPctInt = Math.clamp((int) Math.ceil(totalCpuPct), (totalModules > 0 ? 1 : 0), 100);
         logs.add("Info: Compilation succeeded. Estimated CPU load: " + String.format(java.util.Locale.US, "%.2f%%", totalCpuPct));
 
-        MflwEmitter.EmittedProgram emitted = MflwEmitter.emit(project);
-        byte[] image = emitted.image();
-
         return new CompilationReport(
-                totalRam, 32768,
-                image.length, 65536,
-                eepromBytes, 65536,
+                totalRam, TARGET_VM_SLOT_RAM_MAX_BYTES,
+                image.length, TARGET_VM_IMAGE_MAX_BYTES,
+                eepromBytes, TARGET_EEPROM_MAX_BYTES,
                 threadEstUsInt, threadMaxUsInt,
                 cpuPctInt,
                 ramByType,

@@ -757,7 +757,7 @@ public class MainWindow extends JFrame {
 
         projectMenu.addSeparator();
 
-        JMenuItem plcCfgItem = new JMenuItem("Unit / PLC & Safety E-Stop Configuration...");
+        JMenuItem plcCfgItem = new JMenuItem("Unit Config...");
         plcCfgItem.addActionListener(e -> actionOpenPlcConfig());
         projectMenu.add(plcCfgItem);
         bar.add(projectMenu);
@@ -1755,13 +1755,18 @@ public class MainWindow extends JFrame {
 
     private void actionOpenPlcConfig() {
         if (!projectOpen) return;
+        CommunicationDialog connDlg = new CommunicationDialog(this, project, CommunicationDialog.Mode.UNIT_CONFIG);
+        connDlg.setVisible(true);
+        if (!connDlg.isConnectionSucceeded()) {
+            return;
+        }
         PlcConfigDialog dlg = new PlcConfigDialog(this, project, page -> {
             pageTabBar.rebuildTabs();
             int idx = project.getPages().indexOf(page);
             if (idx >= 0) {
                 pageTabBar.setActivePageIndex(idx);
             }
-        });
+        }, connDlg.getConnectedClient());
         dlg.setVisible(true);
         pageTabBar.rebuildTabs();
         refreshTitles();

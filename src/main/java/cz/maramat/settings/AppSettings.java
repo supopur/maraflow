@@ -30,10 +30,19 @@ public final class AppSettings {
     private int defaultThreadId = 2;
     private int scopeMaxSamples = 300;
 
-    // Communication Defaults
+    // Communication Defaults & Remembered Inputs
     private String defaultCommMethod = "USB (CDC)";
     private String defaultBaudRate = "115200";
     private String defaultSerialPort = "/dev/ttyACM0";
+    private int lastUsbStationId = 1;
+    private String lastRs485Port = "/dev/ttyUSB0";
+    private String lastRs485Baud = "115200";
+    private String lastRs485Parity = "None (8N1)";
+    private int lastRs485StationId = 1;
+    private String lastTcpIp = "192.168.1.50";
+    private int lastTcpPort = 5020;
+    private int lastTcpUnitId = 1;
+    private final SecretsStore secrets = new SecretsStore("MaraFlow");
 
     // ST Editor & IntelliSense
     private boolean stIntelliSenseEnabled = true;
@@ -48,7 +57,9 @@ public final class AppSettings {
 
     private final List<Runnable> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
 
-    private AppSettings() {}
+    private AppSettings() {
+        load();
+    }
 
     public static AppSettings get() {
         return INSTANCE;
@@ -277,5 +288,97 @@ public final class AppSettings {
         }
         String lang = java.util.Locale.getDefault().getLanguage();
         return "cs".equalsIgnoreCase(lang) ? "cs" : "en";
+    }
+
+    public int getLastUsbStationId() { return lastUsbStationId; }
+    public void setLastUsbStationId(int id) { this.lastUsbStationId = Math.clamp(id, 0, 254); }
+
+    public String getLastRs485Port() { return lastRs485Port; }
+    public void setLastRs485Port(String p) { if (p != null && !p.isBlank()) this.lastRs485Port = p.trim(); }
+
+    public String getLastRs485Baud() { return lastRs485Baud; }
+    public void setLastRs485Baud(String b) { if (b != null && !b.isBlank()) this.lastRs485Baud = b.trim(); }
+
+    public String getLastRs485Parity() { return lastRs485Parity; }
+    public void setLastRs485Parity(String p) { if (p != null && !p.isBlank()) this.lastRs485Parity = p.trim(); }
+
+    public int getLastRs485StationId() { return lastRs485StationId; }
+    public void setLastRs485StationId(int id) { this.lastRs485StationId = Math.clamp(id, 1, 247); }
+
+    public String getLastTcpIp() { return lastTcpIp; }
+    public void setLastTcpIp(String ip) { if (ip != null && !ip.isBlank()) this.lastTcpIp = ip.trim(); }
+
+    public int getLastTcpPort() { return lastTcpPort; }
+    public void setLastTcpPort(int port) { if (port >= 1 && port <= 65535) this.lastTcpPort = port; }
+
+    public int getLastTcpUnitId() { return lastTcpUnitId; }
+    public void setLastTcpUnitId(int id) { this.lastTcpUnitId = Math.clamp(id, 0, 254); }
+
+    public String loadCommPassword(String profileKey, String defaultVal) {
+        return secrets.loadSecret("comm." + profileKey + ".password", defaultVal);
+    }
+
+    public void saveCommPassword(String profileKey, String password) {
+        secrets.saveSecret("comm." + profileKey + ".password", password);
+    }
+
+    public synchronized void load() {
+        java.nio.file.Path file = OsPaths.getConfigDir("MaraFlow").resolve("settings.properties");
+        if (!java.nio.file.Files.exists(file)) return;
+        java.util.Properties props = new java.util.Properties();
+        try (java.io.InputStream in = java.nio.file.Files.newInputStream(file)) {
+            props.load(in);
+            uiScalePercent = Math.clamp(parseInt(props.getProperty("uiScalePercent"), uiScalePercent), 75, 250);
+            defaultZoomPercent = parseInt(props.getProperty("defaultZoomPercent"), defaultZoomPercent);
+            antialiasText = Boolean.parseBoolean(props.getProperty("antialiasText", String.valueOf(antialiasText)));
+            showGridByDefault = Boolean.parseBoolean(props.getProperty("showGridByDefault", String.valueOf(showGridByDefault)));
+            showExecInfoByDefault = Boolean.parseBoolean(props.getProperty("showExecInfoByDefault", String.valueOf(showExecInfoByDefault)));
+            autoBundleBus = Boolean.parseBoolean(props.getProperty("autoBundleBus", String.valueOf(autoBundleBus)));
+            defaultCommMethod = props.getProperty("defaultCommMethod", defaultCommMethod);
+            defaultBaudRate = props.getProperty("defaultBaudRate", defaultBaudRate);
+            defaultSerialPort = props.getProperty("defaultSerialPort", defaultSerialPort);
+            lastUsbStationId = Math.clamp(parseInt(props.getProperty("lastUsbStationId"), lastUsbStationId), 0, 254);
+            lastRs485Port = props.getProperty("lastRs485Port", lastRs485Port);
+            lastRs485Baud = props.getProperty("lastRs485Baud", lastRs485Baud);
+            lastRs485Parity = props.getProperty("lastRs485Parity", lastRs485Parity);
+            lastRs485StationId = Math.clamp(parseInt(props.getProperty("lastRs485StationId"), lastRs485StationId), 1, 247);
+            lastTcpIp = props.getProperty("lastTcpIp", lastTcpIp);
+            lastTcpPort = Math.clamp(parseInt(props.getProperty("lastTcpPort"), lastTcpPort), 1, 65535);
+            lastTcpUnitId = Math.clamp(parseInt(props.getProperty("lastTcpUnitId"), lastTcpUnitId), 0, 254);
+            helpLanguage = props.getProperty("helpLanguage", helpLanguage);
+        } catch (Exception ignored) {
+        }
+    }
+
+    public synchronized void save() {
+        java.nio.file.Path file = OsPaths.getConfigDir("MaraFlow").resolve("settings.properties");
+        java.util.Properties props = new java.util.Properties();
+        props.setProperty("uiScalePercent", String.valueOf(uiScalePercent));
+        props.setProperty("defaultZoomPercent", String.valueOf(defaultZoomPercent));
+        props.setProperty("antialiasText", String.valueOf(antialiasText));
+        props.setProperty("showGridByDefault", String.valueOf(showGridByDefault));
+        props.setProperty("showExecInfoByDefault", String.valueOf(showExecInfoByDefault));
+        props.setProperty("autoBundleBus", String.valueOf(autoBundleBus));
+        props.setProperty("defaultCommMethod", defaultCommMethod);
+        props.setProperty("defaultBaudRate", defaultBaudRate);
+        props.setProperty("defaultSerialPort", defaultSerialPort);
+        props.setProperty("lastUsbStationId", String.valueOf(lastUsbStationId));
+        props.setProperty("lastRs485Port", lastRs485Port);
+        props.setProperty("lastRs485Baud", lastRs485Baud);
+        props.setProperty("lastRs485Parity", lastRs485Parity);
+        props.setProperty("lastRs485StationId", String.valueOf(lastRs485StationId));
+        props.setProperty("lastTcpIp", lastTcpIp);
+        props.setProperty("lastTcpPort", String.valueOf(lastTcpPort));
+        props.setProperty("lastTcpUnitId", String.valueOf(lastTcpUnitId));
+        props.setProperty("helpLanguage", helpLanguage);
+        try (java.io.OutputStream out = java.nio.file.Files.newOutputStream(file)) {
+            props.store(out, "MaraFlow Application Settings");
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static int parseInt(String s, int def) {
+        if (s == null || s.isBlank()) return def;
+        try { return Integer.parseInt(s.trim()); } catch (NumberFormatException e) { return def; }
     }
 }

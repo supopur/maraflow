@@ -16,6 +16,7 @@ import cz.maramat.model.Page;
 import cz.maramat.model.PinInstance;
 import cz.maramat.model.Project;
 import cz.maramat.model.StVariable;
+import cz.maramat.model.UnitConfig;
 import cz.maramat.model.Wire;
 
 import java.awt.Color;
@@ -42,6 +43,21 @@ public final class MflProjectSerializer {
         props.setProperty("project.targetPlatform", project.getTargetPlatform());
         props.setProperty("project.defaultThreadId", Integer.toString(project.getDefaultThreadId()));
         props.setProperty("project.primaryLanguage", project.getPrimaryLanguage().name());
+
+        UnitConfig ucfg = project.getUnitConfig();
+        props.setProperty("project.unit.name", ucfg.getUnitName());
+        props.setProperty("project.unit.stationId", Integer.toString(ucfg.getStationId()));
+        props.setProperty("project.unit.ipMode", ucfg.getIpMode().name());
+        props.setProperty("project.unit.staticIp", ucfg.getStaticIp());
+        props.setProperty("project.unit.subnetMask", ucfg.getSubnetMask());
+        props.setProperty("project.unit.gateway", ucfg.getGateway());
+        props.setProperty("project.unit.tcpPort", Integer.toString(ucfg.getTcpPort()));
+        props.setProperty("project.unit.runOutput", ucfg.getRunOutputPin());
+        props.setProperty("project.unit.faultOutput", ucfg.getFaultOutputPin());
+        props.setProperty("project.unit.estopOutput", ucfg.getEstopOutputPin());
+        props.setProperty("project.unit.bootMode", ucfg.getBootMode().name());
+        props.setProperty("project.unit.safeOutputsOnStop", Boolean.toString(ucfg.isSafeOutputsOnStop()));
+        props.setProperty("project.unit.watchdogEnabled", Boolean.toString(ucfg.isWatchdogEnabled()));
 
         EStopConfig ecfg = project.getEStopConfig();
         props.setProperty("project.estop.enabled", Boolean.toString(ecfg.isEnabled()));
@@ -297,6 +313,25 @@ public final class MflProjectSerializer {
         project.setDefaultThreadId(Integer.parseInt(props.getProperty("project.defaultThreadId", "2")));
         project.setPrimaryLanguage(IecLanguage.fromCode(props.getProperty("project.primaryLanguage", "FBD")));
 
+        UnitConfig ucfg = project.getUnitConfig();
+        ucfg.setUnitName(props.getProperty("project.unit.name", "PLC-1"));
+        ucfg.setStationId(Integer.parseInt(props.getProperty("project.unit.stationId", "1")));
+        try {
+            ucfg.setIpMode(UnitConfig.IpMode.valueOf(props.getProperty("project.unit.ipMode", UnitConfig.IpMode.DHCP.name())));
+        } catch (IllegalArgumentException ignored) {}
+        ucfg.setStaticIp(props.getProperty("project.unit.staticIp", "192.168.1.50"));
+        ucfg.setSubnetMask(props.getProperty("project.unit.subnetMask", "255.255.255.0"));
+        ucfg.setGateway(props.getProperty("project.unit.gateway", "192.168.1.1"));
+        ucfg.setTcpPort(Integer.parseInt(props.getProperty("project.unit.tcpPort", "5020")));
+        ucfg.setRunOutputPin(props.getProperty("project.unit.runOutput", "None"));
+        ucfg.setFaultOutputPin(props.getProperty("project.unit.faultOutput", "None"));
+        ucfg.setEstopOutputPin(props.getProperty("project.unit.estopOutput", "None"));
+        try {
+            ucfg.setBootMode(UnitConfig.BootMode.valueOf(props.getProperty("project.unit.bootMode", UnitConfig.BootMode.AUTO_RUN.name())));
+        } catch (IllegalArgumentException ignored) {}
+        ucfg.setSafeOutputsOnStop(Boolean.parseBoolean(props.getProperty("project.unit.safeOutputsOnStop", "true")));
+        ucfg.setWatchdogEnabled(Boolean.parseBoolean(props.getProperty("project.unit.watchdogEnabled", "true")));
+
         EStopConfig ecfg = project.getEStopConfig();
         ecfg.setEnabled(Boolean.parseBoolean(props.getProperty("project.estop.enabled", "false")));
         try {
@@ -310,12 +345,15 @@ public final class MflProjectSerializer {
             ecfg.getInputRules().clear();
             for (int ri = 0; ri < rCount; ri++) {
                 String rp = "project.estop.rule." + ri + ".";
-                ecfg.getInputRules().add(new EStopConfig.InputRule(
-                        props.getProperty(rp + "channel", "DI0"),
-                        Boolean.parseBoolean(props.getProperty(rp + "activeLow", "true")),
-                        Boolean.parseBoolean(props.getProperty(rp + "enabled", "true")),
-                        props.getProperty(rp + "desc", "")
-                ));
+                String ch = props.getProperty(rp + "channel", "DI0");
+                boolean activeLow = Boolean.parseBoolean(props.getProperty(rp + "activeLow", "true"));
+                boolean enabled = Boolean.parseBoolean(props.getProperty(rp + "enabled", "true"));
+                String desc = props.getProperty(rp + "desc", "");
+                if (!enabled && ("Main Panel Mushroom E-Stop (NC Active Low)".equals(desc)
+                        || "Safety Light Curtain Trip (NO Active High)".equals(desc))) {
+                    continue;
+                }
+                ecfg.getInputRules().add(new EStopConfig.InputRule(ch, activeLow, enabled, desc));
             }
         }
 

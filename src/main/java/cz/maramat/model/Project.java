@@ -22,6 +22,7 @@ public class Project {
     private int defaultThreadId = 2;
     private IecLanguage primaryLanguage = IecLanguage.FBD;
     private final EStopConfig eStopConfig = new EStopConfig();
+    private final UnitConfig unitConfig = new UnitConfig();
     private final List<Page> pages = new ArrayList<>();
     private final Map<String, DataType> symbolicTags = new LinkedHashMap<>();
     private final Map<String, String> symbolicTagDescriptions = new LinkedHashMap<>();
@@ -447,6 +448,10 @@ public class Project {
 
     public EStopConfig getEStopConfig() {
         return eStopConfig;
+    }
+
+    public UnitConfig getUnitConfig() {
+        return unitConfig;
     }
 
     public List<Page> getPages() {

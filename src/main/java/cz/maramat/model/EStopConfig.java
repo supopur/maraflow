@@ -10,7 +10,7 @@ public class EStopConfig {
 
     public enum Mode {
         DISABLE_OUTPUTS_AND_STOP("1. Disable All Outputs & Put PLC into STOP"),
-        DEDICATED_ESTOP_PAGE("2. Execute Dedicated E-Stop Page (Halt Normal Threads Immediately)");
+        DEDICATED_ESTOP_PAGE("2. Execute Dedicated E-Stop Page");
 
         private final String label;
 
@@ -93,8 +93,6 @@ public class EStopConfig {
     private final List<InputRule> inputRules = new ArrayList<>();
 
     public EStopConfig() {
-        inputRules.add(new InputRule(false, "DI7", true, "Main Panel Mushroom E-Stop (NC Active Low)"));
-        inputRules.add(new InputRule(false, "DI6", false, "Safety Light Curtain Trip (NO Active High)"));
     }
 
     public boolean isEnabled() {
