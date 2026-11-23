@@ -47,12 +47,11 @@ caption "Doporučené zapojení: Watch přes USB/Ethernet, zatímco RS-485 běž
 
 ## Mapa registrů Modbus RTU Slave
 
-V režimu **Modbus RTU Slave** PLC odpovídá na své adrese **Station ID** (`1..247`) na funkční kódy `01, 02, 03, 04, 05, 06, 15, 16`:
+V režimu **Modbus RTU Slave** PLC odpovídá na své adrese **Station ID** (`1..247`) na funkční kódy `01, 02, 03, 04, 05, 06, 15, 16` podle uživatelského mapování v **Unit Config -> Modbus Slave Map** (až 64 položek):
 
-| Modbus tabulka | Funkční kódy | Adresy | Mapování v Duino - S |
-| --- | --- | --- | --- |
-| **Coils (`0x`)** | `01`, `05`, `15` | `0 .. 27` | Digitální výstupy `DO0 .. DO27` |
-| **Discrete Inputs (`1x`)** | `02` | `0 .. 27` | Digitální vstupy `DI0 .. DI27` |
-| **Input Registers (`3x`)** | `04` | `0 .. 3` | Analogové vstupy `AI0 .. AI3` (12-bit) |
-| **Holding Registers (`4x`)** | `03`, `06`, `16` | `0 .. 1` | Analogové výstupy `AO0 .. AO1` |
-| **Holding Registers (`4x`)** | `03`, `06`, `16` | `100 .. 227` | VM `INT` sloty `0 .. 127` |
+- **Modbus Table:** `Coil (0x)`, `Discrete Input (1x)`, `Holding Register (4x)` nebo `Input Register (3x)`.
+- **Address (`0..65535`):** Libovolná adresa registru nebo cívky.
+- **PLC Target:** Hardwarové I/O (`DI0..DI27`, `DO0..DO27`, `AI0..AI3`, `AO0..AO1`), virtuální registr (`REG_0`, atd.) nebo přímý VM slot (`BOOL:N`, `INT:N`, `FLOAT:N`).
+- **Read-Only:** Volitelný příznak jen pro čtení.
+
+Nenamapované adresy vrací Modbus výjimku `0x02` (Illegal Data Address).

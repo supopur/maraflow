@@ -1,5 +1,8 @@
 package cz.maramat.model;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Hardware, network, status-output, boot, and security configuration for a PLC unit.
  */
@@ -58,6 +61,65 @@ public class UnitConfig {
             9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600
     };
 
+    public enum ModbusTable {
+        COIL(0, "Coil (0x)"),
+        DISCRETE_INPUT(1, "Discrete Input (1x)"),
+        HOLDING_REGISTER(2, "Holding Register (4x)"),
+        INPUT_REGISTER(3, "Input Register (3x)");
+
+        private final int wireCode;
+        private final String label;
+
+        ModbusTable(int wireCode, String label) {
+            this.wireCode = wireCode;
+            this.label = label;
+        }
+
+        public int getWireCode() { return wireCode; }
+
+        public static ModbusTable fromWireCode(int code) {
+            for (ModbusTable t : values()) {
+                if (t.wireCode == code) return t;
+            }
+            return HOLDING_REGISTER;
+        }
+
+        @Override
+        public String toString() { return label; }
+    }
+
+    public static final class ModbusSlaveEntry {
+        private ModbusTable table;
+        private int modbusAddr;
+        private String targetRef;
+        private boolean readOnly;
+
+        public ModbusSlaveEntry(ModbusTable table, int modbusAddr, String targetRef, boolean readOnly) {
+            this.table = table == null ? ModbusTable.HOLDING_REGISTER : table;
+            this.modbusAddr = Math.clamp(modbusAddr, 0, 65535);
+            this.targetRef = (targetRef == null || targetRef.isBlank()) ? "DI0" : targetRef.trim();
+            this.readOnly = readOnly;
+        }
+
+        public ModbusSlaveEntry copy() {
+            return new ModbusSlaveEntry(table, modbusAddr, targetRef, readOnly);
+        }
+
+        public ModbusTable getTable() { return table; }
+        public void setTable(ModbusTable table) { this.table = table == null ? ModbusTable.HOLDING_REGISTER : table; }
+
+        public int getModbusAddr() { return modbusAddr; }
+        public void setModbusAddr(int modbusAddr) { this.modbusAddr = Math.clamp(modbusAddr, 0, 65535); }
+
+        public String getTargetRef() { return targetRef; }
+        public void setTargetRef(String targetRef) {
+            this.targetRef = (targetRef == null || targetRef.isBlank()) ? "DI0" : targetRef.trim();
+        }
+
+        public boolean isReadOnly() { return readOnly; }
+        public void setReadOnly(boolean readOnly) { this.readOnly = readOnly; }
+    }
+
     private String unitName = "PLC-1";
     private int stationId = 1;
 
@@ -77,6 +139,7 @@ public class UnitConfig {
     private Rs485Mode rs485Mode = Rs485Mode.MARAPROT;
     private int rs485BaudRate = 115200;
     private String accessPassword = "admin";
+    private final List<ModbusSlaveEntry> modbusSlaveMap = new ArrayList<>();
 
     public String getUnitName() { return unitName; }
     public void setUnitName(String unitName) {
@@ -167,5 +230,9 @@ public class UnitConfig {
         } else {
             this.rs485BaudRate = 115200;
         }
+    }
+
+    public List<ModbusSlaveEntry> getModbusSlaveMap() {
+        return modbusSlaveMap;
     }
 }

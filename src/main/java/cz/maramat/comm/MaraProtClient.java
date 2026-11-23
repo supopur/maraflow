@@ -41,6 +41,8 @@ public final class MaraProtClient implements Closeable {
     public static final int OP_ONEWIRE_SCAN = 0x50;
     public static final int OP_UNIT_CONFIG_GET = 0x51;
     public static final int OP_UNIT_CONFIG_SET = 0x52;
+    public static final int OP_MODBUS_MAP_GET = 0x53;
+    public static final int OP_MODBUS_MAP_SET = 0x54;
     public static final int OP_FW_ENTER_ROM_DFU = 0xF3;
 
     public static final int CTRL_STOP = 0;
@@ -288,6 +290,100 @@ public final class MaraProtClient implements Closeable {
         req[48] = (byte) (cfg.getRs485Mode().ordinal() & 0xFF);
         req[49] = (byte) (cfg.getRs485BaudIndex() & 0xFF);
         transceive(OP_UNIT_CONFIG_SET, req, 1500);
+    }
+
+    public synchronized void readModbusMap(cz.maramat.model.UnitConfig cfg) throws IOException {
+        byte[] resp = transceive(OP_MODBUS_MAP_GET, new byte[0], 1500);
+        if (resp.length < 1) throw new IOException("Invalid MODBUS_MAP_GET response");
+        int count = Math.min(64, resp[0] & 0xFF);
+        if (resp.length < 1 + count * 8) throw new IOException("Truncated MODBUS_MAP_GET response");
+        cfg.getModbusSlaveMap().clear();
+        for (int i = 0; i < count; i++) {
+            int off = 1 + i * 8;
+            var table = cz.maramat.model.UnitConfig.ModbusTable.fromWireCode(resp[off] & 0xFF);
+            int kind = resp[off + 1] & 0xFF;
+            int mbAddr = (resp[off + 2] & 0xFF) | ((resp[off + 3] & 0xFF) << 8);
+            int targetIdx = (resp[off + 4] & 0xFF) | ((resp[off + 5] & 0xFF) << 8);
+            boolean readOnly = (resp[off + 6] & 0x01) != 0;
+            String targetRef = switch (kind) {
+                case 0 -> "DI" + targetIdx;
+                case 1 -> "DO" + targetIdx;
+                case 2 -> "AI" + targetIdx;
+                case 3 -> "AO" + targetIdx;
+                case 4 -> "BOOL:" + targetIdx;
+                case 5 -> "INT:" + targetIdx;
+                case 6 -> "FLOAT:" + targetIdx;
+                default -> "DI0";
+            };
+            cfg.getModbusSlaveMap().add(new cz.maramat.model.UnitConfig.ModbusSlaveEntry(table, mbAddr, targetRef, readOnly));
+        }
+    }
+
+    public synchronized void writeModbusMap(cz.maramat.model.UnitConfig cfg, cz.maramat.model.Project project) throws IOException {
+        java.util.List<cz.maramat.model.UnitConfig.ModbusSlaveEntry> list = cfg.getModbusSlaveMap();
+        int count = Math.min(64, list.size());
+        java.util.Map<String, Integer> regSlots = null;
+        byte[] req = new byte[1 + count * 8];
+        req[0] = (byte) count;
+        for (int i = 0; i < count; i++) {
+            var e = list.get(i);
+            int[] resolved = resolveModbusTarget(e.getTargetRef(), project, regSlots);
+            if (resolved[2] == 1 && regSlots == null && project != null) {
+                regSlots = cz.maramat.compiler.MflwEmitter.emit(project).operandToSlot();
+                resolved = resolveModbusTarget(e.getTargetRef(), project, regSlots);
+            }
+            int off = 1 + i * 8;
+            req[off] = (byte) e.getTable().getWireCode();
+            req[off + 1] = (byte) resolved[0];
+            req[off + 2] = (byte) (e.getModbusAddr() & 0xFF);
+            req[off + 3] = (byte) ((e.getModbusAddr() >>> 8) & 0xFF);
+            req[off + 4] = (byte) (resolved[1] & 0xFF);
+            req[off + 5] = (byte) ((resolved[1] >>> 8) & 0xFF);
+            req[off + 6] = (byte) (e.isReadOnly() ? 1 : 0);
+            req[off + 7] = 0;
+        }
+        transceive(OP_MODBUS_MAP_SET, req, 1500);
+    }
+
+    private static int[] resolveModbusTarget(String ref, cz.maramat.model.Project project, java.util.Map<String, Integer> regSlots) {
+        String u = (ref == null ? "DI0" : ref.trim()).toUpperCase();
+        if (u.startsWith("DI") && u.length() > 2 && Character.isDigit(u.charAt(2))) {
+            return new int[]{0, parseIdx(u.substring(2)), 0};
+        }
+        if (u.startsWith("DO") && u.length() > 2 && Character.isDigit(u.charAt(2))) {
+            return new int[]{1, parseIdx(u.substring(2)), 0};
+        }
+        if (u.startsWith("AI") && u.length() > 2 && Character.isDigit(u.charAt(2))) {
+            return new int[]{2, parseIdx(u.substring(2)), 0};
+        }
+        if (u.startsWith("AO") && u.length() > 2 && Character.isDigit(u.charAt(2))) {
+            return new int[]{3, parseIdx(u.substring(2)), 0};
+        }
+        if (u.startsWith("BOOL:")) return new int[]{4, parseIdx(u.substring(5)), 0};
+        if (u.startsWith("INT:")) return new int[]{5, parseIdx(u.substring(4)), 0};
+        if (u.startsWith("FLOAT:")) return new int[]{6, parseIdx(u.substring(6)), 0};
+
+        if (regSlots == null) {
+            return new int[]{5, 0, 1};
+        }
+        Integer slotId = regSlots.get("REG:" + u);
+        if (slotId == null) slotId = regSlots.get(ref.trim());
+        if (slotId != null) {
+            int type = (slotId >>> NativeMaraVm.SLOT_TYPE_SHIFT) & 0x3;
+            int idx = slotId & NativeMaraVm.SLOT_INDEX_MASK;
+            int kind = switch (type) {
+                case NativeMaraVm.TYPE_BOOL -> 4;
+                case NativeMaraVm.TYPE_FLOAT -> 6;
+                default -> 5;
+            };
+            return new int[]{kind, idx, 0};
+        }
+        return new int[]{5, 0, 0};
+    }
+
+    private static int parseIdx(String s) {
+        try { return Math.max(0, Integer.parseInt(s.replaceAll("[^0-9]", ""))); }
+        catch (Exception e) { return 0; }
     }
 
     private static String formatIpv4(byte[] buf, int off) {

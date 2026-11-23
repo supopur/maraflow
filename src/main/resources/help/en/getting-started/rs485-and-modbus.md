@@ -50,15 +50,14 @@ caption "Recommended setup: Maraflow Watch over USB/Ethernet while RS-485 runs M
 
 ## Modbus RTU Slave Register Map
 
-When **RS-485 Mode** is set to **Modbus RTU Slave**, the PLC responds on its configured **Station ID** (`1..247`, default `1`) to Function Codes `01, 02, 03, 04, 05, 06, 15, 16`:
+When **RS-485 Mode** is set to **Modbus RTU Slave**, the PLC responds on its configured **Station ID** (`1..247`, default `1`) to Function Codes `01, 02, 03, 04, 05, 06, 15, 16` using the custom mapping defined in **Unit Config -> Modbus Slave Map** (up to 64 entries):
 
-| Modbus Table | Function Codes | Address Range | Duino - S Mapping |
-| --- | --- | --- | --- |
-| **Coils (`0x`)** | `01`, `05`, `15` | `0 .. 27` | Digital Outputs `DO0 .. DO27` |
-| **Discrete Inputs (`1x`)** | `02` | `0 .. 27` | Digital Inputs `DI0 .. DI27` |
-| **Input Registers (`3x`)** | `04` | `0 .. 3` | Analog Inputs `AI0 .. AI3` (12-bit raw) |
-| **Holding Registers (`4x`)** | `03`, `06`, `16` | `0 .. 1` | Analog Outputs `AO0 .. AO1` |
-| **Holding Registers (`4x`)** | `03`, `06`, `16` | `100 .. 227` | VM `INT` slots `0 .. 127` |
+- **Modbus Table:** `Coil (0x)`, `Discrete Input (1x)`, `Holding Register (4x)`, or `Input Register (3x)`.
+- **Address (`0..65535`):** Any Modbus address you choose for your SCADA or master PLC.
+- **PLC Target:** Map to hardware I/O (`DI0..DI27`, `DO0..DO27`, `AI0..AI3`, `AO0..AO1`), a project **Virtual Register** (`REG_0`, etc.), or a raw VM slot (`BOOL:N`, `INT:N`, `FLOAT:N`).
+- **Read-Only:** Optional flag to block Modbus writes to a mapped target.
+
+Unmapped addresses return Modbus Exception `0x02` (Illegal Data Address).
 
 ## Example: Reading a Remote Slave (`MbRtuRead`)
 

@@ -72,6 +72,8 @@ public class PlcConfigDialog extends JDialog {
     private JTextField eStopPageField;
     private final List<EStopConfig.InputRule> workingRules = new ArrayList<>();
     private EStopRulesTableModel rulesTableModel;
+    private final List<UnitConfig.ModbusSlaveEntry> workingModbusMap = new ArrayList<>();
+    private ModbusMapTableModel modbusMapTableModel;
 
     private static final String[] TARGET_PLATFORMS = {"Duino - S"};
 
@@ -106,6 +108,9 @@ public class PlcConfigDialog extends JDialog {
         for (EStopConfig.InputRule r : project.getEStopConfig().getInputRules()) {
             workingRules.add(r.copy());
         }
+        for (UnitConfig.ModbusSlaveEntry e : project.getUnitConfig().getModbusSlaveMap()) {
+            workingModbusMap.add(e.copy());
+        }
         buildUi();
         pack();
         setMinimumSize(new Dimension(AppFonts.scaled(640), AppFonts.scaled(480)));
@@ -119,6 +124,7 @@ public class PlcConfigDialog extends JDialog {
         JTabbedPane tabs = new JTabbedPane();
         tabs.setFont(AppFonts.uiBold());
         tabs.addTab("Unit Config", buildUnitConfigTab());
+        tabs.addTab("Modbus Slave Map", buildModbusMapTab());
         tabs.addTab("E-Stop", buildEStopTab());
         root.add(tabs, BorderLayout.CENTER);
 
@@ -432,6 +438,10 @@ public class PlcConfigDialog extends JDialog {
         for (EStopConfig.InputRule r : workingRules) {
             cfg.getInputRules().add(r.copy());
         }
+        ucfg.getModbusSlaveMap().clear();
+        for (UnitConfig.ModbusSlaveEntry e : workingModbusMap) {
+            ucfg.getModbusSlaveMap().add(e.copy());
+        }
         project.setDirty(true);
     }
 
@@ -440,6 +450,7 @@ public class PlcConfigDialog extends JDialog {
         if (connectedClient != null) {
             try {
                 connectedClient.writeUnitConfig(project.getUnitConfig());
+                connectedClient.writeModbusMap(project.getUnitConfig(), project);
             } catch (Exception ex) {
                 JOptionPane.showMessageDialog(
                         this,
@@ -545,6 +556,125 @@ public class PlcConfigDialog extends JDialog {
                 case 1 -> r.setInputChannel(String.valueOf(aValue));
                 case 2 -> r.setActiveLow(String.valueOf(aValue).startsWith("Active Low"));
                 case 3 -> r.setDescription(String.valueOf(aValue));
+            }
+            fireTableRowsUpdated(rowIndex, rowIndex);
+        }
+    }
+
+    private JPanel buildModbusMapTab() {
+        JPanel tab = new JPanel(new BorderLayout(8, 8));
+        tab.setBorder(new EmptyBorder(6, 6, 6, 6));
+
+        JLabel info = new JLabel("Map Modbus RTU Slave addresses (up to 64 entries) to any PLC I/O pin, Virtual Register, or VM slot (BOOL:N / INT:N / FLOAT:N).");
+        tab.add(info, BorderLayout.NORTH);
+
+        modbusMapTableModel = new ModbusMapTableModel();
+        JTable table = new JTable(modbusMapTableModel);
+        table.setRowHeight(AppFonts.scaled(22));
+        table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+
+        JComboBox<UnitConfig.ModbusTable> tblCombo = new JComboBox<>(UnitConfig.ModbusTable.values());
+        table.getColumnModel().getColumn(0).setCellEditor(new DefaultCellEditor(tblCombo));
+
+        java.util.LinkedHashSet<String> targets = new java.util.LinkedHashSet<>();
+        for (int i = 0; i <= 27; i++) targets.add("DI" + i);
+        for (int i = 0; i <= 27; i++) targets.add("DO" + i);
+        for (int i = 0; i <= 3; i++) targets.add("AI" + i);
+        for (int i = 0; i <= 1; i++) targets.add("AO" + i);
+        for (Page p : project.getPages()) {
+            for (var b : p.getAllBlockInstances()) {
+                if (b.getDefinitionId().equals("Main.Execution.ReadReg") || b.getDefinitionId().equals("Main.Execution.WriteReg")) {
+                    String rn = b.getCustomProperties().get("RegisterName");
+                    if (rn != null && !rn.isBlank()) targets.add(rn.trim().toUpperCase());
+                }
+            }
+        }
+        JComboBox<String> targetCombo = new JComboBox<>(targets.toArray(new String[0]));
+        targetCombo.setEditable(true);
+        table.getColumnModel().getColumn(2).setCellEditor(new DefaultCellEditor(targetCombo));
+
+        table.getColumnModel().getColumn(0).setPreferredWidth(AppFonts.scaled(160));
+        table.getColumnModel().getColumn(1).setPreferredWidth(AppFonts.scaled(110));
+        table.getColumnModel().getColumn(2).setPreferredWidth(AppFonts.scaled(180));
+        table.getColumnModel().getColumn(3).setPreferredWidth(AppFonts.scaled(80));
+
+        tab.add(new JScrollPane(table), BorderLayout.CENTER);
+
+        JPanel btns = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        JButton addBtn = new JButton("+ Add Mapping");
+        addBtn.addActionListener(e -> {
+            if (workingModbusMap.size() >= 64) {
+                JOptionPane.showMessageDialog(this, "Maximum 64 Modbus Slave mappings supported.", "Limit Reached", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            int nextAddr = workingModbusMap.size();
+            workingModbusMap.add(new UnitConfig.ModbusSlaveEntry(UnitConfig.ModbusTable.HOLDING_REGISTER, nextAddr, "INT:0", false));
+            modbusMapTableModel.fireTableDataChanged();
+        });
+        JButton removeBtn = new JButton("- Remove Selected");
+        removeBtn.addActionListener(e -> {
+            int row = table.getSelectedRow();
+            if (row >= 0 && row < workingModbusMap.size()) {
+                workingModbusMap.remove(row);
+                modbusMapTableModel.fireTableDataChanged();
+            }
+        });
+        btns.add(addBtn);
+        btns.add(removeBtn);
+        tab.add(btns, BorderLayout.SOUTH);
+        return tab;
+    }
+
+    private final class ModbusMapTableModel extends AbstractTableModel {
+        private final String[] cols = {"Modbus Table", "Address (0..65535)", "PLC Target", "Read-Only"};
+
+        @Override
+        public int getRowCount() { return workingModbusMap.size(); }
+
+        @Override
+        public int getColumnCount() { return cols.length; }
+
+        @Override
+        public String getColumnName(int column) { return cols[column]; }
+
+        @Override
+        public Class<?> getColumnClass(int columnIndex) {
+            return switch (columnIndex) {
+                case 0 -> UnitConfig.ModbusTable.class;
+                case 1 -> Integer.class;
+                case 3 -> Boolean.class;
+                default -> String.class;
+            };
+        }
+
+        @Override
+        public boolean isCellEditable(int rowIndex, int columnIndex) { return true; }
+
+        @Override
+        public Object getValueAt(int rowIndex, int columnIndex) {
+            UnitConfig.ModbusSlaveEntry e = workingModbusMap.get(rowIndex);
+            return switch (columnIndex) {
+                case 0 -> e.getTable();
+                case 1 -> e.getModbusAddr();
+                case 2 -> e.getTargetRef();
+                case 3 -> e.isReadOnly();
+                default -> "";
+            };
+        }
+
+        @Override
+        public void setValueAt(Object aValue, int rowIndex, int columnIndex) {
+            UnitConfig.ModbusSlaveEntry e = workingModbusMap.get(rowIndex);
+            switch (columnIndex) {
+                case 0 -> {
+                    if (aValue instanceof UnitConfig.ModbusTable t) e.setTable(t);
+                }
+                case 1 -> {
+                    try { e.setModbusAddr(Integer.parseInt(String.valueOf(aValue).trim())); }
+                    catch (NumberFormatException ignored) {}
+                }
+                case 2 -> e.setTargetRef(String.valueOf(aValue));
+                case 3 -> e.setReadOnly(Boolean.TRUE.equals(aValue));
             }
             fireTableRowsUpdated(rowIndex, rowIndex);
         }

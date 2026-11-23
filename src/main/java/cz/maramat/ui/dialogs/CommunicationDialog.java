@@ -272,6 +272,7 @@ public class CommunicationDialog extends JDialog {
             } else if (mode == Mode.UNIT_CONFIG) {
                 client.getInfo();
                 client.readUnitConfig(project.getUnitConfig());
+                try { client.readModbusMap(project.getUnitConfig()); } catch (Exception ignored) {}
                 this.connectedClient = client;
             } else {
                 client.getInfo();

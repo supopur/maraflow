@@ -60,6 +60,15 @@ public final class MflProjectSerializer {
         props.setProperty("project.unit.watchdogEnabled", Boolean.toString(ucfg.isWatchdogEnabled()));
         props.setProperty("project.unit.rs485Mode", ucfg.getRs485Mode().name());
         props.setProperty("project.unit.rs485BaudRate", Integer.toString(ucfg.getRs485BaudRate()));
+        props.setProperty("project.unit.modbusMap.count", Integer.toString(ucfg.getModbusSlaveMap().size()));
+        for (int mi = 0; mi < ucfg.getModbusSlaveMap().size(); mi++) {
+            UnitConfig.ModbusSlaveEntry e = ucfg.getModbusSlaveMap().get(mi);
+            String mp = "project.unit.modbusMap." + mi + ".";
+            props.setProperty(mp + "table", e.getTable().name());
+            props.setProperty(mp + "addr", Integer.toString(e.getModbusAddr()));
+            props.setProperty(mp + "target", e.getTargetRef());
+            props.setProperty(mp + "readOnly", Boolean.toString(e.isReadOnly()));
+        }
 
         EStopConfig ecfg = project.getEStopConfig();
         props.setProperty("project.estop.enabled", Boolean.toString(ecfg.isEnabled()));
@@ -339,6 +348,24 @@ public final class MflProjectSerializer {
         try {
             ucfg.setRs485BaudRate(Integer.parseInt(props.getProperty("project.unit.rs485BaudRate", "115200")));
         } catch (NumberFormatException ignored) {}
+        ucfg.getModbusSlaveMap().clear();
+        String mbCountStr = props.getProperty("project.unit.modbusMap.count");
+        if (mbCountStr != null) {
+            try {
+                int mbCount = Integer.parseInt(mbCountStr);
+                for (int mi = 0; mi < mbCount; mi++) {
+                    String mp = "project.unit.modbusMap." + mi + ".";
+                    UnitConfig.ModbusTable tbl = UnitConfig.ModbusTable.HOLDING_REGISTER;
+                    try {
+                        tbl = UnitConfig.ModbusTable.valueOf(props.getProperty(mp + "table", UnitConfig.ModbusTable.HOLDING_REGISTER.name()));
+                    } catch (IllegalArgumentException ignored) {}
+                    int addr = Integer.parseInt(props.getProperty(mp + "addr", "0"));
+                    String target = props.getProperty(mp + "target", "DI0");
+                    boolean ro = Boolean.parseBoolean(props.getProperty(mp + "readOnly", "false"));
+                    ucfg.getModbusSlaveMap().add(new UnitConfig.ModbusSlaveEntry(tbl, addr, target, ro));
+                }
+            } catch (NumberFormatException ignored) {}
+        }
 
         EStopConfig ecfg = project.getEStopConfig();
         ecfg.setEnabled(Boolean.parseBoolean(props.getProperty("project.estop.enabled", "false")));
