@@ -142,6 +142,16 @@ public class CommunicationDialog extends JDialog {
 
         root.add(southContainer, BorderLayout.SOUTH);
         getRootPane().setDefaultButton(okBtn);
+        getRootPane().getInputMap(javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_F1, 0), "helpF1");
+        getRootPane().getActionMap().put("helpF1", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                int idx = methodTabs.getSelectedIndex();
+                String pageId = (idx == 1) ? "getting-started/rs485-and-modbus" : "getting-started/upload";
+                cz.maramat.ui.help.HelpWindow.open(null, pageId);
+            }
+        });
         setContentPane(root);
     }
 
@@ -323,6 +333,9 @@ public class CommunicationDialog extends JDialog {
                     int sent = (int) ((pct / 100.0) * image.length);
                     publish(new int[]{pct, sent});
                 });
+                if (!project.getUnitConfig().getModbusSlaveMap().isEmpty()) {
+                    try { client.writeModbusMap(project.getUnitConfig(), project); } catch (Exception ignored) {}
+                }
                 if (mode == Mode.UPLOAD) {
                     client.close();
                 }

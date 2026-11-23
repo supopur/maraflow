@@ -6,6 +6,7 @@ import cz.maramat.model.DataType;
 import cz.maramat.model.GraphicElement;
 import cz.maramat.model.Page;
 import cz.maramat.model.PinInstance;
+import cz.maramat.model.Project;
 import cz.maramat.model.Wire;
 
 import java.awt.BasicStroke;
@@ -676,12 +677,23 @@ public final class FbdRenderer {
             boolean liveMode,
             int g
     ) {
+        paintSingleOutputFlag(g2, src, srcPinIdx, netName, srcPin, liveMode, g);
+        paintSingleInputFlag(g2, dst, dstPinIdx, netName, dstPin, liveMode, g);
+    }
+
+    public static void paintSingleOutputFlag(
+            Graphics2D g2,
+            BlockInstance src, int srcPinIdx,
+            String label,
+            PinInstance srcPin,
+            boolean liveMode,
+            int g
+    ) {
         DataType srcType = srcPin.getDataType();
-        DataType dstType = dstPin.getDataType();
         Font flagFont = new Font("Segoe UI", Font.PLAIN, Math.max(7, g - 2));
         g2.setFont(flagFont);
         FontMetrics fm = g2.getFontMetrics();
-        int textW = fm.stringWidth(netName);
+        int textW = fm.stringWidth(label);
         int flagGridW = Math.max(3, (int) Math.ceil((textW + g + 2.0) / g));
         int flagW = flagGridW * g;
         int flagH = g;
@@ -718,7 +730,26 @@ public final class FbdRenderer {
         g2.draw(ocon);
         g2.setColor(srcActive ? Color.WHITE : Color.BLACK);
         int textY = oy + (flagH + fm.getAscent() - fm.getDescent()) / 2;
-        g2.drawString(netName, ox + Math.max(3, g / 3), textY);
+        g2.drawString(label, ox + Math.max(3, g / 3), textY);
+    }
+
+    public static void paintSingleInputFlag(
+            Graphics2D g2,
+            BlockInstance dst, int dstPinIdx,
+            String label,
+            PinInstance dstPin,
+            boolean liveMode,
+            int g
+    ) {
+        DataType dstType = dstPin.getDataType();
+        Font flagFont = new Font("Segoe UI", Font.PLAIN, Math.max(7, g - 2));
+        g2.setFont(flagFont);
+        FontMetrics fm = g2.getFontMetrics();
+        int textW = fm.stringWidth(label);
+        int flagGridW = Math.max(3, (int) Math.ceil((textW + g + 2.0) / g));
+        int flagW = flagGridW * g;
+        int flagH = g;
+        double r = flagH / 2.0;
 
         Point2D.Double pIn = dst.getInputPinAnchorGrid(dstPinIdx);
         int ix = (int) Math.round(pIn.x * g);
@@ -734,10 +765,34 @@ public final class FbdRenderer {
         g2.setColor(dstActive ? dstType.getWireColor() : dstType.getPinBackground());
         g2.fill(icon);
         g2.setColor(Color.BLACK);
+        g2.setStroke(new BasicStroke(1.0f));
         g2.draw(icon);
         g2.setColor(dstActive ? Color.WHITE : Color.BLACK);
         int inTextY = iy + (flagH + fm.getAscent() - fm.getDescent()) / 2;
-        g2.drawString(netName, ix - flagW + (int) Math.round(r) + 2, inTextY);
+        g2.drawString(label, ix - flagW + (int) Math.round(r) + 2, inTextY);
+    }
+
+    /**
+     * Paints single-ended KiCad net flags for non-wire input drivers (Visual Buttons, Modbus MCOx/MHRx)
+     * and Modbus output exposures (MDIx/MIRx).
+     */
+    public static void paintDriverFlags(Graphics2D g2, Project project, Page page, int g, RenderOptions opts) {
+        if (project == null || page == null) return;
+        boolean liveMode = opts != null && opts.showLiveValues();
+        for (BlockInstance b : page.getBlocks()) {
+            for (int ii = 0; ii < b.getInputs().size(); ii++) {
+                Project.PinDriverInfo drv = project.getInputPinDriver(page, b, ii);
+                if (drv.kind() == Project.PinDriverKind.VISUAL_BUTTON || drv.kind() == Project.PinDriverKind.MODBUS) {
+                    paintSingleInputFlag(g2, b, ii, drv.label(), b.getInputs().get(ii), liveMode, g);
+                }
+            }
+            for (int oi = 0; oi < b.getOutputs().size(); oi++) {
+                List<String> mbTags = project.getOutputPinModbusTags(b, oi);
+                if (!mbTags.isEmpty()) {
+                    paintSingleOutputFlag(g2, b, oi, String.join(",", mbTags), b.getOutputs().get(oi), liveMode, g);
+                }
+            }
+        }
     }
 
     public static void paintBlocks(Graphics2D g2, Page page, int g, RenderOptions opts) {

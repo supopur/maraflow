@@ -7,7 +7,7 @@ see: [getting-started/rs485-and-modbus, blocks/Comm.ModbusRTU.MbRtuWrite]
 
 # MbRtuRead
 
-Reads a single Coil (`0x`), Discrete Input (`1x`), Holding Register (`4x`), or Input Register (`3x`) from a Modbus RTU slave over RS-485 (`USART3`).
+Reads a single `MCO` (Modbus Coil), `MDI` (Discrete Input), `MHR` (Holding Register), or `MIR` (Input Register) from a Modbus RTU slave over RS-485 (`USART3`).
 
 > **Prerequisite:** In **Unit Config**, set **RS-485 Mode** to **Modbus RTU Master**.
 

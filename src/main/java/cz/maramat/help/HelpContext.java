@@ -39,6 +39,9 @@ public final class HelpContext {
             }
         }
         if (fbdCanvas != null && fbdCanvas.hasFocus()) {
+            if (fbdCanvas.hasSelectedVisualButton()) {
+                return "editor/fbd-canvas#visual-buttons-and-pin-drivers";
+            }
             String defId = fbdCanvas.getSelectedSingleBlockDefinitionId();
             if (defId != null && !defId.startsWith("Macro.")) {
                 return "blocks/" + defId;

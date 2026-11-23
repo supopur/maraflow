@@ -1337,10 +1337,10 @@ public final class MflwEmitter {
     private static int parseModbusRegType(String raw) {
         if (raw == null) return 2;
         String u = raw.toUpperCase();
-        if (u.contains("COIL") || u.contains("0X")) return 0;
-        if (u.contains("DISCRETE") || u.contains("1X")) return 1;
-        if (u.contains("INPUT") || u.contains("3X")) return 3;
-        return 2; // Holding Register (4x)
+        if (u.startsWith("MCO") || u.contains("COIL") || u.contains("0X")) return 0;
+        if (u.startsWith("MDI") || u.contains("DISCRETE") || u.contains("1X")) return 1;
+        if (u.startsWith("MIR") || u.contains("INPUT REG") || u.contains("3X")) return 3;
+        return 2; // MHR - Modbus Holding Register
     }
 
     private static int parseHexByteOrDefault(String raw, int defVal) {

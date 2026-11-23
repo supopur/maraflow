@@ -1,9 +1,11 @@
 package cz.maramat.ui.dialogs;
 
 import cz.maramat.model.BlockInstance;
+import cz.maramat.model.DataType;
 import cz.maramat.model.GraphicElement;
 import cz.maramat.model.Page;
 import cz.maramat.model.PinInstance;
+import cz.maramat.model.Project;
 import cz.maramat.ui.icons.VectorIcons;
 
 import javax.swing.BorderFactory;
@@ -43,9 +45,9 @@ public final class VisualElementDialogs {
     private VisualElementDialogs() {}
 
     /**
-     * Opens the Visual Button properties modal with a live search bar and list of every input pin in Blockname.Pinname format.
+     * Opens the Visual Button properties modal with a live search bar and list of free BOOL input pins and BoolVars.
      */
-    public static boolean showVisualButtonDialog(Frame owner, Page page, GraphicElement buttonElem) {
+    public static boolean showVisualButtonDialog(Frame owner, Project project, Page page, GraphicElement buttonElem) {
         JDialog dlg = new JDialog(owner, "Visual Button Properties", true);
         final boolean[] confirmed = {false};
 
@@ -73,16 +75,43 @@ public final class VisualElementDialogs {
 
         root.add(topForm, BorderLayout.NORTH);
 
-        // Pin selector with search bar
-        List<String> allInputPins = new ArrayList<>();
+        // Pin & BoolVar selector with 1-driver mutex
+        record TargetItem(String ref, String display, boolean available) {
+            @Override public String toString() { return display; }
+        }
+        List<TargetItem> allTargets = new ArrayList<>();
+        if (project != null) {
+            for (Page p : project.getPages()) {
+                for (BlockInstance b : p.getBlocks()) {
+                    if ("Visual.Vars.BoolVar".equals(b.getDefinitionId())) {
+                        String ref = b.getName() + ".Y";
+                        allTargets.add(new TargetItem(ref, ref + " [BoolVar - Shared with SCADA]", true));
+                    }
+                }
+            }
+        }
         for (BlockInstance b : page.getBlocks()) {
-            for (PinInstance pin : b.getInputs()) {
-                allInputPins.add(b.getName() + "." + pin.getShortName());
+            for (int ii = 0; ii < b.getInputs().size(); ii++) {
+                PinInstance pin = b.getInputs().get(ii);
+                if (pin.getDataType() != DataType.BOOL) continue;
+                String ref = b.getName() + "." + pin.getShortName();
+                boolean available = true;
+                String suffix = "";
+                if (project != null) {
+                    Project.PinDriverInfo drv = project.getInputPinDriver(page, b, ii);
+                    boolean ownedBySelf = drv.kind() == Project.PinDriverKind.VISUAL_BUTTON
+                            && ref.equalsIgnoreCase(buttonElem.getBoundTargetPin());
+                    if (drv.isDriven() && !ownedBySelf) {
+                        available = false;
+                        suffix = " [Driven by " + drv.label() + "]";
+                    }
+                }
+                allTargets.add(new TargetItem(ref, ref + suffix, available));
             }
         }
 
         JPanel pinPanel = new JPanel(new BorderLayout(4, 4));
-        pinPanel.setBorder(BorderFactory.createTitledBorder("Target Input Pin (Blockname.Pinname)"));
+        pinPanel.setBorder(BorderFactory.createTitledBorder("Target BOOL Input Pin or BoolVar (1-Driver Mutex)"));
 
         JPanel searchRow = new JPanel(new BorderLayout(4, 0));
         searchRow.add(new JLabel("Search:"), BorderLayout.WEST);
@@ -90,20 +119,40 @@ public final class VisualElementDialogs {
         searchRow.add(searchField, BorderLayout.CENTER);
         pinPanel.add(searchRow, BorderLayout.NORTH);
 
-        DefaultListModel<String> listModel = new DefaultListModel<>();
-        for (String s : allInputPins) listModel.addElement(s);
-        JList<String> pinList = new JList<>(listModel);
+        DefaultListModel<TargetItem> listModel = new DefaultListModel<>();
+        for (TargetItem s : allTargets) listModel.addElement(s);
+        JList<TargetItem> pinList = new JList<>(listModel);
         pinList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        pinList.setCellRenderer((list, value, index, isSelected, cellHasFocus) -> {
+            JLabel lbl = new JLabel(value.display());
+            lbl.setOpaque(true);
+            if (!value.available()) {
+                lbl.setForeground(Color.GRAY);
+                lbl.setBackground(Color.WHITE);
+            } else if (isSelected) {
+                lbl.setBackground(list.getSelectionBackground());
+                lbl.setForeground(list.getSelectionForeground());
+            } else {
+                lbl.setBackground(list.getBackground());
+                lbl.setForeground(list.getForeground());
+            }
+            return lbl;
+        });
         if (!buttonElem.getBoundTargetPin().isEmpty()) {
-            pinList.setSelectedValue(buttonElem.getBoundTargetPin(), true);
+            for (TargetItem item : allTargets) {
+                if (item.ref().equalsIgnoreCase(buttonElem.getBoundTargetPin())) {
+                    pinList.setSelectedValue(item, true);
+                    break;
+                }
+            }
         }
 
         searchField.getDocument().addDocumentListener(new DocumentListener() {
             private void filter() {
                 String q = searchField.getText().trim().toLowerCase();
                 listModel.clear();
-                for (String item : allInputPins) {
-                    if (q.isEmpty() || item.toLowerCase().contains(q)) {
+                for (TargetItem item : allTargets) {
+                    if (q.isEmpty() || item.display().toLowerCase().contains(q)) {
                         listModel.addElement(item);
                     }
                 }
@@ -114,7 +163,7 @@ public final class VisualElementDialogs {
         });
 
         JScrollPane listScroll = new JScrollPane(pinList);
-        listScroll.setPreferredSize(new Dimension(320, 160));
+        listScroll.setPreferredSize(new Dimension(360, 170));
         pinPanel.add(listScroll, BorderLayout.CENTER);
         root.add(pinPanel, BorderLayout.CENTER);
 
@@ -122,11 +171,20 @@ public final class VisualElementDialogs {
         JButton okBtn = new JButton("OK", VectorIcons.greenCheckIcon());
         okBtn.setPreferredSize(new Dimension(96, 28));
         okBtn.addActionListener(e -> {
+            TargetItem sel = pinList.getSelectedValue();
+            if (sel != null && !sel.available()) {
+                javax.swing.JOptionPane.showMessageDialog(
+                        dlg,
+                        "Cannot bind to " + sel.ref() + " because it is already driven.",
+                        "Pin Driver Conflict",
+                        javax.swing.JOptionPane.WARNING_MESSAGE
+                );
+                return;
+            }
             buttonElem.setText(labelField.getText().trim().isEmpty() ? "BTN" : labelField.getText().trim());
             buttonElem.setToggleButton(modeCombo.getSelectedIndex() == 1);
-            String sel = pinList.getSelectedValue();
             if (sel != null) {
-                buttonElem.setBoundTargetPin(sel);
+                buttonElem.setBoundTargetPin(sel.ref());
             }
             confirmed[0] = true;
             dlg.dispose();

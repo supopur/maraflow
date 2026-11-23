@@ -62,20 +62,24 @@ public class UnitConfig {
     };
 
     public enum ModbusTable {
-        COIL(0, "Coil (0x)"),
-        DISCRETE_INPUT(1, "Discrete Input (1x)"),
-        HOLDING_REGISTER(2, "Holding Register (4x)"),
-        INPUT_REGISTER(3, "Input Register (3x)");
+        COIL(0, "MCO", "MCO - Modbus Coil"),
+        DISCRETE_INPUT(1, "MDI", "MDI - Modbus Discrete Input"),
+        HOLDING_REGISTER(2, "MHR", "MHR - Modbus Holding Register"),
+        INPUT_REGISTER(3, "MIR", "MIR - Modbus Input Register");
 
         private final int wireCode;
+        private final String prefix;
         private final String label;
 
-        ModbusTable(int wireCode, String label) {
+        ModbusTable(int wireCode, String prefix, String label) {
             this.wireCode = wireCode;
+            this.prefix = prefix;
             this.label = label;
         }
 
         public int getWireCode() { return wireCode; }
+        public String getPrefix() { return prefix; }
+        public String formatAddress(int addr) { return prefix + addr; }
 
         public static ModbusTable fromWireCode(int code) {
             for (ModbusTable t : values()) {

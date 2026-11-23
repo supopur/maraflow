@@ -203,6 +203,13 @@ public class SimulationEngine {
                                 converted = (converted == 0.0) ? 1.0 : 0.0;
                             }
                             out.setRuntimeValue(converted);
+                            String fullPin = (b.getName() + "." + out.getShortName()).toUpperCase();
+                            for (GraphicElement ge : page.getGraphics()) {
+                                if (ge.getKind() == GraphicElement.Kind.VISUAL_BUTTON
+                                        && ge.getBoundTargetPin().equalsIgnoreCase(fullPin)) {
+                                    ge.setActiveState(converted != 0.0);
+                                }
+                            }
                             if (!forwardToPlc) {
                                 propagateWatchedOutputWires(page, b, 0, out);
                             }

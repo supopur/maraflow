@@ -663,7 +663,7 @@ public class FbdCanvas extends JPanel {
                         GraphicElement btnElem = new GraphicElement(GraphicElement.Kind.VISUAL_BUTTON, gx, gy, 5, 2);
                         page.getGraphics().add(btnElem);
                         Frame owner = AppFonts.resolveFrameOwner(FbdCanvas.this);
-                        VisualElementDialogs.showVisualButtonDialog(owner, page, btnElem);
+                        VisualElementDialogs.showVisualButtonDialog(owner, project, page, btnElem);
                         editListener.onAfterPageEdit("Place Visual Button " + btnElem.getText(), graphicBeforeSnapshot, page);
                         editListener.onResetToolToCursor();
                         repaint();
@@ -810,7 +810,7 @@ public class FbdCanvas extends JPanel {
                         Page before = page.copy();
                         Frame owner = AppFonts.resolveFrameOwner(FbdCanvas.this);
                         boolean changed = (hitGraphic.getKind() == GraphicElement.Kind.VISUAL_BUTTON)
-                                ? VisualElementDialogs.showVisualButtonDialog(owner, page, hitGraphic)
+                                ? VisualElementDialogs.showVisualButtonDialog(owner, project, page, hitGraphic)
                                 : VisualElementDialogs.showGraphicPropertiesDialog(owner, page, hitGraphic);
                         if (changed) {
                             editListener.onAfterPageEdit("Edit Graphic Properties", before, page);
@@ -1099,6 +1099,23 @@ public class FbdCanvas extends JPanel {
                         int srcPin = wireStartIsOutput ? wireStartPinIndex : endHit.pinIndex;
                         BlockInstance dstBlock = wireStartIsOutput ? endHit.block : wireStartBlock;
                         int dstPin = wireStartIsOutput ? endHit.pinIndex : wireStartPinIndex;
+
+                        Project.PinDriverInfo drv = project != null
+                                ? project.getInputPinDriver(page, dstBlock, dstPin)
+                                : new Project.PinDriverInfo(Project.PinDriverKind.NONE, "");
+                        if (drv.kind() == Project.PinDriverKind.VISUAL_BUTTON || drv.kind() == Project.PinDriverKind.MODBUS) {
+                            String dstPinName = dstBlock.getInputs().get(dstPin).getShortName();
+                            JOptionPane.showMessageDialog(
+                                    FbdCanvas.this,
+                                    "Input pin " + dstBlock.getName() + "." + dstPinName
+                                            + " is already driven by " + drv.label() + " (1-driver mutex).",
+                                    "Pin Driver Conflict",
+                                    JOptionPane.WARNING_MESSAGE
+                            );
+                            wireStartBlock = null;
+                            repaint();
+                            return;
+                        }
 
                         Page before = page.copy();
                         page.getWires().removeIf(w -> w.getTargetBlockId().equals(dstBlock.getId()) && w.getTargetPinIndex() == dstPin);
@@ -1575,7 +1592,7 @@ public class FbdCanvas extends JPanel {
             Page before = page.copy();
             Frame owner = AppFonts.resolveFrameOwner(FbdCanvas.this);
             boolean changed = (elem.getKind() == GraphicElement.Kind.VISUAL_BUTTON)
-                    ? VisualElementDialogs.showVisualButtonDialog(owner, page, elem)
+                    ? VisualElementDialogs.showVisualButtonDialog(owner, project, page, elem)
                     : VisualElementDialogs.showGraphicPropertiesDialog(owner, page, elem);
             if (changed) {
                 editListener.onAfterPageEdit("Edit Graphic Properties", before, page);
@@ -2048,6 +2065,7 @@ public class FbdCanvas extends JPanel {
      */
     public void paintPageForExport(Graphics2D g2, Page page, int g) {
         FbdRenderer.paintPage(g2, page, g, FbdRenderer.RenderOptions.forExport());
+        FbdRenderer.paintDriverFlags(g2, project, page, g, FbdRenderer.RenderOptions.forExport());
     }
 
     @Override
@@ -2076,6 +2094,7 @@ public class FbdCanvas extends JPanel {
                 live
         );
         FbdRenderer.paintPage(g2, page, gridPx, opts);
+        FbdRenderer.paintDriverFlags(g2, project, page, gridPx, opts);
 
         if (creatingWire && wireStartPixel != null && wireCurrentPixel != null) {
             g2.setColor(new Color(0x00, 0x66, 0xCC));
@@ -2139,6 +2158,20 @@ public class FbdCanvas extends JPanel {
         String id = selectedBlockIds.iterator().next();
         BlockInstance b = page.findBlockById(id);
         return b != null ? b.getDefinitionId() : null;
+    }
+
+    public boolean hasSelectedVisualButton() {
+        if (selectedGraphicIds.isEmpty()) return false;
+        Page page = getActivePage();
+        if (page == null) return false;
+        for (String id : selectedGraphicIds) {
+            for (GraphicElement ge : page.getGraphics()) {
+                if (id.equals(ge.getId()) && ge.getKind() == GraphicElement.Kind.VISUAL_BUTTON) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     public void updateCanvasPreferredSize() {

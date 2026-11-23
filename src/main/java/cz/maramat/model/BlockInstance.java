@@ -102,7 +102,7 @@ public class BlockInstance {
             customProperties.put("HardwareChannel", "CH0 (PA0)");
         } else if (definitionId.startsWith("Comm.Modbus")) {
             customProperties.put("SlaveId", "1");
-            customProperties.put("RegisterType", "Holding Register (4x)");
+            customProperties.put("RegisterType", "MHR - Modbus Holding Register");
             customProperties.put("RegisterAddress", "0");
             if (definitionId.contains("Tcp")) {
                 customProperties.put("RemoteIP", "192.168.1.100");

@@ -473,4 +473,60 @@ public class Project {
         symbolicTags.put(clean, type == null ? DataType.BOOL : type);
         symbolicTagDescriptions.put(clean, description == null ? "" : description.trim());
     }
+
+    public enum PinDriverKind {
+        NONE, WIRE, VISUAL_BUTTON, MODBUS
+    }
+
+    public record PinDriverInfo(PinDriverKind kind, String label) {
+        public boolean isDriven() { return kind != PinDriverKind.NONE; }
+    }
+
+    /**
+     * Returns the exclusive driver of a block's input pin (1-driver mutex: Wire, Visual Button, or Modbus MCO/MHR).
+     */
+    public PinDriverInfo getInputPinDriver(Page page, BlockInstance block, int pinIndex) {
+        if (page == null || block == null || pinIndex < 0 || pinIndex >= block.getInputs().size()) {
+            return new PinDriverInfo(PinDriverKind.NONE, "");
+        }
+        for (Wire w : page.getWires()) {
+            if (block.getId().equals(w.getTargetBlockId()) && w.getTargetPinIndex() == pinIndex) {
+                return new PinDriverInfo(PinDriverKind.WIRE, w.getNetName());
+            }
+        }
+        String pinRef = block.getName() + "." + block.getInputs().get(pinIndex).getShortName();
+        for (GraphicElement ge : page.getGraphics()) {
+            if (ge.getKind() == GraphicElement.Kind.VISUAL_BUTTON
+                    && !ge.getBoundTargetPin().isBlank()
+                    && ge.getBoundTargetPin().equalsIgnoreCase(pinRef)) {
+                String lbl = (ge.getText() == null || ge.getText().isBlank()) ? "BTN" : ge.getText().trim();
+                return new PinDriverInfo(PinDriverKind.VISUAL_BUTTON, lbl);
+            }
+        }
+        for (UnitConfig.ModbusSlaveEntry e : unitConfig.getModbusSlaveMap()) {
+            boolean isWriter = (e.getTable() == UnitConfig.ModbusTable.COIL)
+                    || (e.getTable() == UnitConfig.ModbusTable.HOLDING_REGISTER && !e.isReadOnly());
+            if (isWriter && e.getTargetRef().equalsIgnoreCase(pinRef)) {
+                return new PinDriverInfo(PinDriverKind.MODBUS, e.getTable().formatAddress(e.getModbusAddr()));
+            }
+        }
+        return new PinDriverInfo(PinDriverKind.NONE, "");
+    }
+
+    /**
+     * Returns all Modbus Slave addresses (e.g. MDI0, MIR2) reading from a block's output pin.
+     */
+    public List<String> getOutputPinModbusTags(BlockInstance block, int pinIndex) {
+        List<String> tags = new ArrayList<>();
+        if (block == null || pinIndex < 0 || pinIndex >= block.getOutputs().size()) {
+            return tags;
+        }
+        String pinRef = block.getName() + "." + block.getOutputs().get(pinIndex).getShortName();
+        for (UnitConfig.ModbusSlaveEntry e : unitConfig.getModbusSlaveMap()) {
+            if (e.getTargetRef().equalsIgnoreCase(pinRef)) {
+                tags.add(e.getTable().formatAddress(e.getModbusAddr()));
+            }
+        }
+        return tags;
+    }
 }

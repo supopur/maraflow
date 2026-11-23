@@ -152,6 +152,16 @@ public class PlcConfigDialog extends JDialog {
         root.add(btnBar, BorderLayout.SOUTH);
 
         getRootPane().setDefaultButton(okBtn);
+        getRootPane().getInputMap(javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_F1, 0), "helpF1");
+        getRootPane().getActionMap().put("helpF1", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                int idx = tabs.getSelectedIndex();
+                String pageId = (idx == 1) ? "getting-started/rs485-and-modbus#modbus-slave-map" : "getting-started/unit-config";
+                cz.maramat.ui.help.HelpWindow.open(null, pageId);
+            }
+        });
         setContentPane(root);
     }
 
@@ -581,8 +591,23 @@ public class PlcConfigDialog extends JDialog {
         for (int i = 0; i <= 27; i++) targets.add("DO" + i);
         for (int i = 0; i <= 3; i++) targets.add("AI" + i);
         for (int i = 0; i <= 1; i++) targets.add("AO" + i);
+        for (int i = 0; i < 32; i++) targets.add("M" + i);
+        for (int i = 0; i < 16; i++) targets.add("REG_" + i);
         for (Page p : project.getPages()) {
             for (var b : p.getAllBlockInstances()) {
+                if (b.getDefinitionId().startsWith("Visual.Vars.") && !b.getOutputs().isEmpty()) {
+                    targets.add(b.getName() + "." + b.getOutputs().getFirst().getShortName());
+                } else {
+                    for (var out : b.getOutputs()) {
+                        targets.add(b.getName() + "." + out.getShortName());
+                    }
+                    for (int ii = 0; ii < b.getInputs().size(); ii++) {
+                        Project.PinDriverInfo drv = project.getInputPinDriver(p, b, ii);
+                        if (!drv.isDriven() || drv.kind() == Project.PinDriverKind.MODBUS) {
+                            targets.add(b.getName() + "." + b.getInputs().get(ii).getShortName());
+                        }
+                    }
+                }
                 if (b.getDefinitionId().equals("Main.Execution.ReadReg") || b.getDefinitionId().equals("Main.Execution.WriteReg")) {
                     String rn = b.getCustomProperties().get("RegisterName");
                     if (rn != null && !rn.isBlank()) targets.add(rn.trim().toUpperCase());
@@ -641,7 +666,6 @@ public class PlcConfigDialog extends JDialog {
         public Class<?> getColumnClass(int columnIndex) {
             return switch (columnIndex) {
                 case 0 -> UnitConfig.ModbusTable.class;
-                case 1 -> Integer.class;
                 case 3 -> Boolean.class;
                 default -> String.class;
             };
@@ -655,7 +679,7 @@ public class PlcConfigDialog extends JDialog {
             UnitConfig.ModbusSlaveEntry e = workingModbusMap.get(rowIndex);
             return switch (columnIndex) {
                 case 0 -> e.getTable();
-                case 1 -> e.getModbusAddr();
+                case 1 -> e.getTable().formatAddress(e.getModbusAddr());
                 case 2 -> e.getTargetRef();
                 case 3 -> e.isReadOnly();
                 default -> "";
@@ -670,8 +694,10 @@ public class PlcConfigDialog extends JDialog {
                     if (aValue instanceof UnitConfig.ModbusTable t) e.setTable(t);
                 }
                 case 1 -> {
-                    try { e.setModbusAddr(Integer.parseInt(String.valueOf(aValue).trim())); }
-                    catch (NumberFormatException ignored) {}
+                    try {
+                        String digits = String.valueOf(aValue).replaceAll("[^0-9]", "");
+                        if (!digits.isEmpty()) e.setModbusAddr(Integer.parseInt(digits));
+                    } catch (NumberFormatException ignored) {}
                 }
                 case 2 -> e.setTargetRef(String.valueOf(aValue));
                 case 3 -> e.setReadOnly(Boolean.TRUE.equals(aValue));

@@ -48,14 +48,25 @@ edge PLC <-> SLAVE "Modbus RTU (RS-485)"
 caption "Recommended setup: Maraflow Watch over USB/Ethernet while RS-485 runs Modbus RTU"
 ```
 
-## Modbus RTU Slave Register Map
+## Modbus RTU Slave Register Map (`MCOx` / `MDIx` / `MHRx` / `MIRx`)
 
 When **RS-485 Mode** is set to **Modbus RTU Slave**, the PLC responds on its configured **Station ID** (`1..247`, default `1`) to Function Codes `01, 02, 03, 04, 05, 06, 15, 16` using the custom mapping defined in **Unit Config -> Modbus Slave Map** (up to 64 entries):
 
-- **Modbus Table:** `Coil (0x)`, `Discrete Input (1x)`, `Holding Register (4x)`, or `Input Register (3x)`.
-- **Address (`0..65535`):** Any Modbus address you choose for your SCADA or master PLC.
-- **PLC Target:** Map to hardware I/O (`DI0..DI27`, `DO0..DO27`, `AI0..AI3`, `AO0..AO1`), a project **Virtual Register** (`REG_0`, etc.), or a raw VM slot (`BOOL:N`, `INT:N`, `FLOAT:N`).
-- **Read-Only:** Optional flag to block Modbus writes to a mapped target.
+| Prefix | Table | PLC Direction | Valid Targets |
+| --- | --- | --- | --- |
+| **`MCOx`** | `MCO - Modbus Coil` | Read / Write | Free `BOOL` **Input Pins** (`And1.X1`), `BoolVar`, `M*`, `DO*` |
+| **`MDIx`** | `MDI - Modbus Discrete Input` | Read-Only | Any `BOOL` **Output Pin** (`And1.Y`), `DI*`, `DO*`, `BoolVar`, `M*` |
+| **`MHRx`** | `MHR - Modbus Holding Register` | Read / Write | Free `INT`/`FLOAT` **Input Pins**, `IntVar`/`FloatVar`, `REG_*`, `AO*` |
+| **`MIRx`** | `MIR - Modbus Input Register` | Read-Only | Any `INT`/`FLOAT` **Output Pin**, `AI*`, `AO*`, `IntVar`/`FloatVar`, `REG_*` |
+
+### 1-Driver Input Pin Mutex & KiCad Driver Flags
+
+Every **block input pin** on the FBD canvas can have **at most one driver** (a normal Wire, a **Visual Button**, or a writable **`MCOx` / `MHRx`** Modbus address). Non-wire drivers render as a single-ended KiCad net flag (`< MCO0 |`, `< StartBtn |`) on the pin; mapped output pins show a right-side flag (`| MDI0 >`, `| MIR1 >`).
+
+### Maraview SCADA Integration
+
+- **MaraProt (`MFL_LINK`):** `Maraview` drives `xVar` blocks (`BoolVar`, `IntVar`, `FloatVar`), `REG_*`, and **Visual Buttons** (syncing button state live), while reading any block output pin.
+- **Modbus RTU (`MODBUS`):** Importing the `.mfl` file in `Maraview` automatically imports your `MCOx`/`MDIx`/`MHRx`/`MIRx` bindings.
 
 Unmapped addresses return Modbus Exception `0x02` (Illegal Data Address).
 

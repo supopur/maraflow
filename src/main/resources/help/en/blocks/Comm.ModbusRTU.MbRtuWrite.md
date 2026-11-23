@@ -7,7 +7,7 @@ see: [getting-started/rs485-and-modbus, blocks/Comm.ModbusRTU.MbRtuRead]
 
 # MbRtuWrite
 
-Writes a single Coil (`0x`, FC `05`) or Holding Register (`4x`, FC `06`) to a Modbus RTU slave over RS-485 (`USART3`).
+Writes a single `MCO` (Modbus Coil, FC `05`) or `MHR` (Modbus Holding Register, FC `06`) to a Modbus RTU slave over RS-485 (`USART3`).
 
 > **Prerequisite:** In **Unit Config**, set **RS-485 Mode** to **Modbus RTU Master**.
 

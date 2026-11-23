@@ -45,13 +45,15 @@ edge PLC <-> SLAVE "Modbus RTU (RS-485)"
 caption "Doporučené zapojení: Watch přes USB/Ethernet, zatímco RS-485 běží jako Modbus RTU"
 ```
 
-## Mapa registrů Modbus RTU Slave
+## Mapa registrů Modbus RTU Slave (`MCOx` / `MDIx` / `MHRx` / `MIRx`)
 
 V režimu **Modbus RTU Slave** PLC odpovídá na své adrese **Station ID** (`1..247`) na funkční kódy `01, 02, 03, 04, 05, 06, 15, 16` podle uživatelského mapování v **Unit Config -> Modbus Slave Map** (až 64 položek):
 
-- **Modbus Table:** `Coil (0x)`, `Discrete Input (1x)`, `Holding Register (4x)` nebo `Input Register (3x)`.
-- **Address (`0..65535`):** Libovolná adresa registru nebo cívky.
-- **PLC Target:** Hardwarové I/O (`DI0..DI27`, `DO0..DO27`, `AI0..AI3`, `AO0..AO1`), virtuální registr (`REG_0`, atd.) nebo přímý VM slot (`BOOL:N`, `INT:N`, `FLOAT:N`).
-- **Read-Only:** Volitelný příznak jen pro čtení.
+- **`MCOx` (Modbus Coil, R/W):** Volné `BOOL` vstupní piny, `BoolVar`, `M*`, `DO*`.
+- **`MDIx` (Modbus Discrete Input, R/O):** Libovolný `BOOL` výstupní pin, `DI*`, `DO*`, `BoolVar`, `M*`.
+- **`MHRx` (Modbus Holding Register, R/W):** Volné `INT`/`FLOAT` vstupní piny, `IntVar`/`FloatVar`, `REG_*`, `AO*`.
+- **`MIRx` (Modbus Input Register, R/O):** Libovolný `INT`/`FLOAT` výstupní pin, `AI*`, `AO*`, `IntVar`/`FloatVar`, `REG_*`.
+
+Každý **vstupní pin** má striktně **1 zdroj (mutex)** (drát, Visual Button nebo `MCOx`/`MHRx`), který se na schématu zobrazuje jako jednostranná KiCad vlaječka (`< MCO0 |`, `< StartBtn |`). `Maraview` ovládá `xVar` proměnné a Visual Buttony a automaticky importuje `MCOx`/`MDIx`/`MHRx`/`MIRx` vazby z `.mfl` projektu.
 
 Nenamapované adresy vrací Modbus výjimku `0x02` (Illegal Data Address).
