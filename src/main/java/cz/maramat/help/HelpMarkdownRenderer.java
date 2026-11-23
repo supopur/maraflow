@@ -1,5 +1,6 @@
 package cz.maramat.help;
 
+import cz.maramat.help.diagram.ArchDiagramRenderer;
 import cz.maramat.help.diagram.FbdDiagramParser;
 import cz.maramat.help.diagram.FbdDiagramRenderer;
 import cz.maramat.help.diagram.FbdDiagramSpec;
@@ -264,6 +265,29 @@ public final class HelpMarkdownRenderer {
                     BufferedImage img = LdDiagramRenderer.getOrRenderByHash(hash);
                     int w = img != null ? img.getWidth() : 320;
                     int h = img != null ? img.getHeight() : 120;
+                    html.line();
+                    html.raw("<div class=\"diagram\">");
+                    html.raw("<img src=\"diagram:" + hash + "\" width=\"" + w + "\" height=\"" + h + "\"/>");
+                    if (parsed.caption() != null && !parsed.caption().isBlank()) {
+                        html.raw("<div class=\"diagram-caption\">" + escapeHtml(parsed.caption()) + "</div>");
+                    }
+                    html.raw("</div>");
+                    html.line();
+                } catch (Exception ex) {
+                    html.line();
+                    html.raw("<div class=\"diagram-error\">Diagram error: " + escapeHtml(ex.getMessage()) + "</div>");
+                    html.line();
+                }
+                return;
+            }
+
+            if ("diagram".equals(info)) {
+                try {
+                    ArchDiagramRenderer.ParsedDiagram parsed = ArchDiagramRenderer.parse(literal);
+                    String hash = ArchDiagramRenderer.registerSource(literal);
+                    BufferedImage img = ArchDiagramRenderer.getOrRenderByHash(hash);
+                    int w = img != null ? img.getWidth() : 320;
+                    int h = img != null ? img.getHeight() : 100;
                     html.line();
                     html.raw("<div class=\"diagram\">");
                     html.raw("<img src=\"diagram:" + hash + "\" width=\"" + w + "\" height=\"" + h + "\"/>");

@@ -37,6 +37,27 @@ public class UnitConfig {
         }
     }
 
+    public enum Rs485Mode {
+        MARAPROT("MaraProt v1 (Programming / Watch)"),
+        MODBUS_MASTER("Modbus RTU Master (MbRtuRead / Write)"),
+        MODBUS_SLAVE("Modbus RTU Slave");
+
+        private final String label;
+
+        Rs485Mode(String label) {
+            this.label = label;
+        }
+
+        @Override
+        public String toString() {
+            return label;
+        }
+    }
+
+    public static final int[] RS485_BAUD_RATES = {
+            9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600
+    };
+
     private String unitName = "PLC-1";
     private int stationId = 1;
 
@@ -53,6 +74,8 @@ public class UnitConfig {
     private BootMode bootMode = BootMode.AUTO_RUN;
     private boolean safeOutputsOnStop = true;
     private boolean watchdogEnabled = true;
+    private Rs485Mode rs485Mode = Rs485Mode.MARAPROT;
+    private int rs485BaudRate = 115200;
     private String accessPassword = "admin";
 
     public String getUnitName() { return unitName; }
@@ -113,5 +136,36 @@ public class UnitConfig {
     public String getAccessPassword() { return accessPassword; }
     public void setAccessPassword(String accessPassword) {
         this.accessPassword = accessPassword == null ? "" : accessPassword;
+    }
+
+    public Rs485Mode getRs485Mode() { return rs485Mode; }
+    public void setRs485Mode(Rs485Mode rs485Mode) {
+        this.rs485Mode = rs485Mode == null ? Rs485Mode.MARAPROT : rs485Mode;
+    }
+
+    public int getRs485BaudRate() { return rs485BaudRate; }
+    public void setRs485BaudRate(int rs485BaudRate) {
+        for (int b : RS485_BAUD_RATES) {
+            if (b == rs485BaudRate) {
+                this.rs485BaudRate = rs485BaudRate;
+                return;
+            }
+        }
+        this.rs485BaudRate = 115200;
+    }
+
+    public int getRs485BaudIndex() {
+        for (int i = 0; i < RS485_BAUD_RATES.length; i++) {
+            if (RS485_BAUD_RATES[i] == rs485BaudRate) return i;
+        }
+        return 4;
+    }
+
+    public void setRs485BaudIndex(int idx) {
+        if (idx >= 0 && idx < RS485_BAUD_RATES.length) {
+            this.rs485BaudRate = RS485_BAUD_RATES[idx];
+        } else {
+            this.rs485BaudRate = 115200;
+        }
     }
 }

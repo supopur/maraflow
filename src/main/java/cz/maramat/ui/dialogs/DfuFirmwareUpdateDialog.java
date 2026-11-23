@@ -13,6 +13,7 @@ import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JPasswordField;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
@@ -41,6 +42,7 @@ public class DfuFirmwareUpdateDialog extends JDialog {
 
     private final Consumer<String> logSink;
     private JComboBox<String> portBox;
+    private JPasswordField passwordField;
     private JTextField fwFileField;
     private JTextArea outputArea;
     private JButton enterDfuBtn;
@@ -84,6 +86,12 @@ public class DfuFirmwareUpdateDialog extends JDialog {
         browseBtn.addActionListener(e -> actionBrowseFile());
 
         gbc.gridx = 0; gbc.gridy = 1; gbc.weightx = 0;
+        top.add(new JLabel("Access Password:"), gbc);
+        passwordField = new JPasswordField("admin", 16);
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        top.add(passwordField, gbc);
+
+        gbc.gridx = 0; gbc.gridy = 2; gbc.weightx = 0;
         top.add(new JLabel("Firmware (.bin/.elf):"), gbc);
         gbc.gridx = 1; gbc.weightx = 1.0;
         top.add(fwFileField, gbc);
@@ -115,11 +123,13 @@ public class DfuFirmwareUpdateDialog extends JDialog {
     private void actionEnterDfu() {
         String port = String.valueOf(portBox.getSelectedItem()).trim();
         if (port.isEmpty()) return;
+        String password = new String(passwordField.getPassword());
         enterDfuBtn.setEnabled(false);
         appendLine("Sending ROM DFU reboot command to " + port + "...");
         Thread.ofVirtual().start(() -> {
             try (MaraProtClient client = new MaraProtClient(new MaraTransport.SerialCdcTransport(port, 115200), 0)) {
                 client.connect();
+                client.authenticate(password);
                 client.enterRomDfu();
                 appendLine("PLC accepted DFU command and is rebooting into STM32 ROM USB DFU (0483:df11)...");
             } catch (Exception ex) {

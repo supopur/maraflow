@@ -598,6 +598,32 @@ public final class MflwEmitter {
                 writeU16(out, frq);
                 writeU16(out, dty);
             }
+            case "Comm.ModbusRTU.MbRtuRead", "Comm.ModbusRTU.MbRtuWrite" -> {
+                boolean isWrite = b.getDefinitionId().endsWith("Write");
+                int slaveId = parseIntPropOrDefault(b.getCustomProperties().get("SlaveId"), 1, 1, 247);
+                int regType = parseModbusRegType(b.getCustomProperties().get("RegisterType"));
+                int regAddr = parseIntPropOrDefault(b.getCustomProperties().get("RegisterAddress"), 0, 0, 65535);
+                int srcA = (slaveId & 0xFF) | ((regType & 0x03) << 8) | ((isWrite ? 1 : 0) << 10);
+                if (isWrite) {
+                    int valSlot = findInputSlotByShortName(b, inSlots, "Val");
+                    int okSlot = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                    int errSlot = blockPinSlot.getOrDefault(b.getId() + ":OUT:1", NativeMaraVm.SLOT_ALWAYS_ENABLED);
+                    writeWord(out, NativeMaraVm.OP_COMM_EXEC, NativeMaraVm.COMM_MODBUS_RTU, enSlot, okSlot, srcA);
+                    writeU16(out, regAddr);
+                    writeU16(out, valSlot);
+                    writeU16(out, errSlot);
+                    writeU16(out, 0);
+                } else {
+                    int valSlot = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                    int okSlot = blockPinSlot.getOrDefault(b.getId() + ":OUT:1", NativeMaraVm.SLOT_ALWAYS_ENABLED);
+                    int errSlot = blockPinSlot.getOrDefault(b.getId() + ":OUT:2", NativeMaraVm.SLOT_ALWAYS_ENABLED);
+                    writeWord(out, NativeMaraVm.OP_COMM_EXEC, NativeMaraVm.COMM_MODBUS_RTU, enSlot, valSlot, srcA);
+                    writeU16(out, regAddr);
+                    writeU16(out, okSlot);
+                    writeU16(out, errSlot);
+                    writeU16(out, 0);
+                }
+            }
             case "Comm.I2C.TMP75" -> {
                 int tmp = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
                 int ok = blockPinSlot.getOrDefault(b.getId() + ":OUT:1", NativeMaraVm.SLOT_ALWAYS_ENABLED);
@@ -1297,6 +1323,24 @@ public final class MflwEmitter {
         } catch (NumberFormatException e) {
             return defVal;
         }
+    }
+
+    private static int parseIntPropOrDefault(String raw, int defVal, int minVal, int maxVal) {
+        if (raw == null || raw.isBlank()) return defVal;
+        try {
+            return Math.clamp(Integer.parseInt(raw.trim()), minVal, maxVal);
+        } catch (NumberFormatException e) {
+            return defVal;
+        }
+    }
+
+    private static int parseModbusRegType(String raw) {
+        if (raw == null) return 2;
+        String u = raw.toUpperCase();
+        if (u.contains("COIL") || u.contains("0X")) return 0;
+        if (u.contains("DISCRETE") || u.contains("1X")) return 1;
+        if (u.contains("INPUT") || u.contains("3X")) return 3;
+        return 2; // Holding Register (4x)
     }
 
     private static int parseHexByteOrDefault(String raw, int defVal) {

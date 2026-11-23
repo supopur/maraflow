@@ -11,6 +11,8 @@
     - getting-started/traffic-light
     - getting-started/simulate
     - getting-started/upload
+    - getting-started/unit-config
+    - getting-started/rs485-and-modbus
     - getting-started/glossary
 
 - section: concepts

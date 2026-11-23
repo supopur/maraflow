@@ -1,5 +1,6 @@
 package cz.maramat.help;
 
+import cz.maramat.help.diagram.ArchDiagramRenderer;
 import cz.maramat.help.diagram.FbdDiagramRenderer;
 import cz.maramat.help.diagram.LdDiagramRenderer;
 
@@ -56,6 +57,9 @@ public final class HelpHtmlEditorKit extends HTMLEditorKit {
         private BufferedImage image() {
             if (hash.startsWith("ld_")) {
                 return LdDiagramRenderer.getOrRenderByHash(hash);
+            }
+            if (hash.startsWith("arch_")) {
+                return ArchDiagramRenderer.getOrRenderByHash(hash);
             }
             return FbdDiagramRenderer.getOrRenderByHash(hash, gridPx);
         }

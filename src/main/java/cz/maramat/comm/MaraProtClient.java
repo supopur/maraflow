@@ -255,10 +255,16 @@ public final class MaraProtClient implements Closeable {
         cfg.setBootMode(resp[35] == 1 ? cz.maramat.model.UnitConfig.BootMode.BOOT_TO_STOP : cz.maramat.model.UnitConfig.BootMode.AUTO_RUN);
         cfg.setSafeOutputsOnStop(resp[36] != 0);
         cfg.setWatchdogEnabled(resp[37] != 0);
+        if (resp.length >= 50) {
+            int modeOrd = resp[48] & 0xFF;
+            cz.maramat.model.UnitConfig.Rs485Mode[] modes = cz.maramat.model.UnitConfig.Rs485Mode.values();
+            cfg.setRs485Mode((modeOrd >= 0 && modeOrd < modes.length) ? modes[modeOrd] : cz.maramat.model.UnitConfig.Rs485Mode.MARAPROT);
+            cfg.setRs485BaudIndex(resp[49] & 0xFF);
+        }
     }
 
     public synchronized void writeUnitConfig(cz.maramat.model.UnitConfig cfg) throws IOException {
-        byte[] req = new byte[48];
+        byte[] req = new byte[50];
         byte[] nameBytes = cfg.getUnitName().getBytes(StandardCharsets.UTF_8);
         System.arraycopy(nameBytes, 0, req, 0, Math.min(nameBytes.length, 15));
         req[16] = (byte) (cfg.getStationId() & 0xFF);
@@ -279,6 +285,8 @@ public final class MaraProtClient implements Closeable {
             byte[] pwBytes = pw.getBytes(StandardCharsets.UTF_8);
             System.arraycopy(pwBytes, 0, req, 38, Math.min(pwBytes.length, 10));
         }
+        req[48] = (byte) (cfg.getRs485Mode().ordinal() & 0xFF);
+        req[49] = (byte) (cfg.getRs485BaudIndex() & 0xFF);
         transceive(OP_UNIT_CONFIG_SET, req, 1500);
     }
 

@@ -58,6 +58,8 @@ public final class MflProjectSerializer {
         props.setProperty("project.unit.bootMode", ucfg.getBootMode().name());
         props.setProperty("project.unit.safeOutputsOnStop", Boolean.toString(ucfg.isSafeOutputsOnStop()));
         props.setProperty("project.unit.watchdogEnabled", Boolean.toString(ucfg.isWatchdogEnabled()));
+        props.setProperty("project.unit.rs485Mode", ucfg.getRs485Mode().name());
+        props.setProperty("project.unit.rs485BaudRate", Integer.toString(ucfg.getRs485BaudRate()));
 
         EStopConfig ecfg = project.getEStopConfig();
         props.setProperty("project.estop.enabled", Boolean.toString(ecfg.isEnabled()));
@@ -331,6 +333,12 @@ public final class MflProjectSerializer {
         } catch (IllegalArgumentException ignored) {}
         ucfg.setSafeOutputsOnStop(Boolean.parseBoolean(props.getProperty("project.unit.safeOutputsOnStop", "true")));
         ucfg.setWatchdogEnabled(Boolean.parseBoolean(props.getProperty("project.unit.watchdogEnabled", "true")));
+        try {
+            ucfg.setRs485Mode(UnitConfig.Rs485Mode.valueOf(props.getProperty("project.unit.rs485Mode", UnitConfig.Rs485Mode.MARAPROT.name())));
+        } catch (IllegalArgumentException ignored) {}
+        try {
+            ucfg.setRs485BaudRate(Integer.parseInt(props.getProperty("project.unit.rs485BaudRate", "115200")));
+        } catch (NumberFormatException ignored) {}
 
         EStopConfig ecfg = project.getEStopConfig();
         ecfg.setEnabled(Boolean.parseBoolean(props.getProperty("project.estop.enabled", "false")));

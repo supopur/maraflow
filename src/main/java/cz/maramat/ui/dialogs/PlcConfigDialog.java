@@ -61,6 +61,8 @@ public class PlcConfigDialog extends JDialog {
     private JComboBox<UnitConfig.BootMode> bootModeCombo;
     private JCheckBox safeOutputsCheck;
     private JCheckBox watchdogCheck;
+    private JComboBox<UnitConfig.Rs485Mode> rs485ModeCombo;
+    private JComboBox<Integer> rs485BaudCombo;
     private JPasswordField accessPassField;
 
     // E-Stop fields
@@ -197,6 +199,22 @@ public class PlcConfigDialog extends JDialog {
         rootGc.gridy = 1;
         container.add(netPanel, rootGc);
 
+        // 2b. RS-485 / Serial Configuration
+        JPanel rs485Panel = new JPanel(new GridBagLayout());
+        rs485Panel.setBorder(BorderFactory.createTitledBorder("RS-485 / Serial Bus Configuration"));
+        GridBagConstraints gRs = createGbc();
+        rs485ModeCombo = new JComboBox<>(UnitConfig.Rs485Mode.values());
+        rs485ModeCombo.setSelectedItem(ucfg.getRs485Mode());
+        rs485BaudCombo = new JComboBox<>();
+        for (int b : UnitConfig.RS485_BAUD_RATES) {
+            rs485BaudCombo.addItem(b);
+        }
+        rs485BaudCombo.setSelectedItem(ucfg.getRs485BaudRate());
+        addRow(rs485Panel, gRs, 0, "RS-485 Mode:", rs485ModeCombo);
+        addRow(rs485Panel, gRs, 1, "RS-485 Baud Rate:", rs485BaudCombo);
+        rootGc.gridy = 2;
+        container.add(rs485Panel, rootGc);
+
         // 3. Status Outputs & Startup
         JPanel ioPanel = new JPanel(new GridBagLayout());
         ioPanel.setBorder(BorderFactory.createTitledBorder("Status Outputs, Boot & Security"));
@@ -226,7 +244,7 @@ public class PlcConfigDialog extends JDialog {
         g3.gridy = 6;
         ioPanel.add(watchdogCheck, g3);
 
-        rootGc.gridy = 2;
+        rootGc.gridy = 3;
         rootGc.weighty = 1.0;
         rootGc.anchor = GridBagConstraints.NORTH;
         container.add(ioPanel, rootGc);
@@ -398,6 +416,11 @@ public class PlcConfigDialog extends JDialog {
         ucfg.setBootMode((UnitConfig.BootMode) bootModeCombo.getSelectedItem());
         ucfg.setSafeOutputsOnStop(safeOutputsCheck.isSelected());
         ucfg.setWatchdogEnabled(watchdogCheck.isSelected());
+        ucfg.setRs485Mode((UnitConfig.Rs485Mode) rs485ModeCombo.getSelectedItem());
+        Object selBaud = rs485BaudCombo.getSelectedItem();
+        if (selBaud instanceof Integer b) {
+            ucfg.setRs485BaudRate(b);
+        }
         ucfg.setAccessPassword(new String(accessPassField.getPassword()));
 
         EStopConfig cfg = project.getEStopConfig();
