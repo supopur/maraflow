@@ -2,6 +2,7 @@ package cz.maramat;
 
 import com.formdev.flatlaf.FlatLightLaf;
 import cz.maramat.ui.AppIcon;
+import cz.maramat.ui.DisplayWakeRepaintFix;
 import cz.maramat.ui.MainWindow;
 
 import javax.swing.SwingUtilities;
@@ -40,6 +41,7 @@ public class Main {
         UIManager.put("defaultFont", uiFont);
 
         SwingUtilities.invokeLater(() -> {
+            DisplayWakeRepaintFix.install();
             MainWindow window = new MainWindow();
             window.setVisible(true);
         });
