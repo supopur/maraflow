@@ -119,7 +119,8 @@ public class NewProjectWizardDialog extends JDialog {
 
         // Left Step Sidebar
         JPanel sidebar = new JPanel(new GridLayout(6, 1, 0, 4));
-        sidebar.setBackground(new Color(0xE6, 0xEC, 0xF2));
+        sidebar.setBackground(cz.maramat.settings.AppSettings.get().isDarkMode()
+                ? new Color(0x1E, 0x21, 0x26) : new Color(0xE6, 0xEC, 0xF2));
         sidebar.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createMatteBorder(0, 0, 0, 1, new Color(0xB8, 0xB8, 0xB8)),
                 BorderFactory.createEmptyBorder(12, 10, 12, 10)
@@ -377,8 +378,13 @@ public class NewProjectWizardDialog extends JDialog {
         stepCards.show(centerCardPanel, "STEP_" + currentStep);
         for (int i = 0; i < 3; i++) {
             boolean active = (i == currentStep);
-            stepLabels[i].setBackground(active ? new Color(0x00, 0x80, 0x80) : new Color(0xE6, 0xEC, 0xF2));
-            stepLabels[i].setForeground(active ? Color.WHITE : new Color(0x22, 0x22, 0x22));
+            boolean dark = cz.maramat.settings.AppSettings.get().isDarkMode();
+            stepLabels[i].setBackground(active
+                    ? new Color(0x00, 0x80, 0x80)
+                    : (dark ? new Color(0x1E, 0x21, 0x26) : new Color(0xE6, 0xEC, 0xF2)));
+            stepLabels[i].setForeground(active
+                    ? Color.WHITE
+                    : (dark ? new Color(0xF5, 0xF7, 0xFA) : new Color(0x22, 0x22, 0x22)));
         }
         backBtn.setEnabled(currentStep > 0);
         nextBtn.setEnabled(currentStep < 2);

@@ -75,6 +75,10 @@ public class CommunicationDialog extends JDialog {
     };
 
     public CommunicationDialog(Frame owner, Project project, Mode mode) {
+        this(owner, project, mode, false);
+    }
+
+    private CommunicationDialog(Frame owner, Project project, Mode mode, boolean headlessAutoRun) {
         super(owner, switch (mode) {
             case UPLOAD -> "Communication - Upload Bytecode to PLC";
             case WATCH -> "Communication - Connect Watch Mode";
@@ -84,19 +88,128 @@ public class CommunicationDialog extends JDialog {
         }, true);
         this.project = project;
         this.mode = mode;
-        buildUi();
-        pack();
-        setMinimumSize(new Dimension(450, 320));
-        setLocationRelativeTo(owner);
+        if (!headlessAutoRun) {
+            buildUi();
+            pack();
+            setMinimumSize(new Dimension(450, 320));
+            setLocationRelativeTo(owner);
+        }
+    }
+
+    /**
+     * Ensures communication settings have been configured; if not, opens Communication Settings first.
+     */
+    public static boolean ensureCommConfigured(Frame owner, Project project) {
+        if (AppSettings.get().isCommConfigured()) {
+            return true;
+        }
+        CommunicationDialog dlg = new CommunicationDialog(owner, project, Mode.SETTINGS_ONLY);
+        dlg.setVisible(true);
+        return dlg.isConnectionSucceeded();
+    }
+
+    /**
+     * Executes a PLC communication action using the persisted Communication Settings,
+     * prompting for Communication Settings first if none have been saved yet.
+     */
+    public static CommunicationDialog runConfigured(Frame owner, Project project, Mode mode) {
+        if (!ensureCommConfigured(owner, project)) {
+            return new CommunicationDialog(owner, project, mode, true);
+        }
+        CommunicationDialog runner = new CommunicationDialog(owner, project, mode, true);
+        runner.executeConfigured(owner);
+        return runner;
+    }
+
+    public static MaraTransport createConfiguredTransport() {
+        AppSettings s = AppSettings.get();
+        String method = s.getDefaultCommMethod();
+        if ("Ethernet (TCP)".equals(method)) {
+            return new MaraTransport.TcpTransport(s.getLastTcpIp(), s.getLastTcpPort());
+        }
+        if ("RS485 (Serial)".equals(method)) {
+            int baud = 115200;
+            try { baud = Integer.parseInt(s.getLastRs485Baud().trim()); } catch (NumberFormatException ignored) {}
+            return new MaraTransport.SerialCdcTransport(s.getLastRs485Port(), baud);
+        }
+        int baud = 115200;
+        try { baud = Integer.parseInt(s.getDefaultBaudRate().trim()); } catch (NumberFormatException ignored) {}
+        return new MaraTransport.SerialCdcTransport(s.getDefaultSerialPort(), baud);
+    }
+
+    public static int getConfiguredStationId() {
+        AppSettings s = AppSettings.get();
+        String method = s.getDefaultCommMethod();
+        if ("RS485 (Serial)".equals(method)) return s.getLastRs485StationId();
+        if ("Ethernet (TCP)".equals(method)) return s.getLastTcpUnitId();
+        return 0;
+    }
+
+    public static String getConfiguredPassword() {
+        AppSettings s = AppSettings.get();
+        String method = s.getDefaultCommMethod();
+        if ("RS485 (Serial)".equals(method)) return s.loadCommPassword("rs485", "admin");
+        if ("Ethernet (TCP)".equals(method)) return s.loadCommPassword("tcp", "admin");
+        return s.loadCommPassword("usb", "admin");
+    }
+
+    private void executeConfigured(java.awt.Component parentForDialogs) {
+        MaraTransport transport = createConfiguredTransport();
+        int stationId = getConfiguredStationId();
+        String password = getConfiguredPassword();
+        MaraProtClient client = new MaraProtClient(transport, stationId);
+
+        if (mode == Mode.UPLOAD || mode == Mode.WATCH) {
+            executeUploadWithProgress(client, password);
+            return;
+        }
+
+        try {
+            client.connect();
+            client.authenticate(password);
+            if (mode == Mode.SYNC_RTC) {
+                long epochSec = java.time.Instant.now().getEpochSecond();
+                client.setRtcUnixSec(epochSec);
+                client.close();
+            } else if (mode == Mode.UNIT_CONFIG) {
+                client.getInfo();
+                client.readUnitConfig(project.getUnitConfig());
+                try { client.readModbusMap(project.getUnitConfig()); } catch (Exception ignored) {}
+                this.connectedClient = client;
+            } else {
+                client.getInfo();
+                this.compiledProgram = BytecodeCompiler.compileProgram(project);
+                this.connectedClient = client;
+            }
+            connectionSucceeded = true;
+        } catch (Exception ex) {
+            try { client.close(); } catch (Exception ignored) {}
+            int choice = JOptionPane.showConfirmDialog(
+                    parentForDialogs,
+                    "MaraProt communication failed:\n" + ex.getMessage() + "\n\nOpen Communication Settings?",
+                    "Communication Error",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.ERROR_MESSAGE
+            );
+            if (choice == JOptionPane.YES_OPTION) {
+                Frame owner = (parentForDialogs instanceof Frame f) ? f : null;
+                CommunicationDialog cfg = new CommunicationDialog(owner, project, Mode.SETTINGS_ONLY);
+                cfg.setVisible(true);
+                if (cfg.isConnectionSucceeded()) {
+                    executeConfigured(parentForDialogs);
+                }
+            }
+        }
     }
 
     private void buildUi() {
         JPanel root = new JPanel(new BorderLayout(8, 8));
         root.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
 
+        java.util.List<String> detectedPorts = MaraTransport.listSerialPorts();
         methodTabs = new JTabbedPane();
-        methodTabs.addTab("USB (CDC)", buildUsbPanel());
-        methodTabs.addTab("RS485 (Serial)", buildRs485Panel());
+        methodTabs.addTab("USB (CDC)", buildUsbPanel(detectedPorts));
+        methodTabs.addTab("RS485 (Serial)", buildRs485Panel(detectedPorts));
         methodTabs.addTab("Ethernet (TCP)", buildEthernetPanel());
 
         String defMethod = AppSettings.get().getDefaultCommMethod();
@@ -155,21 +268,12 @@ public class CommunicationDialog extends JDialog {
         setContentPane(root);
     }
 
-    private JPanel buildUsbPanel() {
+    private JPanel buildUsbPanel(java.util.List<String> detectedPorts) {
         JPanel p = new JPanel(new GridBagLayout());
         p.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
         GridBagConstraints gbc = createGbc();
 
-        java.util.List<String> detectedPorts = MaraTransport.listSerialPorts();
-        String[] portItems = detectedPorts.isEmpty() ? SERIAL_PORTS : detectedPorts.toArray(new String[0]);
-        usbPortBox = new JComboBox<>(portItems);
-        usbPortBox.setEditable(true);
-        String savedUsbPort = AppSettings.get().getDefaultSerialPort();
-        if (savedUsbPort != null && !savedUsbPort.isBlank()) {
-            usbPortBox.setSelectedItem(savedUsbPort);
-        } else if (!detectedPorts.isEmpty()) {
-            usbPortBox.setSelectedIndex(0);
-        }
+        usbPortBox = createSerialPortComboBox(detectedPorts, AppSettings.get().getDefaultSerialPort());
         usbBaudBox = new JComboBox<>(BAUD_RATES);
         usbBaudBox.setSelectedItem(AppSettings.get().getDefaultBaudRate());
         usbAddrSpinner = new JSpinner(new SpinnerNumberModel(AppSettings.get().getLastUsbStationId(), 0, 254, 1));
@@ -182,14 +286,12 @@ public class CommunicationDialog extends JDialog {
         return p;
     }
 
-    private JPanel buildRs485Panel() {
+    private JPanel buildRs485Panel(java.util.List<String> detectedPorts) {
         JPanel p = new JPanel(new GridBagLayout());
         p.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
         GridBagConstraints gbc = createGbc();
 
-        rs485PortBox = new JComboBox<>(SERIAL_PORTS);
-        rs485PortBox.setEditable(true);
-        rs485PortBox.setSelectedItem(AppSettings.get().getLastRs485Port());
+        rs485PortBox = createSerialPortComboBox(detectedPorts, AppSettings.get().getLastRs485Port());
         rs485BaudBox = new JComboBox<>(BAUD_RATES);
         rs485BaudBox.setSelectedItem(AppSettings.get().getLastRs485Baud());
         rs485ParityBox = new JComboBox<>(new String[]{"None (8N1)", "Even (8E1)", "Odd (8O1)"});
@@ -203,6 +305,18 @@ public class CommunicationDialog extends JDialog {
         addRow(p, gbc, 3, "Station Address:", rs485StationSpinner);
         addRow(p, gbc, 4, "PLC Password:", rs485PassField);
         return p;
+    }
+
+    private JComboBox<String> createSerialPortComboBox(java.util.List<String> detectedPorts, String savedPort) {
+        String[] portItems = detectedPorts.isEmpty() ? SERIAL_PORTS : detectedPorts.toArray(new String[0]);
+        JComboBox<String> box = new JComboBox<>(portItems);
+        box.setEditable(true);
+        if (savedPort != null && !savedPort.isBlank()) {
+            box.setSelectedItem(savedPort);
+        } else if (!detectedPorts.isEmpty()) {
+            box.setSelectedIndex(0);
+        }
+        return box;
     }
 
     private JPanel buildEthernetPanel() {
@@ -380,6 +494,7 @@ public class CommunicationDialog extends JDialog {
 
     private void saveInputsToSettings() {
         AppSettings s = AppSettings.get();
+        s.setCommConfigured(true);
         s.setDefaultCommMethod(methodTabs.getTitleAt(methodTabs.getSelectedIndex()));
         s.setDefaultSerialPort(String.valueOf(usbPortBox.getSelectedItem()).trim());
         s.setDefaultBaudRate(String.valueOf(usbBaudBox.getSelectedItem()).trim());

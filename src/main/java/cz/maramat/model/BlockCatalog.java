@@ -225,6 +225,27 @@ public final class BlockCatalog {
                 4, 2, false, false, 0.20
         ));
         reg(new BlockDefinition(
+                "Comm.I2C.BME280", "Communication/I2C", "BME280", "BME280",
+                List.of(enPin()),
+                List.of(
+                        pin("Tmp", "Temperature (deg C)", DataType.FLOAT, "25"),
+                        pin("Hum", "Relative Humidity (%RH)", DataType.FLOAT, "50"),
+                        pin("Prs", "Pressure (hPa)", DataType.FLOAT, "1013.25"),
+                        pin("Ok", "Sensor I2C ACK OK", DataType.BOOL, "1")
+                ),
+                4, 4, false, false, 0.35
+        ));
+        reg(new BlockDefinition(
+                "Comm.I2C.SHT40", "Communication/I2C", "SHT40", "SHT40",
+                List.of(enPin()),
+                List.of(
+                        pin("Tmp", "Temperature (deg C)", DataType.FLOAT, "25"),
+                        pin("Hum", "Relative Humidity (%RH)", DataType.FLOAT, "50"),
+                        pin("Ok", "Sensor I2C ACK OK", DataType.BOOL, "1")
+                ),
+                4, 3, false, false, 0.30
+        ));
+        reg(new BlockDefinition(
                 "Comm.I2C.I2CRead", "Communication/I2C", "I2CRead", "I2CRd",
                 List.of(enPin()),
                 List.of(pin("Val", "Read Value", DataType.INT, "0"), pin("Ok", "I2C ACK OK", DataType.BOOL, "1")),

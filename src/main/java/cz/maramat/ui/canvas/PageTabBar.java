@@ -77,8 +77,7 @@ public class PageTabBar extends JPanel {
         super(new FlowLayout(FlowLayout.LEFT, 0, 0));
         this.project = project;
         this.listener = listener;
-        setBackground(new Color(0xEC, 0xF0, 0xF5));
-        setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(0xB8, 0xB8, 0xB8)));
+        applyThemeColors();
         addMouseListener(new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
@@ -90,6 +89,22 @@ public class PageTabBar extends JPanel {
             }
         });
         rebuildTabs();
+    }
+
+    @Override
+    public void updateUI() {
+        super.updateUI();
+        applyThemeColors();
+        if (project != null) {
+            rebuildTabs();
+        }
+    }
+
+    private void applyThemeColors() {
+        boolean dark = AppSettings.get().isDarkMode();
+        setBackground(dark ? new Color(0x1E, 0x20, 0x24) : new Color(0xEC, 0xF0, 0xF5));
+        setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0,
+                dark ? new Color(0x45, 0x4B, 0x54) : new Color(0xB8, 0xB8, 0xB8)));
     }
 
     public void setProject(Project project) {
@@ -124,12 +139,23 @@ public class PageTabBar extends JPanel {
             JLabel tab = new JLabel(page.getName());
             tab.setOpaque(true);
             tab.setFont(page.isMacro() ? italicFont : normalFont);
+            boolean dark = AppSettings.get().isDarkMode();
             if (page.isEStopPage()) {
-                tab.setBackground(selected ? new Color(0xFF, 0xF5, 0xF5) : new Color(0xF6, 0xDD, 0xE0));
-                tab.setForeground(new Color(0x88, 0x0E, 0x18));
+                if (dark) {
+                    tab.setBackground(selected ? new Color(0x4A, 0x1E, 0x22) : new Color(0x36, 0x1A, 0x1D));
+                    tab.setForeground(new Color(0xFF, 0xCC, 0xCE));
+                } else {
+                    tab.setBackground(selected ? new Color(0xFF, 0xF5, 0xF5) : new Color(0xF6, 0xDD, 0xE0));
+                    tab.setForeground(new Color(0x88, 0x0E, 0x18));
+                }
             } else {
-                tab.setBackground(selected ? Color.WHITE : new Color(0xE0, 0xE6, 0xEE));
-                tab.setForeground(new Color(0x11, 0x11, 0x11));
+                if (dark) {
+                    tab.setBackground(selected ? new Color(0x2D, 0x31, 0x39) : new Color(0x22, 0x25, 0x2B));
+                    tab.setForeground(new Color(0xF5, 0xF7, 0xFA));
+                } else {
+                    tab.setBackground(selected ? Color.WHITE : new Color(0xE0, 0xE6, 0xEE));
+                    tab.setForeground(new Color(0x11, 0x11, 0x11));
+                }
             }
             tab.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
@@ -145,7 +171,7 @@ public class PageTabBar extends JPanel {
             }
             tab.setBorder(BorderFactory.createCompoundBorder(
                     BorderFactory.createMatteBorder(selected ? 2 : 0, 0, 0, 1,
-                            selected ? topBarColor : new Color(0xB8, 0xB8, 0xB8)),
+                            selected ? topBarColor : (dark ? new Color(0x45, 0x4B, 0x54) : new Color(0xB8, 0xB8, 0xB8))),
                     BorderFactory.createEmptyBorder(selected ? 3 : 5, 10, 4, 10)
             ));
             tab.setToolTipText(page.getName() + " (" + page.getLanguage().getDisplayName() + ") — Drag out to open in separate window");

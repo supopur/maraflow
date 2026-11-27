@@ -84,6 +84,29 @@ static int32_t sim_comm_exec(uint8_t busType, uint16_t descId, int64_t txVal, in
         if (p_err != NULL)   { *p_err = 0; }
         return 0;
     }
+    if (busType == VM_COMM_BME280) {
+        int16_t  t_x100 = 2450;
+        uint16_t h_x100 = 4800U;
+        uint32_t p_pa   = 101325U;
+        uint64_t packed = ((uint64_t)(uint16_t)t_x100) | ((uint64_t)h_x100 << 16U) | ((uint64_t)p_pa << 32U);
+        if (p_rxVal != NULL) { *p_rxVal = (int64_t)packed; }
+        if (p_err != NULL)   { *p_err = 0; }
+        return 0;
+    }
+    if (busType == VM_COMM_SHT40) {
+        int16_t  t_x100 = 2450;
+        uint16_t h_x100 = 4800U;
+        uint64_t packed = ((uint64_t)(uint16_t)t_x100) | ((uint64_t)h_x100 << 16U);
+        if (p_rxVal != NULL) { *p_rxVal = (int64_t)packed; }
+        if (p_err != NULL)   { *p_err = 0; }
+        return 0;
+    }
+    if (busType == VM_COMM_REST_GET || busType == VM_COMM_REST_POST) {
+        uint64_t packed = ((uint64_t)200U << 32U) | ((uint64_t)1U << 48U);
+        if (p_rxVal != NULL) { *p_rxVal = (int64_t)packed; }
+        if (p_err != NULL)   { *p_err = 0; }
+        return 0;
+    }
     if (p_err != NULL) { *p_err = 1; }
     return -1;
 }

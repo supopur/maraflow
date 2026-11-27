@@ -87,9 +87,10 @@ public class FloatingPageWindow {
             protected void paintComponent(Graphics g) {
                 super.paintComponent(g);
                 Graphics2D g2 = (Graphics2D) g;
+                boolean dark = AppSettings.get().isDarkMode();
                 GradientPaint gp = new GradientPaint(
-                        0, 0, new Color(0xE8, 0xEE, 0xF5),
-                        0, getHeight(), new Color(0xCD, 0xD7, 0xE4)
+                        0, 0, dark ? new Color(0x32, 0x36, 0x3F) : new Color(0xE8, 0xEE, 0xF5),
+                        0, getHeight(), dark ? new Color(0x27, 0x2A, 0x31) : new Color(0xCD, 0xD7, 0xE4)
                 );
                 g2.setPaint(gp);
                 g2.fillRect(0, 0, getWidth(), getHeight());
@@ -104,7 +105,8 @@ public class FloatingPageWindow {
         String langBadge = "[" + page.getLanguage().getDisplayName() + "] ";
         this.titleLabel = new JLabel(langBadge + page.getName());
         titleLabel.setFont(cz.maramat.ui.AppFonts.uiBold());
-        titleLabel.setForeground(new Color(0x22, 0x2A, 0x35));
+        titleLabel.setForeground(AppSettings.get().isDarkMode()
+                ? new Color(0xF5, 0xF7, 0xFA) : new Color(0x22, 0x2A, 0x35));
         header.add(titleLabel, BorderLayout.WEST);
 
         // Header Action Buttons: Minimize, Maximize, Close

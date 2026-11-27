@@ -358,17 +358,28 @@ public class ModulePropertiesDialog extends JDialog {
                     chBox.setSelectedItem(v);
                     addRow(p, gbc, row++, "I/O Channel:", chBox);
                     specificControls.put(k, chBox);
-                } else if (k.equals("DeviceAddressHex") && "Comm.I2C.TMP75".equals(defId)) {
-                    JComboBox<String> addrBox = new JComboBox<>(new String[]{
-                            "0x48 (A2=0, A1=0, A0=0)",
-                            "0x49 (A2=0, A1=0, A0=1)",
-                            "0x4A (A2=0, A1=1, A0=0)",
-                            "0x4B (A2=0, A1=1, A0=1)",
-                            "0x4C (A2=1, A1=0, A0=0)",
-                            "0x4D (A2=1, A1=0, A0=1)",
-                            "0x4E (A2=1, A1=1, A0=0)",
-                            "0x4F (A2=1, A1=1, A0=1)"
-                    });
+                } else if (k.equals("DeviceAddressHex") && ("Comm.I2C.TMP75".equals(defId) || "Comm.I2C.BME280".equals(defId) || "Comm.I2C.SHT40".equals(defId))) {
+                    String[] opts = switch (defId) {
+                        case "Comm.I2C.BME280" -> new String[]{
+                                "0x76 (SDO=GND)",
+                                "0x77 (SDO=VDD)"
+                        };
+                        case "Comm.I2C.SHT40" -> new String[]{
+                                "0x44 (SHT40-AD1B)",
+                                "0x45 (SHT40-BD1B)"
+                        };
+                        default -> new String[]{
+                                "0x48 (A2=0, A1=0, A0=0)",
+                                "0x49 (A2=0, A1=0, A0=1)",
+                                "0x4A (A2=0, A1=1, A0=0)",
+                                "0x4B (A2=0, A1=1, A0=1)",
+                                "0x4C (A2=1, A1=0, A0=0)",
+                                "0x4D (A2=1, A1=0, A0=1)",
+                                "0x4E (A2=1, A1=1, A0=0)",
+                                "0x4F (A2=1, A1=1, A0=1)"
+                        };
+                    };
+                    JComboBox<String> addrBox = new JComboBox<>(opts);
                     addrBox.setEditable(true);
                     String match = v;
                     for (int i = 0; i < addrBox.getItemCount(); i++) {
@@ -378,7 +389,12 @@ public class ModulePropertiesDialog extends JDialog {
                         }
                     }
                     addrBox.setSelectedItem(match);
-                    addRow(p, gbc, row++, "TMP75 I2C Address:", addrBox);
+                    String label = switch (defId) {
+                        case "Comm.I2C.BME280" -> "BME280 I2C Address:";
+                        case "Comm.I2C.SHT40" -> "SHT40 I2C Address:";
+                        default -> "TMP75 I2C Address:";
+                    };
+                    addRow(p, gbc, row++, label, addrBox);
                     specificControls.put(k, addrBox);
                 } else if (k.equals("OneWirePin") && defId.startsWith("Comm.DS18B20")) {
                     JComboBox<String> pinBox = new JComboBox<>(DIO_PIN_IDS);
@@ -427,6 +443,34 @@ public class ModulePropertiesDialog extends JDialog {
                     maskPanel.putClientProperty("digitCheckboxes", cbs);
                     addRow(p, gbc, row++, "Active Digits:", maskPanel);
                     specificControls.put(k, maskPanel);
+                } else if (k.equals("RegisterType") && defId.startsWith("Comm.Modbus")) {
+                    boolean isWrite = defId.endsWith("Write");
+                    String[] regTypes = isWrite
+                            ? new String[]{
+                                    "MHR - Modbus Holding Register",
+                                    "MCO - Modbus Coil"
+                            }
+                            : new String[]{
+                                    "MHR - Modbus Holding Register",
+                                    "MIR - Modbus Input Register",
+                                    "MCO - Modbus Coil",
+                                    "MDI - Modbus Discrete Input"
+                            };
+                    JComboBox<String> regTypeBox = new JComboBox<>(regTypes);
+                    String match = regTypes[0];
+                    if (v != null) {
+                        String u = v.trim().toUpperCase();
+                        for (String opt : regTypes) {
+                            String prefix = opt.substring(0, 3);
+                            if (u.startsWith(prefix) || opt.equalsIgnoreCase(v.trim())) {
+                                match = opt;
+                                break;
+                            }
+                        }
+                    }
+                    regTypeBox.setSelectedItem(match);
+                    addRow(p, gbc, row++, "Register Type:", regTypeBox);
+                    specificControls.put(k, regTypeBox);
                 } else {
                     JTextField tf = new JTextField(v, 12);
                     addRow(p, gbc, row++, k + ":", tf);
@@ -462,20 +506,15 @@ public class ModulePropertiesDialog extends JDialog {
                 try { dioPin = Integer.parseInt(digits); } catch (NumberFormatException ignored) {}
             }
         }
-        java.util.List<String> ports = cz.maramat.comm.MaraTransport.listSerialPorts();
-        if (ports.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "No USB serial port detected for Duino - S.", "1-Wire Bus Scan", JOptionPane.WARNING_MESSAGE);
+        Frame owner = cz.maramat.ui.AppFonts.resolveFrameOwner(this);
+        if (!CommunicationDialog.ensureCommConfigured(owner, project)) {
             return;
         }
-        String port = ports.size() == 1 ? ports.getFirst() : (String) JOptionPane.showInputDialog(
-                this, "Select Duino - S USB Port:", "1-Wire Bus Scan (DIO" + dioPin + ")",
-                JOptionPane.QUESTION_MESSAGE, null, ports.toArray(new String[0]), ports.getFirst()
-        );
-        if (port == null || port.isBlank()) return;
 
         try (cz.maramat.comm.MaraProtClient client = new cz.maramat.comm.MaraProtClient(
-                new cz.maramat.comm.MaraTransport.SerialCdcTransport(port, 115200), 0)) {
+                CommunicationDialog.createConfiguredTransport(), CommunicationDialog.getConfiguredStationId())) {
             client.connect();
+            client.authenticate(CommunicationDialog.getConfiguredPassword());
             java.util.List<String> roms = client.scanOneWireBus(dioPin);
             if (roms.isEmpty()) {
                 JOptionPane.showMessageDialog(this, "No DS18B20 sensors found on DIO" + dioPin + ".", "1-Wire Bus Scan", JOptionPane.INFORMATION_MESSAGE);
@@ -700,7 +739,7 @@ public class ModulePropertiesDialog extends JDialog {
                     String val = sel.toString().trim();
                     if (key.equals("Channel") && block.isIoRef()) {
                         block.setIoRefChannel(val);
-                    } else if (key.equals("DeviceAddressHex") && "Comm.I2C.TMP75".equals(block.getDefinitionId())) {
+                    } else if (key.equals("DeviceAddressHex") && ("Comm.I2C.TMP75".equals(block.getDefinitionId()) || "Comm.I2C.BME280".equals(block.getDefinitionId()) || "Comm.I2C.SHT40".equals(block.getDefinitionId()))) {
                         block.getCustomProperties().put(key, val.split("\\s+")[0]);
                     } else {
                         block.getCustomProperties().put(key, val);

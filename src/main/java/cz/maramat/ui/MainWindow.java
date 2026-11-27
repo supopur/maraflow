@@ -1617,8 +1617,7 @@ public class MainWindow extends JFrame {
             });
             return;
         }
-        CommunicationDialog dlg = new CommunicationDialog(this, project, CommunicationDialog.Mode.SYNC_RTC);
-        dlg.setVisible(true);
+        CommunicationDialog dlg = CommunicationDialog.runConfigured(this, project, CommunicationDialog.Mode.SYNC_RTC);
         if (dlg.isConnectionSucceeded()) {
             plcLogPanel.appendLog("Synchronized STM32F407 hardware RTC with host time.");
             JOptionPane.showMessageDialog(this, "PLC RTC synchronized to host system clock.", "RTC Sync", JOptionPane.INFORMATION_MESSAGE);
@@ -1627,8 +1626,7 @@ public class MainWindow extends JFrame {
 
     private void actionUpload() {
         if (!projectOpen) return;
-        CommunicationDialog commDlg = new CommunicationDialog(this, project, CommunicationDialog.Mode.UPLOAD);
-        commDlg.setVisible(true);
+        CommunicationDialog commDlg = CommunicationDialog.runConfigured(this, project, CommunicationDialog.Mode.UPLOAD);
         if (commDlg.isConnectionSucceeded()) {
             plcLogPanel.appendLog("Bytecode uploaded to PLC (" + project.getTargetPlatform() + ").");
         }
@@ -1639,8 +1637,7 @@ public class MainWindow extends JFrame {
 
     private void actionUploadAndWatch() {
         if (!projectOpen) return;
-        CommunicationDialog commDlg = new CommunicationDialog(this, project, CommunicationDialog.Mode.WATCH);
-        commDlg.setVisible(true);
+        CommunicationDialog commDlg = CommunicationDialog.runConfigured(this, project, CommunicationDialog.Mode.WATCH);
         if (commDlg.isConnectionSucceeded()) {
             plcLogPanel.appendLog("Bytecode uploaded. Transitioning into PLC Watch Mode (MaraProt delta polling).");
             simEngine.enterWatchMode(project);
@@ -1659,8 +1656,7 @@ public class MainWindow extends JFrame {
             editorToolbar.updateSimState(simEngine.getState());
             return;
         }
-        CommunicationDialog commDlg = new CommunicationDialog(this, project, CommunicationDialog.Mode.WATCH);
-        commDlg.setVisible(true);
+        CommunicationDialog commDlg = CommunicationDialog.runConfigured(this, project, CommunicationDialog.Mode.WATCH);
         if (commDlg.isConnectionSucceeded()) {
             plcLogPanel.appendLog("Connected to PLC. Editor transitioned into Watch Mode (editing any block exits Watch Mode).");
             simEngine.enterWatchMode(project);
@@ -1756,8 +1752,7 @@ public class MainWindow extends JFrame {
 
     private void actionOpenPlcConfig() {
         if (!projectOpen) return;
-        CommunicationDialog connDlg = new CommunicationDialog(this, project, CommunicationDialog.Mode.UNIT_CONFIG);
-        connDlg.setVisible(true);
+        CommunicationDialog connDlg = CommunicationDialog.runConfigured(this, project, CommunicationDialog.Mode.UNIT_CONFIG);
         if (!connDlg.isConnectionSucceeded()) {
             return;
         }

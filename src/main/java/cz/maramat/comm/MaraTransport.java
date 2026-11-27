@@ -103,12 +103,26 @@ public interface MaraTransport extends Closeable {
 
         @Override
         public void open() throws IOException {
-            socket = new Socket();
-            socket.connect(new InetSocketAddress(host, port), 2000);
-            socket.setTcpNoDelay(true);
-            socket.setSoTimeout(1000);
-            in = socket.getInputStream();
-            out = socket.getOutputStream();
+            IOException lastErr = null;
+            for (int attempt = 0; attempt < 2; attempt++) {
+                Socket s = new Socket();
+                try {
+                    s.connect(new InetSocketAddress(host, port), 4000);
+                    s.setTcpNoDelay(true);
+                    s.setSoTimeout(1000);
+                    socket = s;
+                    in = socket.getInputStream();
+                    out = socket.getOutputStream();
+                    return;
+                } catch (java.net.SocketTimeoutException e) {
+                    lastErr = e;
+                    try { s.close(); } catch (IOException ignored) {}
+                } catch (IOException e) {
+                    try { s.close(); } catch (IOException ignored) {}
+                    throw e;
+                }
+            }
+            throw lastErr;
         }
 
         @Override

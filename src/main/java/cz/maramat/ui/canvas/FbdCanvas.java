@@ -183,7 +183,7 @@ public class FbdCanvas extends JPanel {
         this.simEngine = simEngine;
         this.editListener = editListener;
 
-        setBackground(Color.WHITE);
+        applyThemeColors();
         setFocusable(true);
         ToolTipManager.sharedInstance().registerComponent(this);
         ToolTipManager.sharedInstance().setInitialDelay(200);
@@ -758,6 +758,10 @@ public class FbdCanvas extends JPanel {
                             VisualElementDialogs.triggerXVarAction(owner, hitBlock, FbdCanvas.this::repaint);
                             return;
                         }
+                    } else if (VisualElementDialogs.isSimClickableBlock(hitBlock) && simEngine.isShowingLiveOutputs()) {
+                        Frame owner = AppFonts.resolveFrameOwner(FbdCanvas.this);
+                        VisualElementDialogs.showSimulatedBlockPopup(owner, hitBlock, FbdCanvas.this::repaint);
+                        return;
                     }
 
                     if (e.getClickCount() == 2) {
@@ -765,8 +769,9 @@ public class FbdCanvas extends JPanel {
                         return;
                     }
 
-                    // During simulation or watch, prevent moving xVar blocks
-                    if (hitBlock.getDefinitionId().startsWith("Visual.Vars.") && simEngine.isShowingLiveOutputs()) {
+                    // During simulation or watch, prevent moving xVar and simulated sensor/REST blocks
+                    if ((hitBlock.getDefinitionId().startsWith("Visual.Vars.") || VisualElementDialogs.isSimClickableBlock(hitBlock))
+                            && simEngine.isShowingLiveOutputs()) {
                         return;
                     }
 
@@ -1313,7 +1318,8 @@ public class FbdCanvas extends JPanel {
 
     private void onBlockDoubleClicked(Page page, BlockInstance block) {
         Frame owner = AppFonts.resolveFrameOwner(this);
-        if (block.getDefinitionId().startsWith("Visual.Vars.") && simEngine.isShowingLiveOutputs()) {
+        if ((block.getDefinitionId().startsWith("Visual.Vars.") || VisualElementDialogs.isSimClickableBlock(block))
+                && simEngine.isShowingLiveOutputs()) {
             // During simulation or watch, properties modal is blocked to prevent accidental stop
             return;
         }
@@ -1454,7 +1460,8 @@ public class FbdCanvas extends JPanel {
         JMenuItem propsItem = new JMenuItem("Properties... (Double-Click)");
         propsItem.setFont(new Font(propsItem.getFont().getName(), Font.BOLD, propsItem.getFont().getSize()));
         propsItem.addActionListener(e -> onBlockDoubleClicked(page, block));
-        if (block.getDefinitionId().startsWith("Visual.Vars.") && simEngine.isShowingLiveOutputs()) {
+        if ((block.getDefinitionId().startsWith("Visual.Vars.") || VisualElementDialogs.isSimClickableBlock(block))
+                && simEngine.isShowingLiveOutputs()) {
             propsItem.setEnabled(false);
         }
         menu.add(propsItem);
@@ -2114,17 +2121,33 @@ public class FbdCanvas extends JPanel {
     }
 
     private int cachedGridStepPx = -1;
+    private boolean cachedGridDark = false;
     private java.awt.TexturePaint cachedGridPaint = null;
     private static final Color GRID_MINOR_DOT = new Color(0xBB, 0xC3, 0xCD);
     private static final Color GRID_MAJOR_DOT = new Color(0x7F, 0x8C, 0x9B);
+    private static final Color GRID_MINOR_DOT_DARK = new Color(0x34, 0x39, 0x42);
+    private static final Color GRID_MAJOR_DOT_DARK = new Color(0x52, 0x5A, 0x68);
+
+    @Override
+    public void updateUI() {
+        super.updateUI();
+        applyThemeColors();
+    }
+
+    private void applyThemeColors() {
+        boolean dark = AppSettings.get().isDarkMode();
+        setBackground(dark ? new Color(0x1B, 0x1D, 0x21) : Color.WHITE);
+        cachedGridPaint = null;
+    }
 
     private void paintDottedGrid(Graphics2D g2, int g) {
         if (g <= 0) return;
-        if (cachedGridPaint == null || cachedGridStepPx != g) {
+        boolean dark = AppSettings.get().isDarkMode();
+        if (cachedGridPaint == null || cachedGridStepPx != g || cachedGridDark != dark) {
             int tileSize = g * 10;
             java.awt.image.BufferedImage tile = new java.awt.image.BufferedImage(tileSize, tileSize, java.awt.image.BufferedImage.TYPE_INT_ARGB);
             Graphics2D tg = tile.createGraphics();
-            tg.setColor(GRID_MINOR_DOT);
+            tg.setColor(dark ? GRID_MINOR_DOT_DARK : GRID_MINOR_DOT);
             for (int gx = 0; gx < 10; gx++) {
                 int px = gx * g;
                 for (int gy = 0; gy < 10; gy++) {
@@ -2132,11 +2155,12 @@ public class FbdCanvas extends JPanel {
                     tg.fillRect(px, gy * g, 1, 1);
                 }
             }
-            tg.setColor(GRID_MAJOR_DOT);
+            tg.setColor(dark ? GRID_MAJOR_DOT_DARK : GRID_MAJOR_DOT);
             tg.fillRect(0, 0, 2, 2);
             tg.dispose();
             cachedGridPaint = new java.awt.TexturePaint(tile, new Rectangle(0, 0, tileSize, tileSize));
             cachedGridStepPx = g;
+            cachedGridDark = dark;
         }
 
         Rectangle clip = g2.getClipBounds();

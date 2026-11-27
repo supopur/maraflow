@@ -57,30 +57,24 @@ public class DockableSectionPanel extends JPanel {
         this.onUndockCallback = onUndockCallback;
         this.onRedockCallback = onRedockCallback;
 
-        setBorder(BorderFactory.createLineBorder(new Color(0x9A, 0xA6, 0xB4), 1));
-
         header = new JPanel(new BorderLayout()) {
             @Override
             protected void paintComponent(Graphics g) {
                 super.paintComponent(g);
                 Graphics2D g2 = (Graphics2D) g;
+                boolean dark = AppSettings.get().isDarkMode();
                 GradientPaint gp = new GradientPaint(
-                        0, 0, new Color(0xE8, 0xEE, 0xF5),
-                        0, getHeight(), new Color(0xCD, 0xD7, 0xE4)
+                        0, 0, dark ? new Color(0x32, 0x36, 0x3F) : new Color(0xE8, 0xEE, 0xF5),
+                        0, getHeight(), dark ? new Color(0x27, 0x2A, 0x31) : new Color(0xCD, 0xD7, 0xE4)
                 );
                 g2.setPaint(gp);
                 g2.fillRect(0, 0, getWidth(), getHeight());
             }
         };
         header.setPreferredSize(new Dimension(0, AppSettings.get().scale(22)));
-        header.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(0x9A, 0xA6, 0xB4)),
-                BorderFactory.createEmptyBorder(1, 6, 1, 3)
-        ));
 
         titleLabel = new JLabel(title);
         titleLabel.setFont(new Font("Segoe UI", Font.BOLD, AppSettings.get().scale(11)));
-        titleLabel.setForeground(new Color(0x22, 0x2A, 0x35));
         header.add(titleLabel, BorderLayout.WEST);
 
         if (onCloseClicked != null) {
@@ -101,6 +95,25 @@ public class DockableSectionPanel extends JPanel {
 
         add(header, BorderLayout.NORTH);
         add(content, BorderLayout.CENTER);
+        applyThemeColors();
+    }
+
+    @Override
+    public void updateUI() {
+        super.updateUI();
+        applyThemeColors();
+    }
+
+    private void applyThemeColors() {
+        if (header == null || titleLabel == null) return;
+        boolean dark = AppSettings.get().isDarkMode();
+        Color borderCol = dark ? new Color(0x45, 0x4B, 0x54) : new Color(0x9A, 0xA6, 0xB4);
+        setBorder(BorderFactory.createLineBorder(borderCol, 1));
+        header.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, borderCol),
+                BorderFactory.createEmptyBorder(1, 6, 1, 3)
+        ));
+        titleLabel.setForeground(dark ? new Color(0xF5, 0xF7, 0xFA) : new Color(0x22, 0x2A, 0x35));
     }
 
     public void setDockingCallbacks(Runnable onUndock, Runnable onRedock) {

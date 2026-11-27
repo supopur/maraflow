@@ -124,10 +124,20 @@ public class LadderCanvas extends JPanel {
         this.simEngine = simEngine;
         this.editListener = editListener;
 
-        setBackground(COLOR_BG);
+        applyThemeColors();
         setFocusable(true);
         installMouseHandlers();
         installDropTarget();
+    }
+
+    @Override
+    public void updateUI() {
+        super.updateUI();
+        applyThemeColors();
+    }
+
+    private void applyThemeColors() {
+        setBackground(AppSettings.get().isDarkMode() ? new Color(0x1B, 0x1D, 0x21) : COLOR_BG);
     }
 
     private Page forcedPage = null;

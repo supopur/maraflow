@@ -221,4 +221,36 @@ public class SimulationEngineTest {
         sim.setOperandValueFromPlc(project, "ControlST.Count", 123.0);
         assertEquals(10.0, vCount.getRuntimeValue(), "Late PLC update after watch stop must be ignored");
     }
+
+    @Test
+    void testManualEStopWorksAndEmitsHardwareHeader() {
+        Project project = Project.createDefaultSampleProject();
+        project.getEStopConfig().setEnabled(false);
+
+        SimulationEngine sim = new SimulationEngine(() -> {});
+        sim.setOperandValue(project, "DO20", 1.0);
+        sim.setManualEStopButtonPressed(true);
+        sim.stepOnceForTesting(project, 10.0);
+        assertTrue(sim.isEStopActive(), "Manual E-Stop must remain active even when hardware supervision is disabled");
+        assertEquals(0.0, sim.getOperandValue(project, "DO20"), "E-Stop must force DO20 to 0");
+
+        sim.manualResetEStop();
+        sim.stepOnceForTesting(project, 10.0);
+        assertEquals(false, sim.isEStopActive());
+
+        // Verify MflwEmitter packs EStopConfig into header offset 32
+        project.getEStopConfig().setEnabled(true);
+        project.getEStopConfig().setMode(cz.maramat.model.EStopConfig.Mode.DEDICATED_ESTOP_PAGE);
+        project.getEStopConfig().setManualResetRequired(true);
+        project.getEStopConfig().getInputRules().add(new cz.maramat.model.EStopConfig.InputRule(true, "DI3", true, "E-Stop"));
+        byte[] img = cz.maramat.compiler.MflwEmitter.emit(project).image();
+        int packed = java.nio.ByteBuffer.wrap(img).order(java.nio.ByteOrder.LITTLE_ENDIAN).getInt(32);
+        assertTrue((packed & 0x01) != 0, "Enabled bit must be set");
+        assertTrue((packed & 0x02) != 0, "Dedicated page mode bit must be set");
+        assertTrue((packed & 0x04) != 0, "Manual reset bit must be set");
+        int rule0 = (packed >>> 4) & 0x7F;
+        assertEquals(1, rule0 & 0x01, "Rule 0 enabled");
+        assertEquals(2, rule0 & 0x02, "Rule 0 activeLow");
+        assertEquals(3, (rule0 >>> 2) & 0x1F, "Rule 0 channel DI3");
+    }
 }

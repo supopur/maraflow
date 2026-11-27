@@ -582,11 +582,14 @@ public class EditorToolbar extends JToolBar {
                 BorderFactory.createEmptyBorder(3, 6, 3, 6)
         ));
         summaryLabel.setOpaque(true);
-        summaryLabel.setBackground(new Color(0xEE, 0xF2, 0xF7));
+        boolean dark = AppSettings.get().isDarkMode();
+        summaryLabel.setBackground(dark ? new Color(0x2B, 0x2F, 0x36) : new Color(0xEE, 0xF2, 0xF7));
+        summaryLabel.setForeground(dark ? new Color(0xF5, 0xF7, 0xFA) : Color.BLACK);
 
         List<JLabel> rowLabels = new ArrayList<>();
         Color highlightBg = new Color(0x00, 0x66, 0xCC);
-        Color normalBg = Color.WHITE;
+        Color normalBg = dark ? new Color(0x1E, 0x21, 0x26) : Color.WHITE;
+        Color normalFg = dark ? new Color(0xF5, 0xF7, 0xFA) : Color.BLACK;
 
         for (int i = 0; i < entries.size(); i++) {
             final int stepCount = i + 1;
@@ -594,7 +597,7 @@ public class EditorToolbar extends JToolBar {
             JLabel row = new JLabel("  " + stepCount + ". " + entry.actionName() + "  ");
             row.setOpaque(true);
             row.setBackground(i == 0 ? highlightBg : normalBg);
-            row.setForeground(i == 0 ? Color.WHITE : Color.BLACK);
+            row.setForeground(i == 0 ? Color.WHITE : normalFg);
             row.setBorder(BorderFactory.createEmptyBorder(3, 6, 3, 12));
             row.setFont(new Font("SansSerif", Font.PLAIN, 11));
 
@@ -604,7 +607,7 @@ public class EditorToolbar extends JToolBar {
                     for (int j = 0; j < rowLabels.size(); j++) {
                         boolean hl = (j < stepCount);
                         rowLabels.get(j).setBackground(hl ? highlightBg : normalBg);
-                        rowLabels.get(j).setForeground(hl ? Color.WHITE : Color.BLACK);
+                        rowLabels.get(j).setForeground(hl ? Color.WHITE : normalFg);
                     }
                     summaryLabel.setText(" " + verb + " " + stepCount + " operation" + (stepCount > 1 ? "s" : ""));
                 }
@@ -649,7 +652,9 @@ public class EditorToolbar extends JToolBar {
         this.currentSimState = state;
         boolean watching = (state == SimulationEngine.State.WATCH_MODE);
         boolean running = (state == SimulationEngine.State.RUNNING);
-        watchBtn.setBackground(watching ? new Color(0xB8, 0xE6, 0xC8) : null);
+        watchBtn.setBackground(watching
+                ? (AppSettings.get().isDarkMode() ? new Color(0x1E, 0x5E, 0x3A) : new Color(0xB8, 0xE6, 0xC8))
+                : null);
         playPauseBtn.setEnabled(!watching);
         if (running) {
             playPauseBtn.setIcon(VectorIcons.pauseIcon());

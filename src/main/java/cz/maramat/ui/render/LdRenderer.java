@@ -7,6 +7,7 @@ import cz.maramat.model.LadderElement;
 import cz.maramat.model.LadderRung;
 import cz.maramat.model.Page;
 import cz.maramat.model.PinInstance;
+import cz.maramat.settings.AppSettings;
 import cz.maramat.ui.AppFonts;
 
 import java.awt.BasicStroke;
@@ -32,6 +33,26 @@ public final class LdRenderer {
     public static final Color COLOR_RUNG_HEADER_BG = new Color(0xEE, 0xF2, 0xF7);
     public static final Color COLOR_RUNG_SELECTED_BG = new Color(0xE1, 0xEC, 0xFA);
     public static final Color COLOR_ELEMENT_SELECTED = new Color(0x00, 0x66, 0xCC);
+
+    private static boolean isDark(RenderOptions opts) {
+        return (opts == null || !opts.exporting()) && AppSettings.get().isDarkMode();
+    }
+
+    private static Color railColor(boolean dark) {
+        return dark ? new Color(0xD8, 0xDE, 0xE9) : COLOR_RAIL;
+    }
+
+    private static Color wireOffColor(boolean dark) {
+        return dark ? new Color(0xB8, 0xC2, 0xD0) : COLOR_WIRE_OFF;
+    }
+
+    private static Color canvasInk(boolean dark) {
+        return dark ? new Color(0xF5, 0xF7, 0xFA) : Color.BLACK;
+    }
+
+    private static Color commentInk(boolean dark) {
+        return dark ? new Color(0xC2, 0xCA, 0xD6) : new Color(0x55, 0x66, 0x77);
+    }
 
     private LdRenderer() {}
 
@@ -142,19 +163,20 @@ public final class LdRenderer {
             curY += rungHeight + 12;
         }
 
+        boolean dark = isDark(opts);
         int railBottom = Math.max(curY + (opts.exporting() ? 14 : 20), minRailBottom);
         Stroke oldStroke = g2.getStroke();
         g2.setStroke(new BasicStroke(3f));
-        g2.setColor(liveSim ? COLOR_POWER_ON : COLOR_RAIL);
+        g2.setColor(liveSim ? COLOR_POWER_ON : railColor(dark));
         g2.drawLine(leftRailX, 14, leftRailX, railBottom);
-        g2.setColor(COLOR_RAIL);
+        g2.setColor(railColor(dark));
         g2.drawLine(rightRailX, 14, rightRailX, railBottom);
         g2.setStroke(oldStroke);
 
         g2.setFont(AppFonts.ui(Font.BOLD, 11));
-        g2.setColor(liveSim ? COLOR_POWER_ON : COLOR_RAIL);
+        g2.setColor(liveSim ? COLOR_POWER_ON : railColor(dark));
         g2.drawString("L+ (24VDC)", leftRailX - 24, 12);
-        g2.setColor(COLOR_RAIL);
+        g2.setColor(railColor(dark));
         g2.drawString("L- (0V)", rightRailX - 18, 12);
     }
 
@@ -170,20 +192,24 @@ public final class LdRenderer {
             RenderOptions opts,
             HitCollector hits
     ) {
+        boolean dark = isDark(opts);
         boolean isRungSelected = !opts.exporting() && (ri == opts.selectedRungIndex());
 
         if (isRungSelected) {
-            g2.setColor(new Color(0xF6, 0xFA, 0xFF));
+            g2.setColor(dark ? new Color(0x21, 0x27, 0x33) : new Color(0xF6, 0xFA, 0xFF));
             g2.fillRect(leftRailX + 1, topY, rightRailX - leftRailX - 1, rungHeight);
         }
 
-        g2.setColor(isRungSelected ? COLOR_RUNG_SELECTED_BG : COLOR_RUNG_HEADER_BG);
+        g2.setColor(dark
+                ? (isRungSelected ? new Color(0x28, 0x38, 0x4E) : new Color(0x25, 0x29, 0x32))
+                : (isRungSelected ? COLOR_RUNG_SELECTED_BG : COLOR_RUNG_HEADER_BG));
         g2.fillRect(leftRailX + 1, topY, rightRailX - leftRailX - 1, 22);
-        g2.setColor(isRungSelected ? COLOR_ELEMENT_SELECTED : new Color(0xC5, 0xCE, 0xD8));
+        g2.setColor(isRungSelected ? COLOR_ELEMENT_SELECTED : (dark ? new Color(0x45, 0x4B, 0x54) : new Color(0xC5, 0xCE, 0xD8)));
         g2.drawRect(leftRailX, topY, rightRailX - leftRailX, 22);
 
         g2.setFont(AppFonts.ui(Font.BOLD, 11));
-        g2.setColor(isRungSelected ? COLOR_ELEMENT_SELECTED : new Color(0x44, 0x55, 0x66));
+        g2.setColor(isRungSelected ? (dark ? new Color(0x64, 0xB5, 0xF6) : COLOR_ELEMENT_SELECTED)
+                : (dark ? new Color(0xF5, 0xF7, 0xFA) : new Color(0x44, 0x55, 0x66)));
         String numStr = String.format(Locale.US, "%03d", ri + 1);
         g2.drawString(numStr, 14, topY + 15);
 
@@ -317,8 +343,9 @@ public final class LdRenderer {
         boolean energized = liveSim && el.isEnergizedOut();
         boolean opHigh = liveSim && el.isOperandState();
 
+        boolean dark = isDark(opts);
         if (selected) {
-            g2.setColor(new Color(0xE8, 0xF2, 0xFF));
+            g2.setColor(dark ? new Color(0x28, 0x38, 0x4E) : new Color(0xE8, 0xF2, 0xFF));
             g2.fillRect(x, topY, width, h);
             g2.setColor(COLOR_ELEMENT_SELECTED);
             g2.drawRect(x, topY, width, h);
@@ -328,12 +355,12 @@ public final class LdRenderer {
         int barLeftX = midX - 9;
         int barRightX = midX + 9;
 
-        drawPowerLine(g2, x, wireY, barLeftX, wireY, liveSim && el.isEnergizedIn());
-        drawPowerLine(g2, barRightX, wireY, x + width, wireY, energized);
+        drawPowerLine(g2, x, wireY, barLeftX, wireY, liveSim && el.isEnergizedIn(), dark);
+        drawPowerLine(g2, barRightX, wireY, x + width, wireY, energized, dark);
 
         Stroke oldStroke = g2.getStroke();
         g2.setStroke(new BasicStroke(2f));
-        g2.setColor(energized ? COLOR_POWER_ON : (opHigh ? new Color(0x1F, 0x61, 0x8D) : Color.BLACK));
+        g2.setColor(energized ? COLOR_POWER_ON : (opHigh ? new Color(0x4F, 0xA3, 0xE3) : canvasInk(dark)));
         g2.drawLine(barLeftX, wireY - 10, barLeftX, wireY + 10);
         g2.drawLine(barRightX, wireY - 10, barRightX, wireY + 10);
 
@@ -358,14 +385,14 @@ public final class LdRenderer {
             opLabel += opHigh ? " (=1)" : " (=0)";
         }
         int tw = fm.stringWidth(opLabel);
-        g2.setColor(opHigh ? COLOR_POWER_ON : new Color(0x11, 0x11, 0x11));
+        g2.setColor(opHigh ? COLOR_POWER_ON : canvasInk(dark));
         g2.drawString(opLabel, midX - tw / 2, wireY - 13);
 
         if (!el.getComment().isBlank()) {
             g2.setFont(AppFonts.ui(Font.PLAIN, 9));
             FontMetrics cfm = g2.getFontMetrics();
             int cw = cfm.stringWidth(el.getComment());
-            g2.setColor(new Color(0x55, 0x66, 0x77));
+            g2.setColor(commentInk(dark));
             g2.drawString(el.getComment(), midX - cw / 2, wireY + 21);
         }
 
@@ -400,16 +427,17 @@ public final class LdRenderer {
             g2.drawRect(x, topY, width, h);
         }
 
+        boolean dark = isDark(opts);
         int midX = x + width / 2;
         int coilLeftX = midX - 11;
         int coilRightX = midX + 11;
 
-        drawPowerLine(g2, x, wireY, coilLeftX, wireY, liveSim && coil.isEnergizedIn());
-        drawPowerLine(g2, coilRightX, wireY, x + width, wireY, energized);
+        drawPowerLine(g2, x, wireY, coilLeftX, wireY, liveSim && coil.isEnergizedIn(), dark);
+        drawPowerLine(g2, coilRightX, wireY, x + width, wireY, energized, dark);
 
         Stroke oldStroke = g2.getStroke();
         g2.setStroke(new BasicStroke(2f));
-        g2.setColor((energized || opHigh) ? COLOR_POWER_ON : Color.BLACK);
+        g2.setColor((energized || opHigh) ? COLOR_POWER_ON : canvasInk(dark));
 
         g2.drawLine(coilLeftX + 4, wireY - 10, coilLeftX, wireY - 5);
         g2.drawLine(coilLeftX, wireY - 5, coilLeftX, wireY + 5);
@@ -441,7 +469,7 @@ public final class LdRenderer {
             opLabel += opHigh ? " (=1)" : " (=0)";
         }
         int tw = fm.stringWidth(opLabel);
-        g2.setColor(opHigh ? COLOR_POWER_ON : new Color(0x11, 0x11, 0x11));
+        g2.setColor(opHigh ? COLOR_POWER_ON : canvasInk(dark));
         g2.drawString(opLabel, midX - tw / 2, wireY - 13);
 
         if (!coil.getComment().isBlank()) {
@@ -643,13 +671,17 @@ public final class LdRenderer {
     }
 
     private static void drawPowerLine(Graphics2D g2, int x1, int y1, int x2, int y2, boolean energized) {
+        drawPowerLine(g2, x1, y1, x2, y2, energized, AppSettings.get().isDarkMode());
+    }
+
+    private static void drawPowerLine(Graphics2D g2, int x1, int y1, int x2, int y2, boolean energized, boolean dark) {
         Stroke old = g2.getStroke();
         if (energized) {
             g2.setStroke(new BasicStroke(2f));
             g2.setColor(COLOR_POWER_ON);
         } else {
             g2.setStroke(new BasicStroke(1f));
-            g2.setColor(COLOR_WIRE_OFF);
+            g2.setColor(wireOffColor(dark));
         }
         g2.drawLine(x1, y1, x2, y2);
         g2.setStroke(old);

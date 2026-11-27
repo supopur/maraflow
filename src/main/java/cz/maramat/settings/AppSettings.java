@@ -1,12 +1,16 @@
 package cz.maramat.settings;
 
+import com.formdev.flatlaf.FlatDarkLaf;
 import com.formdev.flatlaf.FlatLaf;
+import com.formdev.flatlaf.FlatLightLaf;
 import cz.maramat.model.HeaderColor;
 import cz.maramat.sim.BlockSorter.OrderSortMode;
 
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
+import java.awt.Color;
 import java.awt.Font;
+import java.awt.Insets;
 import java.awt.Window;
 import java.util.ArrayList;
 import java.util.List;
@@ -14,7 +18,28 @@ import java.util.List;
 public final class AppSettings {
     private static final AppSettings INSTANCE = new AppSettings();
 
+    public enum Theme {
+        LIGHT("Light (Classic)"),
+        DARK("Dark (High Contrast)");
+
+        private final String displayName;
+
+        Theme(String displayName) {
+            this.displayName = displayName;
+        }
+
+        public String getDisplayName() {
+            return displayName;
+        }
+
+        @Override
+        public String toString() {
+            return displayName;
+        }
+    }
+
     // Appearance / Visual
+    private Theme theme = Theme.LIGHT;
     private int uiScalePercent = 100; // Snaps every 25: 100, 125, 150, 175, 200, 225, 250
     private HeaderColor defaultHeaderColor = HeaderColor.CL_DEFAULT;
     private boolean antialiasText = true;
@@ -34,6 +59,8 @@ public final class AppSettings {
     private String defaultCommMethod = "USB (CDC)";
     private String defaultBaudRate = "115200";
     private String defaultSerialPort = "/dev/ttyACM0";
+    private boolean commConfigured = false;
+    private String restSimMode = "Real client";
     private int lastUsbStationId = 1;
     private String lastRs485Port = "/dev/ttyUSB0";
     private String lastRs485Baud = "115200";
@@ -73,7 +100,97 @@ public final class AppSettings {
         return Math.max(1, Math.round(basePx * getScaleFactor()));
     }
 
-    public void applySettingsToUi() {
+    public void applyLookAndFeel() {
+        boolean dark = isDarkMode();
+        if (dark) {
+            FlatDarkLaf.setup();
+        } else {
+            FlatLightLaf.setup();
+        }
+
+        // Utilitarian Win95 / Win7 crossover CAD / PLC engineering look-and-feel
+        UIManager.put("Component.arrowType", "triangle");
+        UIManager.put("Button.arc", 0);
+        UIManager.put("Component.arc", 0);
+        UIManager.put("CheckBox.arc", 0);
+        UIManager.put("ProgressBar.arc", 0);
+        UIManager.put("TextComponent.arc", 0);
+        UIManager.put("ScrollBar.width", scale(14));
+        UIManager.put("ScrollBar.showButtons", true);
+        UIManager.put("TabbedPane.tabHeight", scale(22));
+        UIManager.put("TabbedPane.showTabSeparators", true);
+        UIManager.put("TabbedPane.tabInsets", new Insets(2, 8, 2, 8));
+        UIManager.put("Tree.paintLines", true);
+        UIManager.put("Tree.lineTypeDashed", true);
+        UIManager.put("Tree.hash", new Color(0x90, 0x90, 0x90));
+        UIManager.put("Table.showHorizontalLines", true);
+        UIManager.put("Table.showVerticalLines", true);
+
+        if (dark) {
+            applyDarkContrastOverrides();
+        } else {
+            clearDarkContrastOverrides();
+            UIManager.put("TabbedPane.selectedBackground", Color.WHITE);
+        }
+        applyScaledFontsAndMetrics();
+    }
+
+    private static final String[] DARK_FG_KEYS = {
+            "foreground", "text", "Label.foreground", "Button.foreground", "ToggleButton.foreground",
+            "CheckBox.foreground", "RadioButton.foreground", "ComboBox.foreground",
+            "TextField.foreground", "TextArea.foreground", "FormattedTextField.foreground",
+            "PasswordField.foreground", "Spinner.foreground", "List.foreground",
+            "Table.foreground", "TableHeader.foreground", "Tree.foreground", "Tree.textForeground",
+            "MenuBar.foreground", "Menu.foreground", "MenuItem.foreground",
+            "CheckBoxMenuItem.foreground", "RadioButtonMenuItem.foreground", "PopupMenu.foreground",
+            "TabbedPane.foreground", "TabbedPane.selectedForeground", "TitledBorder.titleColor",
+            "ToolTip.foreground"
+    };
+
+    private static final String[] DARK_DISABLED_FG_KEYS = {
+            "Component.disabledForeground", "Label.disabledForeground",
+            "Button.disabledText", "MenuItem.disabledForeground"
+    };
+
+    private static final String[] DARK_PANEL_BG_KEYS = {
+            "Panel.background", "OptionPane.background", "ScrollPane.background",
+            "SplitPane.background", "MenuBar.background", "ToolBar.background"
+    };
+
+    private static final String[] DARK_FIELD_BG_KEYS = {
+            "Table.background", "Tree.background", "List.background",
+            "TextField.background", "TextArea.background", "FormattedTextField.background",
+            "PasswordField.background", "Spinner.background"
+    };
+
+    private static void applyDarkContrastOverrides() {
+        Color whiteFg = new Color(0xF5, 0xF7, 0xFA);
+        Color disabledFg = new Color(0xA6, 0xAE, 0xBA);
+        Color panelBg = new Color(0x23, 0x26, 0x2B);
+        Color fieldBg = new Color(0x1B, 0x1D, 0x21);
+
+        for (String k : DARK_FG_KEYS) UIManager.put(k, whiteFg);
+        for (String k : DARK_DISABLED_FG_KEYS) UIManager.put(k, disabledFg);
+        for (String k : DARK_PANEL_BG_KEYS) UIManager.put(k, panelBg);
+        for (String k : DARK_FIELD_BG_KEYS) UIManager.put(k, fieldBg);
+
+        UIManager.put("TableHeader.background", new Color(0x2B, 0x2F, 0x36));
+        UIManager.put("TabbedPane.selectedBackground", new Color(0x30, 0x35, 0x3E));
+        UIManager.put("Separator.foreground", new Color(0x45, 0x4B, 0x54));
+        UIManager.put("Component.borderColor", new Color(0x45, 0x4B, 0x54));
+    }
+
+    private static void clearDarkContrastOverrides() {
+        for (String k : DARK_FG_KEYS) UIManager.put(k, null);
+        for (String k : DARK_DISABLED_FG_KEYS) UIManager.put(k, null);
+        for (String k : DARK_PANEL_BG_KEYS) UIManager.put(k, null);
+        for (String k : DARK_FIELD_BG_KEYS) UIManager.put(k, null);
+        UIManager.put("TableHeader.background", null);
+        UIManager.put("Separator.foreground", null);
+        UIManager.put("Component.borderColor", null);
+    }
+
+    private void applyScaledFontsAndMetrics() {
         float scale = getScaleFactor();
         int fontSize = Math.max(10, Math.round(11 * scale));
         Font scaledUiFont = cz.maramat.ui.AppFonts.ui(Font.PLAIN, fontSize);
@@ -95,6 +212,10 @@ public final class AppSettings {
         UIManager.put("TabbedPane.tabHeight", scale(22));
         UIManager.put("Tree.rowHeight", scale(19));
         UIManager.put("Table.rowHeight", scale(22));
+    }
+
+    public void applySettingsToUi() {
+        applyLookAndFeel();
 
         FlatLaf.updateUI();
         for (Window w : Window.getWindows()) {
@@ -115,6 +236,18 @@ public final class AppSettings {
 
     public void removeChangeListener(Runnable r) {
         listeners.remove(r);
+    }
+
+    public Theme getTheme() {
+        return theme;
+    }
+
+    public void setTheme(Theme theme) {
+        this.theme = (theme != null) ? theme : Theme.LIGHT;
+    }
+
+    public boolean isDarkMode() {
+        return theme == Theme.DARK;
     }
 
     public int getUiScalePercent() {
@@ -220,6 +353,22 @@ public final class AppSettings {
 
     public void setDefaultSerialPort(String defaultSerialPort) {
         this.defaultSerialPort = defaultSerialPort;
+    }
+
+    public String getRestSimMode() {
+        return restSimMode;
+    }
+
+    public void setRestSimMode(String restSimMode) {
+        this.restSimMode = "Simulate".equalsIgnoreCase(restSimMode) ? "Simulate" : "Real client";
+    }
+
+    public boolean isCommConfigured() {
+        return commConfigured;
+    }
+
+    public void setCommConfigured(boolean commConfigured) {
+        this.commConfigured = commConfigured;
     }
 
     public boolean isStIntelliSenseEnabled() {
@@ -328,6 +477,11 @@ public final class AppSettings {
         java.util.Properties props = new java.util.Properties();
         try (java.io.InputStream in = java.nio.file.Files.newInputStream(file)) {
             props.load(in);
+            try {
+                theme = Theme.valueOf(props.getProperty("theme", Theme.LIGHT.name()).trim());
+            } catch (IllegalArgumentException ignored) {
+                theme = Theme.LIGHT;
+            }
             uiScalePercent = Math.clamp(parseInt(props.getProperty("uiScalePercent"), uiScalePercent), 75, 250);
             defaultZoomPercent = parseInt(props.getProperty("defaultZoomPercent"), defaultZoomPercent);
             antialiasText = Boolean.parseBoolean(props.getProperty("antialiasText", String.valueOf(antialiasText)));
@@ -337,6 +491,8 @@ public final class AppSettings {
             defaultCommMethod = props.getProperty("defaultCommMethod", defaultCommMethod);
             defaultBaudRate = props.getProperty("defaultBaudRate", defaultBaudRate);
             defaultSerialPort = props.getProperty("defaultSerialPort", defaultSerialPort);
+            commConfigured = Boolean.parseBoolean(props.getProperty("commConfigured", "false"));
+            setRestSimMode(props.getProperty("restSimMode", restSimMode));
             lastUsbStationId = Math.clamp(parseInt(props.getProperty("lastUsbStationId"), lastUsbStationId), 0, 254);
             lastRs485Port = props.getProperty("lastRs485Port", lastRs485Port);
             lastRs485Baud = props.getProperty("lastRs485Baud", lastRs485Baud);
@@ -353,6 +509,7 @@ public final class AppSettings {
     public synchronized void save() {
         java.nio.file.Path file = OsPaths.getConfigDir("MaraFlow").resolve("settings.properties");
         java.util.Properties props = new java.util.Properties();
+        props.setProperty("theme", theme.name());
         props.setProperty("uiScalePercent", String.valueOf(uiScalePercent));
         props.setProperty("defaultZoomPercent", String.valueOf(defaultZoomPercent));
         props.setProperty("antialiasText", String.valueOf(antialiasText));
@@ -362,6 +519,8 @@ public final class AppSettings {
         props.setProperty("defaultCommMethod", defaultCommMethod);
         props.setProperty("defaultBaudRate", defaultBaudRate);
         props.setProperty("defaultSerialPort", defaultSerialPort);
+        props.setProperty("commConfigured", String.valueOf(commConfigured));
+        props.setProperty("restSimMode", restSimMode);
         props.setProperty("lastUsbStationId", String.valueOf(lastUsbStationId));
         props.setProperty("lastRs485Port", lastRs485Port);
         props.setProperty("lastRs485Baud", lastRs485Baud);

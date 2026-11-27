@@ -61,7 +61,18 @@ public class SimulationEngine {
     private final Map<String, double[]> arrayRegisters = new ConcurrentHashMap<>();
     private final Map<String, Integer> blockLastInterruptPulseSeen = new ConcurrentHashMap<>();
     private final Map<String, Boolean> blockPendingRstClear = new ConcurrentHashMap<>();
+    private final Map<String, RestSimState> restSimStates = new ConcurrentHashMap<>();
+    private final java.net.http.HttpClient restHttpClient = java.net.http.HttpClient.newBuilder()
+            .connectTimeout(java.time.Duration.ofMillis(2000))
+            .build();
     private final Set<String> externallyDrivenInputPins = ConcurrentHashMap.newKeySet();
+
+    private static final class RestSimState {
+        volatile boolean inFlight;
+        volatile boolean done;
+        volatile double lastOut;
+        volatile int lastStatus = 200;
+    }
     private final Runnable uiRepaintCallback;
     private final List<ScopeSampleListener> scopeListeners = new CopyOnWriteArrayList<>();
     private volatile boolean externalWatchActive = false;
@@ -74,6 +85,72 @@ public class SimulationEngine {
 
     public SimulationEngine(Runnable uiRepaintCallback) {
         this.uiRepaintCallback = uiRepaintCallback;
+    }
+
+    private static double getSimOut(BlockInstance b, String pinShortName, double defVal) {
+        String raw = b.getCustomProperties().get("SimOut." + pinShortName);
+        if (raw == null || raw.isBlank()) return defVal;
+        try {
+            return Double.parseDouble(raw.trim());
+        } catch (NumberFormatException e) {
+            return defVal;
+        }
+    }
+
+    private void launchAsyncRestCall(RestSimState st, boolean isPost, String url, String jsonKey, int timeoutMs, double txVal) {
+        try {
+            java.net.http.HttpRequest.Builder reqB = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create(url))
+                    .timeout(java.time.Duration.ofMillis(timeoutMs));
+            if (isPost) {
+                String body = jsonKey.isEmpty()
+                        ? String.format(java.util.Locale.ROOT, "%.4f", txVal)
+                        : String.format(java.util.Locale.ROOT, "{\"%s\":%.4f}", jsonKey, txVal);
+                reqB.header("Content-Type", "application/json")
+                        .POST(java.net.http.HttpRequest.BodyPublishers.ofString(body));
+            } else {
+                reqB.header("Accept", "application/json").GET();
+            }
+            restHttpClient.sendAsync(reqB.build(), java.net.http.HttpResponse.BodyHandlers.ofString())
+                    .whenComplete((resp, err) -> {
+                        if (err != null || resp == null) {
+                            st.lastStatus = -1;
+                        } else {
+                            st.lastStatus = resp.statusCode();
+                            if (!isPost && resp.body() != null) {
+                                Double parsed = parseJsonFloat(resp.body(), jsonKey);
+                                if (parsed != null) st.lastOut = parsed;
+                            }
+                        }
+                        st.done = true;
+                        st.inFlight = false;
+                    });
+        } catch (Exception ex) {
+            st.lastStatus = -1;
+            st.done = true;
+            st.inFlight = false;
+        }
+    }
+
+    private static Double parseJsonFloat(String body, String key) {
+        if (body == null || body.isBlank()) return null;
+        String target = body;
+        if (key != null && !key.isEmpty()) {
+            java.util.regex.Matcher km = java.util.regex.Pattern
+                    .compile("\"" + java.util.regex.Pattern.quote(key) + "\"\\s*:\\s*\"?([-+]?[0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?)\"?")
+                    .matcher(body);
+            if (km.find()) {
+                try { return Double.parseDouble(km.group(1)); } catch (NumberFormatException ignored) {}
+            }
+            return null;
+        }
+        java.util.regex.Matcher nm = java.util.regex.Pattern
+                .compile("([-+]?[0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?)")
+                .matcher(target.trim());
+        if (nm.find()) {
+            try { return Double.parseDouble(nm.group(1)); } catch (NumberFormatException ignored) {}
+        }
+        return null;
     }
 
     public void addScopeListener(ScopeSampleListener l) {
@@ -366,6 +443,7 @@ public class SimulationEngine {
             state = State.STOPPED;
             this.externalWatchActive = false;
             this.watchWriteForwarder = null;
+            this.restSimStates.clear();
             workerRunning.set(false);
             synchronized (pauseLock) {
                 pauseLock.notifyAll();
@@ -515,36 +593,33 @@ public class SimulationEngine {
     private void updateEStopSupervision(Project project) {
         if (project == null) return;
         EStopConfig cfg = project.getEStopConfig();
-        if (!cfg.isEnabled()) {
-            eStopActive = false;
-            eStopTrippedMask = 0;
-            return;
-        }
 
         int mask = manualEStopButtonPressed ? 0x8000 : 0;
-        List<EStopConfig.InputRule> rules = cfg.getInputRules();
-        for (int i = 0; i < rules.size(); i++) {
-            EStopConfig.InputRule rule = rules.get(i);
-            if (!rule.isEnabled()) continue;
-            double v = getOperandValue(project, rule.getInputChannel());
-            boolean high = Math.abs(v) >= 0.5;
-            boolean tripped = rule.isActiveLow() ? !high : high;
-            if (tripped) {
-                mask |= (1 << Math.min(14, i));
+        if (cfg.isEnabled()) {
+            List<EStopConfig.InputRule> rules = cfg.getInputRules();
+            for (int i = 0; i < rules.size(); i++) {
+                EStopConfig.InputRule rule = rules.get(i);
+                if (!rule.isEnabled()) continue;
+                double v = getOperandValue(project, rule.getInputChannel());
+                boolean high = Math.abs(v) >= 0.5;
+                boolean tripped = rule.isActiveLow() ? !high : high;
+                if (tripped) {
+                    mask |= (1 << Math.min(14, i));
+                }
             }
         }
 
         if (mask != 0) {
             eStopActive = true;
             eStopTrippedMask = mask;
-        } else if (!cfg.isRequireManualReset()) {
+        } else if (!cfg.isEnabled() || !cfg.isRequireManualReset()) {
             eStopActive = false;
             eStopTrippedMask = 0;
         }
     }
 
     private void forceAllHardwareOutputsZero() {
-        for (int i = 0; i < 16; i++) {
+        for (int i = 0; i < 28; i++) {
             virtualRegisters.put("DO" + i, 0.0);
         }
         for (int i = 0; i < 8; i++) {
@@ -1186,13 +1261,70 @@ public class SimulationEngine {
                     outs.getFirst().setRuntimeValue(1.0);
                 }
             }
+            case "Comm.REST.RestGet", "Comm.REST.RestPost" -> {
+                boolean isPost = defId.endsWith("Post");
+                if ("Simulate".equalsIgnoreCase(cz.maramat.settings.AppSettings.get().getRestSimMode())) {
+                    if (isPost) {
+                        if (outs.size() > 0) outs.get(0).setRuntimeValue(getSimOut(b, outs.get(0).getShortName(), 200.0));
+                        if (outs.size() > 1) outs.get(1).setRuntimeValue(getSimOut(b, outs.get(1).getShortName(), 1.0));
+                    } else {
+                        if (outs.size() > 0) outs.get(0).setRuntimeValue(getSimOut(b, outs.get(0).getShortName(), 0.0));
+                        if (outs.size() > 1) outs.get(1).setRuntimeValue(getSimOut(b, outs.get(1).getShortName(), 200.0));
+                        if (outs.size() > 2) outs.get(2).setRuntimeValue(getSimOut(b, outs.get(2).getShortName(), 1.0));
+                    }
+                } else {
+                    RestSimState st = restSimStates.computeIfAbsent(b.getId(), k -> new RestSimState());
+                    if (st.done) {
+                        st.done = false;
+                        if (isPost) {
+                            if (outs.size() > 0) outs.get(0).setRuntimeValue(st.lastStatus);
+                            if (outs.size() > 1) outs.get(1).setRuntimeValue(1.0);
+                        } else {
+                            if (outs.size() > 0) outs.get(0).setRuntimeValue(st.lastOut);
+                            if (outs.size() > 1) outs.get(1).setRuntimeValue(st.lastStatus);
+                            if (outs.size() > 2) outs.get(2).setRuntimeValue(1.0);
+                        }
+                    } else {
+                        if (!st.inFlight) {
+                            st.inFlight = true;
+                            String url = b.getCustomProperties().getOrDefault("EndpointUrl", "http://192.168.1.100/api/val").trim();
+                            String key = b.getCustomProperties().getOrDefault("JsonKey", "value").trim();
+                            int timeoutMs = 1000;
+                            try {
+                                timeoutMs = Math.clamp(Integer.parseInt(b.getCustomProperties().getOrDefault("TimeoutMs", "1000").trim()), 100, 10000);
+                            } catch (Exception ignored) {}
+                            double txVal = (isPost && ins.size() > 1) ? ins.get(1).getRuntimeValue() : 0.0;
+                            launchAsyncRestCall(st, isPost, url, key, timeoutMs, txVal);
+                        }
+                        if (isPost) {
+                            if (outs.size() > 0) outs.get(0).setRuntimeValue(st.lastStatus);
+                            if (outs.size() > 1) outs.get(1).setRuntimeValue(0.0);
+                        } else {
+                            if (outs.size() > 0) outs.get(0).setRuntimeValue(st.lastOut);
+                            if (outs.size() > 1) outs.get(1).setRuntimeValue(st.lastStatus);
+                            if (outs.size() > 2) outs.get(2).setRuntimeValue(0.0);
+                        }
+                    }
+                }
+            }
             case "Comm.I2C.TMP75" -> {
-                if (outs.size() > 0) outs.get(0).setRuntimeValue(25.0);
-                if (outs.size() > 1) outs.get(1).setRuntimeValue(1.0);
+                if (outs.size() > 0) outs.get(0).setRuntimeValue(getSimOut(b, outs.get(0).getShortName(), 25.0));
+                if (outs.size() > 1) outs.get(1).setRuntimeValue(getSimOut(b, outs.get(1).getShortName(), 1.0));
+            }
+            case "Comm.I2C.BME280" -> {
+                if (outs.size() > 0) outs.get(0).setRuntimeValue(getSimOut(b, outs.get(0).getShortName(), 24.5));
+                if (outs.size() > 1) outs.get(1).setRuntimeValue(getSimOut(b, outs.get(1).getShortName(), 48.0));
+                if (outs.size() > 2) outs.get(2).setRuntimeValue(getSimOut(b, outs.get(2).getShortName(), 1013.25));
+                if (outs.size() > 3) outs.get(3).setRuntimeValue(getSimOut(b, outs.get(3).getShortName(), 1.0));
+            }
+            case "Comm.I2C.SHT40" -> {
+                if (outs.size() > 0) outs.get(0).setRuntimeValue(getSimOut(b, outs.get(0).getShortName(), 24.5));
+                if (outs.size() > 1) outs.get(1).setRuntimeValue(getSimOut(b, outs.get(1).getShortName(), 48.0));
+                if (outs.size() > 2) outs.get(2).setRuntimeValue(getSimOut(b, outs.get(2).getShortName(), 1.0));
             }
             case "Comm.DS18B20.DS18B20Read" -> {
-                if (outs.size() > 0) outs.get(0).setRuntimeValue(22.5);
-                if (outs.size() > 1) outs.get(1).setRuntimeValue(1.0);
+                if (outs.size() > 0) outs.get(0).setRuntimeValue(getSimOut(b, outs.get(0).getShortName(), 22.5));
+                if (outs.size() > 1) outs.get(1).setRuntimeValue(getSimOut(b, outs.get(1).getShortName(), 1.0));
             }
             case "Bool.And", "Bool.Nand" -> {
                 boolean res = true;

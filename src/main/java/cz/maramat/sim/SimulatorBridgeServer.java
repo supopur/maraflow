@@ -61,7 +61,7 @@ public class SimulatorBridgeServer {
         if (running.get()) {
             return;
         }
-        ServerSocket ss = new ServerSocket(port, 16, InetAddress.getByName("127.0.0.1"));
+        ServerSocket ss = new ServerSocket(port, 16);
         ss.setReuseAddress(true);
         this.serverSocket = ss;
         this.running.set(true);
@@ -305,7 +305,9 @@ public class SimulatorBridgeServer {
                         if (project != null) simEngine.stopSimulation(project);
                     }
                     case MaraProtClient.CTRL_START -> {
-                        if (project != null) simEngine.startSimulation(project);
+                        if (project != null && simEngine.getState() != SimulationEngine.State.WATCH_MODE) {
+                            simEngine.startSimulation(project);
+                        }
                     }
                     case MaraProtClient.CTRL_PAUSE -> simEngine.pauseSimulation();
                     case MaraProtClient.CTRL_ESTOP_RESET -> simEngine.manualResetEStop();
@@ -399,6 +401,7 @@ public class SimulatorBridgeServer {
             case STOPPED -> 0;
             case RUNNING -> 1;
             case PAUSED -> 2;
+            case WATCH_MODE -> 5;
             default -> 0;
         };
     }

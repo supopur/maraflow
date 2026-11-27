@@ -84,7 +84,9 @@ public class PlcConfigDialog extends JDialog {
 
     private static final String[] DO_CHANNELS = {
             "None", "DO0", "DO1", "DO2", "DO3", "DO4", "DO5", "DO6", "DO7",
-            "DO8", "DO9", "DO10", "DO11", "DO12", "DO13", "DO14", "DO15"
+            "DO8", "DO9", "DO10", "DO11", "DO12", "DO13", "DO14", "DO15",
+            "DO16", "DO17", "DO18", "DO19", "DO20", "DO21", "DO22", "DO23",
+            "DO24", "DO25", "DO26", "DO27"
     };
 
     private static final String[] POLARITY_OPTIONS = {

@@ -1,6 +1,7 @@
 package cz.maramat.ui.panels;
 
 import cz.maramat.model.IecLanguage;
+import cz.maramat.settings.AppSettings;
 import cz.maramat.ui.AppFonts;
 
 import javax.swing.BorderFactory;
@@ -35,6 +36,8 @@ public class HomeScreenPanel extends JPanel {
     }
 
     private final HomeScreenListener listener;
+    private JPanel topBar;
+    private JPanel recentBox;
     private DefaultTableModel recentTableModel;
     private JTable recentTable;
     private List<File> currentRecentFiles = List.of();
@@ -42,19 +45,35 @@ public class HomeScreenPanel extends JPanel {
     public HomeScreenPanel(HomeScreenListener listener) {
         super(new BorderLayout(0, 8));
         this.listener = listener;
-        setBackground(new Color(0xEC, 0xF0, 0xF5));
         setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
         buildUi();
+        applyThemeColors();
+    }
+
+    @Override
+    public void updateUI() {
+        super.updateUI();
+        applyThemeColors();
+    }
+
+    private void applyThemeColors() {
+        boolean dark = AppSettings.get().isDarkMode();
+        setBackground(dark ? new Color(0x1B, 0x1D, 0x21) : new Color(0xEC, 0xF0, 0xF5));
+        if (topBar != null) {
+            topBar.setBackground(dark ? new Color(0x23, 0x26, 0x2B) : Color.WHITE);
+            topBar.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(dark ? new Color(0x45, 0x4B, 0x54) : new Color(0xB8, 0xB8, 0xB8), 1),
+                    BorderFactory.createEmptyBorder(4, 6, 4, 6)
+            ));
+        }
+        if (recentBox != null) {
+            recentBox.setBackground(dark ? new Color(0x23, 0x26, 0x2B) : Color.WHITE);
+        }
     }
 
     private void buildUi() {
         // Top Action Bar
-        JPanel topBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 6));
-        topBar.setBackground(Color.WHITE);
-        topBar.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(0xB8, 0xB8, 0xB8), 1),
-                BorderFactory.createEmptyBorder(4, 6, 4, 6)
-        ));
+        topBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 6));
 
         JButton newProjBtn = createCompactButton("New Project... (Ctrl+N)");
         newProjBtn.addActionListener(e -> listener.onNewProjectWizard(IecLanguage.FBD));
@@ -75,8 +94,7 @@ public class HomeScreenPanel extends JPanel {
         add(topBar, BorderLayout.NORTH);
 
         // Center: Recent Projects Table
-        JPanel recentBox = new JPanel(new BorderLayout(0, 6));
-        recentBox.setBackground(Color.WHITE);
+        recentBox = new JPanel(new BorderLayout(0, 6));
         recentBox.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createTitledBorder("Recent Projects (.mfl)"),
                 BorderFactory.createEmptyBorder(6, 8, 6, 8)

@@ -72,6 +72,7 @@ public class ScopePanel extends JPanel {
     private JLabel yZoomLabel;
     private JButton freezeBtn;
     private final CanvasPlotArea plotArea;
+    private JToolBar scopeToolbar;
 
     private static final Color[] TRACE_PALETTE = {
             new Color(0x00, 0x55, 0xCC),
@@ -85,18 +86,38 @@ public class ScopePanel extends JPanel {
     public ScopePanel(Supplier<Project> projectSupplier) {
         super(new BorderLayout());
         this.projectSupplier = projectSupplier;
-        setBackground(Color.WHITE);
 
         // Pre-populate default pins from sample project
         selectedPins.add("IREF1.Y");
         selectedPins.add("And1.Y");
         selectedPins.add("Value1.In");
 
-        add(buildScopeToolbar(), BorderLayout.NORTH);
+        scopeToolbar = buildScopeToolbar();
+        add(scopeToolbar, BorderLayout.NORTH);
         plotArea = new CanvasPlotArea();
         add(plotArea, BorderLayout.CENTER);
+        applyThemeColors();
 
         installZoomKeybindings();
+    }
+
+    @Override
+    public void updateUI() {
+        super.updateUI();
+        applyThemeColors();
+    }
+
+    private void applyThemeColors() {
+        boolean dark = AppSettings.get().isDarkMode();
+        setBackground(dark ? new Color(0x1B, 0x1D, 0x21) : Color.WHITE);
+        if (scopeToolbar != null) {
+            scopeToolbar.setBackground(dark ? new Color(0x23, 0x26, 0x2B) : new Color(0xF4, 0xF6, 0xF9));
+            scopeToolbar.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0,
+                    dark ? new Color(0x45, 0x4B, 0x54) : new Color(0xCC, 0xCC, 0xCC)));
+        }
+        if (plotArea != null) {
+            plotArea.setBackground(dark ? new Color(0x1B, 0x1D, 0x21) : Color.WHITE);
+        }
     }
 
     private JToolBar buildScopeToolbar() {
@@ -319,7 +340,9 @@ public class ScopePanel extends JPanel {
 
         JPanel checkListPanel = new JPanel();
         checkListPanel.setLayout(new BoxLayout(checkListPanel, BoxLayout.Y_AXIS));
-        checkListPanel.setBackground(Color.WHITE);
+        boolean dark = AppSettings.get().isDarkMode();
+        Color listBg = dark ? new Color(0x1B, 0x1D, 0x21) : Color.WHITE;
+        checkListPanel.setBackground(listBg);
 
         record PinOption(String ref, String display, JCheckBox checkBox) {}
         List<PinOption> options = new ArrayList<>();
@@ -332,7 +355,7 @@ public class ScopePanel extends JPanel {
                     if (!seenRefs.add(ref)) continue;
                     String disp = ref + "  [OUT - " + out.getDataType().getDisplayName() + "]";
                     JCheckBox cb = new JCheckBox(disp, selectedPins.contains(ref));
-                    cb.setBackground(Color.WHITE);
+                    cb.setBackground(listBg);
                     options.add(new PinOption(ref, disp, cb));
                     checkListPanel.add(cb);
                 }
@@ -341,7 +364,7 @@ public class ScopePanel extends JPanel {
                     if (!seenRefs.add(ref)) continue;
                     String disp = ref + "  [IN - " + in.getDataType().getDisplayName() + "]";
                     JCheckBox cb = new JCheckBox(disp, selectedPins.contains(ref));
-                    cb.setBackground(Color.WHITE);
+                    cb.setBackground(listBg);
                     options.add(new PinOption(ref, disp, cb));
                     checkListPanel.add(cb);
                 }
@@ -351,7 +374,7 @@ public class ScopePanel extends JPanel {
                     if (el.getKind().isContact() && seenRefs.add(el.getOperand())) {
                         String disp = el.getOperand() + "  [LD Contact - BOOL]";
                         JCheckBox cb = new JCheckBox(disp, selectedPins.contains(el.getOperand()));
-                        cb.setBackground(Color.WHITE);
+                        cb.setBackground(listBg);
                         options.add(new PinOption(el.getOperand(), disp, cb));
                         checkListPanel.add(cb);
                     }
@@ -363,7 +386,7 @@ public class ScopePanel extends JPanel {
                                 : "  [LD Coil - BOOL]";
                         String disp = coil.getOperand() + typeDesc;
                         JCheckBox cb = new JCheckBox(disp, selectedPins.contains(coil.getOperand()));
-                        cb.setBackground(Color.WHITE);
+                        cb.setBackground(listBg);
                         options.add(new PinOption(coil.getOperand(), disp, cb));
                         checkListPanel.add(cb);
                     }
@@ -424,7 +447,7 @@ public class ScopePanel extends JPanel {
     private class CanvasPlotArea extends JPanel {
 
         CanvasPlotArea() {
-            setBackground(Color.WHITE);
+            setBackground(AppSettings.get().isDarkMode() ? new Color(0x1B, 0x1D, 0x21) : Color.WHITE);
             setFocusable(true);
             addMouseListener(new MouseAdapter() {
                 @Override
@@ -498,18 +521,18 @@ public class ScopePanel extends JPanel {
         }
 
         private void paintNumericSection(Graphics2D g2, List<String> channels, int x0, int y0, int pw, int ph) {
-            // White background + crisp light grey graticule
-            g2.setColor(new Color(0xFC, 0xFD, 0xFE));
+            boolean dark = AppSettings.get().isDarkMode();
+            g2.setColor(dark ? new Color(0x14, 0x16, 0x1A) : new Color(0xFC, 0xFD, 0xFE));
             g2.fillRect(x0, y0, pw, ph);
 
-            g2.setColor(new Color(0xE2, 0xE6, 0xEC));
+            g2.setColor(dark ? new Color(0x2B, 0x30, 0x3A) : new Color(0xE2, 0xE6, 0xEC));
             for (int gx = x0; gx <= x0 + pw; gx += 40) {
                 g2.drawLine(gx, y0, gx, y0 + ph);
             }
             for (int gy = y0; gy <= y0 + ph; gy += 25) {
                 g2.drawLine(x0, gy, x0 + pw, gy);
             }
-            g2.setColor(new Color(0x99, 0x99, 0x99));
+            g2.setColor(dark ? new Color(0x45, 0x4B, 0x54) : new Color(0x99, 0x99, 0x99));
             g2.drawRect(x0, y0, pw, ph);
 
             // Compute value bounds adjusted by yZoom
@@ -535,7 +558,7 @@ public class ScopePanel extends JPanel {
             // Left margin Y-axis labels & channel legend
             Font font = AppFonts.mono(Font.PLAIN, AppSettings.get().scale(10));
             g2.setFont(font);
-            g2.setColor(Color.BLACK);
+            g2.setColor(dark ? new Color(0xF5, 0xF7, 0xFA) : Color.BLACK);
             g2.drawString(String.format(java.util.Locale.US, "%.1f", vMax), 6, y0 + 11);
             g2.drawString(String.format(java.util.Locale.US, "%.1f", vMin), 6, y0 + ph - 3);
 
@@ -582,13 +605,14 @@ public class ScopePanel extends JPanel {
         private static final Color BOOL_BORDER = new Color(0xAA, 0xAA, 0xAA);
 
         private void paintBooleanBar(Graphics2D g2, String ch, int x0, int y0, int pw, int lh, int idx) {
-            g2.setColor(BOOL_BG);
+            boolean dark = AppSettings.get().isDarkMode();
+            g2.setColor(dark ? new Color(0x14, 0x16, 0x1A) : BOOL_BG);
             g2.fillRect(x0, y0, pw, lh);
-            g2.setColor(BOOL_GRID);
+            g2.setColor(dark ? new Color(0x2B, 0x30, 0x3A) : BOOL_GRID);
             for (int gx = x0; gx <= x0 + pw; gx += 40) {
                 g2.drawLine(gx, y0, gx, y0 + lh);
             }
-            g2.setColor(BOOL_BORDER);
+            g2.setColor(dark ? new Color(0x45, 0x4B, 0x54) : BOOL_BORDER);
             g2.drawRect(x0, y0, pw, lh);
 
             Deque<Double> q = channelHistory.get(ch);
@@ -599,7 +623,7 @@ public class ScopePanel extends JPanel {
             FontMetrics fm = g2.getFontMetrics();
             Color col = DataType.BOOL.getWireColor();
 
-            g2.setColor(Color.BLACK);
+            g2.setColor(dark ? new Color(0xF5, 0xF7, 0xFA) : Color.BLACK);
             int ty = y0 + (lh + fm.getAscent() - fm.getDescent()) / 2;
             g2.drawString(ch + " [" + (curHigh ? "1" : "0") + "]", 6, ty);
 

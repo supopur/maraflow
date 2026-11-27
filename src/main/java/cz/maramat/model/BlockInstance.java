@@ -118,6 +118,10 @@ public class BlockInstance {
             customProperties.put("ResolutionBits", "12");
         } else if (definitionId.equals("Comm.I2C.TMP75")) {
             customProperties.put("DeviceAddressHex", "0x48");
+        } else if (definitionId.equals("Comm.I2C.BME280")) {
+            customProperties.put("DeviceAddressHex", "0x76");
+        } else if (definitionId.equals("Comm.I2C.SHT40")) {
+            customProperties.put("DeviceAddressHex", "0x44");
         } else if (definitionId.startsWith("Comm.I2C")) {
             customProperties.put("DeviceAddressHex", "0x48");
             customProperties.put("RegisterAddressHex", "0x00");

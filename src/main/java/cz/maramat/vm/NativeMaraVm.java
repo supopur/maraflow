@@ -101,6 +101,10 @@ public final class NativeMaraVm implements AutoCloseable {
     public static final int COMM_DS18B20 = 2;
     public static final int COMM_CH455G = 3;
     public static final int COMM_MODBUS_RTU = 4;
+    public static final int COMM_REST_GET = 5;
+    public static final int COMM_REST_POST = 6;
+    public static final int COMM_BME280 = 7;
+    public static final int COMM_SHT40 = 8;
 
     public enum RunState {
         STOPPED, RUNNING, PAUSED, FAULT, ESTOP

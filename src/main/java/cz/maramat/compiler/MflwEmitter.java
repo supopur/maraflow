@@ -104,35 +104,46 @@ public final class MflwEmitter {
             threadStreams[t] = new ByteArrayOutputStream();
         }
 
+        Page dedicatedEStop = project.findEStopPage();
         for (Page page : project.getPages()) {
             if (page.isMacro()) continue;
+            boolean isEStopPage = (page == dedicatedEStop || page.isEStopPage());
             if (page.getLanguage() == IecLanguage.ST) {
-                emitStPage(threadStreams[Math.clamp(page.getStThreadId(), 1, 5)], page);
+                int tid = isEStopPage ? 0 : Math.clamp(page.getStThreadId(), 1, 5);
+                emitStPage(threadStreams[tid], page);
                 continue;
             }
             if (page.getLanguage() == IecLanguage.LD) {
-                emitLdPage(threadStreams, page);
+                if (isEStopPage) {
+                    emitLdPageToSingleStream(threadStreams[0], page);
+                } else {
+                    emitLdPage(threadStreams, page);
+                }
                 continue;
             }
             if (page.getLanguage() != IecLanguage.FBD) continue;
             List<BlockInstance> sorted = new ArrayList<>(page.getAllBlockInstances());
             sorted.sort(Comparator.comparingInt(BlockInstance::getOrder));
             for (BlockInstance b : sorted) {
-                int tid = Math.clamp(b.getThreadId(), 1, 5);
+                int tid = isEStopPage ? 0 : Math.clamp(b.getThreadId(), 1, 5);
                 emitFbdBlock(threadStreams[tid], b, blockPinSlot, wiredSourceSlot);
             }
         }
 
-        for (int t = 1; t < NativeMaraVm.THREAD_COUNT; t++) {
+        for (int t = 0; t < NativeMaraVm.THREAD_COUNT; t++) {
             writeWord(threadStreams[t], NativeMaraVm.OP_HALT, 0, NativeMaraVm.SLOT_ALWAYS_ENABLED, 0, 0);
         }
 
-        // 4. Assemble MFLW image: [64B Header] [InitTable] [Thread 1..5 Bytecode]
+        // 4. Assemble MFLW image: [72B Header] [InitTable] [Thread 0..5 Bytecode]
         int initTableOffset = NativeMaraVm.HEADER_SIZE_BYTES;
         int initTableBytes = initEntries.size() * 12;
         int cursor = initTableOffset + initTableBytes;
         int[] threadOffsets = new int[NativeMaraVm.THREAD_COUNT];
-        for (int t = 1; t < NativeMaraVm.THREAD_COUNT; t++) {
+        for (int t = 0; t < NativeMaraVm.THREAD_COUNT; t++) {
+            if (t == 0 && threadStreams[0].size() <= 8) {
+                threadOffsets[0] = 0;
+                continue;
+            }
             threadOffsets[t] = cursor;
             cursor += threadStreams[t].size();
         }
@@ -149,6 +160,7 @@ public final class MflwEmitter {
         img.putShort(24, (short) nextSlotIndex[NativeMaraVm.TYPE_LONG]);
         img.putShort(26, (short) nextSlotIndex[NativeMaraVm.TYPE_FLOAT]);
         img.putShort(28, (short) nextStateIdx);
+        img.putInt(32, encodeEStopConfig(project.getEStopConfig()));
         img.putInt(36, initTableOffset);
         img.putInt(40, initEntries.size());
         for (int t = 0; t < NativeMaraVm.THREAD_COUNT; t++) {
@@ -162,7 +174,8 @@ public final class MflwEmitter {
             img.putLong(pos + 4, e.rawBits);
             pos += 12;
         }
-        for (int t = 1; t < NativeMaraVm.THREAD_COUNT; t++) {
+        for (int t = 0; t < NativeMaraVm.THREAD_COUNT; t++) {
+            if (threadOffsets[t] == 0) continue;
             byte[] bc = threadStreams[t].toByteArray();
             System.arraycopy(bc, 0, img.array(), threadOffsets[t], bc.length);
         }
@@ -172,6 +185,43 @@ public final class MflwEmitter {
         img.putInt(12, crc32);
 
         return new EmittedProgram(raw, Map.copyOf(operandToSlot), Map.copyOf(slotToOperand));
+    }
+
+    private static int encodeEStopConfig(cz.maramat.model.EStopConfig cfg) {
+        if (cfg == null || !cfg.isEnabled()) return 0;
+        int packed = 0x01;
+        if (cfg.getMode() == cz.maramat.model.EStopConfig.Mode.DEDICATED_ESTOP_PAGE) {
+            packed |= 0x02;
+        }
+        if (cfg.isManualResetRequired()) {
+            packed |= 0x04;
+        }
+        List<cz.maramat.model.EStopConfig.InputRule> rules = cfg.getInputRules();
+        for (int i = 0; i < Math.min(4, rules.size()); i++) {
+            cz.maramat.model.EStopConfig.InputRule r = rules.get(i);
+            int ch = parseDiChannel(r.getInputChannel());
+            if (!r.isEnabled() || ch < 0 || ch > 31) continue;
+            int ruleBits = 0x01 | (r.isActiveLow() ? 0x02 : 0) | ((ch & 0x1F) << 2);
+            packed |= (ruleBits << (4 + i * 7));
+        }
+        return packed;
+    }
+
+    private static int parseDiChannel(String ch) {
+        if (ch == null) return -1;
+        String u = ch.trim().toUpperCase();
+        if (!u.startsWith("DI")) return -1;
+        try {
+            return Integer.parseInt(u.substring(2));
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    private void emitLdPageToSingleStream(ByteArrayOutputStream out, Page page) {
+        ByteArrayOutputStream[] tmp = new ByteArrayOutputStream[NativeMaraVm.THREAD_COUNT];
+        for (int t = 0; t < NativeMaraVm.THREAD_COUNT; t++) tmp[t] = out;
+        emitLdPage(tmp, page);
     }
 
     private void emitFbdBlock(ByteArrayOutputStream out, BlockInstance b,
@@ -624,6 +674,41 @@ public final class MflwEmitter {
                     writeU16(out, 0);
                 }
             }
+            case "Comm.REST.RestGet", "Comm.REST.RestPost" -> {
+                boolean isPost = b.getDefinitionId().endsWith("Post");
+                byte[] urlBytes = b.getCustomProperties().getOrDefault("EndpointUrl", "http://192.168.1.100/api/val")
+                        .trim().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                byte[] keyBytes = b.getCustomProperties().getOrDefault("JsonKey", "value")
+                        .trim().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                int urlLen = Math.min(urlBytes.length, 200);
+                int keyLen = Math.min(keyBytes.length, 64);
+                int rawLen = urlLen + keyLen;
+                int paddedLen = (rawLen + 3) & ~3;
+                int timeoutMs = parseIntPropOrDefault(b.getCustomProperties().get("TimeoutMs"), 1000, 100, 10000);
+                if (isPost) {
+                    int valSlot = findInputSlotByShortName(b, inSlots, "Val");
+                    int stsSlot = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                    int rdySlot = blockPinSlot.getOrDefault(b.getId() + ":OUT:1", NativeMaraVm.SLOT_ALWAYS_ENABLED);
+                    writeWord(out, NativeMaraVm.OP_COMM_EXEC, NativeMaraVm.COMM_REST_POST, enSlot, stsSlot, timeoutMs);
+                    writeU16(out, valSlot);
+                    writeU16(out, rdySlot);
+                } else {
+                    int outSlot = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                    int stsSlot = blockPinSlot.getOrDefault(b.getId() + ":OUT:1", NativeMaraVm.SLOT_ALWAYS_ENABLED);
+                    int rdySlot = blockPinSlot.getOrDefault(b.getId() + ":OUT:2", NativeMaraVm.SLOT_ALWAYS_ENABLED);
+                    writeWord(out, NativeMaraVm.OP_COMM_EXEC, NativeMaraVm.COMM_REST_GET, enSlot, outSlot, timeoutMs);
+                    writeU16(out, stsSlot);
+                    writeU16(out, rdySlot);
+                }
+                out.write(urlLen & 0xFF);
+                out.write(keyLen & 0xFF);
+                writeU16(out, paddedLen);
+                out.write(urlBytes, 0, urlLen);
+                out.write(keyBytes, 0, keyLen);
+                for (int p = rawLen; p < paddedLen; p++) {
+                    out.write(0);
+                }
+            }
             case "Comm.I2C.TMP75" -> {
                 int tmp = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
                 int ok = blockPinSlot.getOrDefault(b.getId() + ":OUT:1", NativeMaraVm.SLOT_ALWAYS_ENABLED);
@@ -631,6 +716,27 @@ public final class MflwEmitter {
                 writeWord(out, NativeMaraVm.OP_COMM_EXEC, NativeMaraVm.COMM_TMP75, enSlot, tmp, addr7);
                 writeU16(out, ok);
                 writeU16(out, 0);
+            }
+            case "Comm.I2C.BME280" -> {
+                int tmp = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                int hum = blockPinSlot.getOrDefault(b.getId() + ":OUT:1", NativeMaraVm.SLOT_ALWAYS_ENABLED);
+                int prs = blockPinSlot.getOrDefault(b.getId() + ":OUT:2", NativeMaraVm.SLOT_ALWAYS_ENABLED);
+                int ok  = blockPinSlot.getOrDefault(b.getId() + ":OUT:3", NativeMaraVm.SLOT_ALWAYS_ENABLED);
+                int addr7 = parseHexByteOrDefault(b.getCustomProperties().get("DeviceAddressHex"), 0x76);
+                writeWord(out, NativeMaraVm.OP_COMM_EXEC, NativeMaraVm.COMM_BME280, enSlot, tmp, addr7);
+                writeU16(out, hum);
+                writeU16(out, prs);
+                writeU16(out, ok);
+                writeU16(out, 0);
+            }
+            case "Comm.I2C.SHT40" -> {
+                int tmp = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);
+                int hum = blockPinSlot.getOrDefault(b.getId() + ":OUT:1", NativeMaraVm.SLOT_ALWAYS_ENABLED);
+                int ok  = blockPinSlot.getOrDefault(b.getId() + ":OUT:2", NativeMaraVm.SLOT_ALWAYS_ENABLED);
+                int addr7 = parseHexByteOrDefault(b.getCustomProperties().get("DeviceAddressHex"), 0x44);
+                writeWord(out, NativeMaraVm.OP_COMM_EXEC, NativeMaraVm.COMM_SHT40, enSlot, tmp, addr7);
+                writeU16(out, hum);
+                writeU16(out, ok);
             }
             case "Comm.DS18B20.DS18B20Read" -> {
                 int tmp = blockPinSlot.getOrDefault(b.getId() + ":OUT:0", 0);

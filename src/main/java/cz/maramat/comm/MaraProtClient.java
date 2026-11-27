@@ -402,12 +402,12 @@ public final class MaraProtClient implements Closeable {
     }
 
     private static String decodeDoPin(int val) {
-        return (val >= 0 && val <= 15) ? ("DO" + val) : "None";
+        return (val >= 0 && val <= 27) ? ("DO" + val) : "None";
     }
 
     private static int encodeDoPin(String pin) {
         if (pin != null && pin.startsWith("DO")) {
-            try { return Math.clamp(Integer.parseInt(pin.substring(2)), 0, 15); } catch (NumberFormatException ignored) {}
+            try { return Math.clamp(Integer.parseInt(pin.substring(2)), 0, 27); } catch (NumberFormatException ignored) {}
         }
         return 0xFF;
     }
@@ -484,7 +484,10 @@ public final class MaraProtClient implements Closeable {
         }
         transport.write(encodeFrame(stationId, seqId, verFlags, opcode, wirePayload));
 
-        long deadline = System.currentTimeMillis() + timeoutMs;
+        int effectiveTimeoutMs = (transport instanceof MaraTransport.TcpTransport)
+                ? Math.max(timeoutMs, 5000)
+                : timeoutMs;
+        long deadline = System.currentTimeMillis() + effectiveTimeoutMs;
         byte[] hdr = new byte[HEADER_BYTES];
         byte[] tmp = new byte[1];
 

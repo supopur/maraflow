@@ -497,6 +497,107 @@ public final class VisualElementDialogs {
         }
     }
 
+    public static boolean isSimClickableBlock(BlockInstance b) {
+        if (b == null) return false;
+        String defId = b.getDefinitionId();
+        return switch (defId) {
+            case "Comm.I2C.TMP75", "Comm.I2C.BME280", "Comm.I2C.SHT40", "Comm.DS18B20.DS18B20Read" -> true;
+            case "Comm.REST.RestGet", "Comm.REST.RestPost" ->
+                    "Simulate".equalsIgnoreCase(cz.maramat.settings.AppSettings.get().getRestSimMode());
+            default -> false;
+        };
+    }
+
+    /**
+     * Opens a live simulation popup for sensor blocks (and REST blocks when REST mode is "Simulate")
+     * with sliders for INT/FLOAT outputs and ON/OFF toggle buttons for BOOL outputs.
+     */
+    public static void showSimulatedBlockPopup(Frame owner, BlockInstance block, Runnable repaintCallback) {
+        JDialog dlg = new JDialog(owner, block.getName() + " - Simulate Outputs", true);
+        JPanel root = new JPanel(new BorderLayout(8, 8));
+        root.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
+
+        JPanel form = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(4, 6, 4, 6);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        int row = 0;
+
+        for (PinInstance pin : block.getOutputs()) {
+            String key = "SimOut." + pin.getShortName();
+            double curVal = pin.getRuntimeValue();
+            String saved = block.getCustomProperties().get(key);
+            if (saved != null && !saved.isBlank()) {
+                try { curVal = Double.parseDouble(saved.trim()); } catch (NumberFormatException ignored) {}
+            }
+
+            gbc.gridx = 0; gbc.gridy = row; gbc.weightx = 0.0;
+            form.add(new JLabel(pin.getShortName() + " (" + pin.getFullName() + "):"), gbc);
+
+            if (pin.getDataType() == DataType.BOOL) {
+                boolean isOn = curVal != 0.0;
+                javax.swing.JToggleButton toggle = new javax.swing.JToggleButton(isOn ? "ON (1)" : "OFF (0)", isOn);
+                toggle.addActionListener(ev -> {
+                    boolean sel = toggle.isSelected();
+                    toggle.setText(sel ? "ON (1)" : "OFF (0)");
+                    double nv = sel ? 1.0 : 0.0;
+                    block.getCustomProperties().put(key, sel ? "1" : "0");
+                    pin.setRuntimeValue(nv);
+                    if (repaintCallback != null) repaintCallback.run();
+                });
+                gbc.gridx = 1; gbc.weightx = 1.0;
+                form.add(toggle, gbc);
+            } else {
+                boolean isInt = pin.getDataType() == DataType.INT;
+                double minD, maxD;
+                int scale;
+                switch (pin.getShortName()) {
+                    case "Tmp" -> { minD = -40.0; maxD = 125.0; scale = 10; }
+                    case "Hum" -> { minD = 0.0; maxD = 100.0; scale = 10; }
+                    case "Prs" -> { minD = 300.0; maxD = 1100.0; scale = 10; }
+                    case "Sts" -> { minD = 0.0; maxD = 599.0; scale = 1; }
+                    default -> { minD = -100.0; maxD = 100.0; scale = isInt ? 1 : 10; }
+                }
+                int sMin = (int) Math.round(minD * scale);
+                int sMax = (int) Math.round(maxD * scale);
+                int sCur = Math.clamp((int) Math.round(curVal * scale), sMin, sMax);
+
+                JPanel sliderRow = new JPanel(new BorderLayout(6, 0));
+                JLabel valLbl = new JLabel(isInt ? Integer.toString((int) Math.round(curVal))
+                        : String.format(java.util.Locale.ROOT, "%.1f", sCur / (double) scale));
+                valLbl.setPreferredSize(new Dimension(60, 20));
+                JSlider slider = new JSlider(sMin, sMax, sCur);
+                slider.addChangeListener(ev -> {
+                    double v = slider.getValue() / (double) scale;
+                    String s = isInt ? Integer.toString((int) Math.round(v))
+                            : String.format(java.util.Locale.ROOT, "%.2f", v);
+                    valLbl.setText(s);
+                    block.getCustomProperties().put(key, s);
+                    pin.setRuntimeValue(v);
+                    if (repaintCallback != null) repaintCallback.run();
+                });
+                sliderRow.add(slider, BorderLayout.CENTER);
+                sliderRow.add(valLbl, BorderLayout.EAST);
+                gbc.gridx = 1; gbc.weightx = 1.0;
+                form.add(sliderRow, gbc);
+            }
+            row++;
+        }
+
+        JButton closeBtn = new JButton("Close", VectorIcons.greenCheckIcon());
+        closeBtn.addActionListener(e -> dlg.dispose());
+        JPanel btnBar = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        btnBar.add(closeBtn);
+
+        root.add(form, BorderLayout.CENTER);
+        root.add(btnBar, BorderLayout.SOUTH);
+        dlg.setContentPane(root);
+        dlg.pack();
+        dlg.setMinimumSize(new Dimension(420, Math.max(160, 90 + row * 40)));
+        dlg.setLocationRelativeTo(owner);
+        dlg.setVisible(true);
+    }
+
     private static int parseIntSafe(String s, int fallback) {
         try {
             return Integer.parseInt(s.trim());

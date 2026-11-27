@@ -17,6 +17,19 @@ public final class VectorIcons {
 
     private VectorIcons() {}
 
+    private static final Color LIGHT_INK = new Color(0x1A, 0x1A, 0x1A);
+    private static final Color DARK_INK = new Color(0xF5, 0xF7, 0xFA);
+    private static final Color LIGHT_ACCENT_BLUE = new Color(0x1F, 0x4E, 0x79);
+    private static final Color DARK_ACCENT_BLUE = new Color(0x64, 0xB5, 0xF6);
+
+    private static Color ink() {
+        return AppSettings.get().isDarkMode() ? DARK_INK : LIGHT_INK;
+    }
+
+    private static Color accentBlue() {
+        return AppSettings.get().isDarkMode() ? DARK_ACCENT_BLUE : LIGHT_ACCENT_BLUE;
+    }
+
     private abstract static class ScaledIcon implements Icon {
         private final int baseW;
         private final int baseH;
@@ -78,7 +91,7 @@ public final class VectorIcons {
     }
 
     private static void drawFlyoutCorner(Graphics2D g2, int w, int h) {
-        g2.setColor(new Color(0x11, 0x11, 0x11));
+        g2.setColor(ink());
         Polygon tri = new Polygon(
                 new int[]{w - 1, w - 5, w - 1},
                 new int[]{h - 5, h - 1, h - 1},
@@ -122,7 +135,7 @@ public final class VectorIcons {
                 );
                 g2.setColor(Color.WHITE);
                 g2.fillPolygon(arrow);
-                g2.setColor(new Color(0x1A, 0x1A, 0x1A));
+                g2.setColor(ink());
                 g2.setStroke(new BasicStroke(1.2f));
                 g2.drawPolygon(arrow);
             }
@@ -133,7 +146,7 @@ public final class VectorIcons {
         return new ScaledIcon(16, 16) {
             @Override
             protected void paintLogical(Component c, Graphics2D g2) {
-                g2.setColor(new Color(0x1A, 0x1A, 0x1A));
+                g2.setColor(ink());
                 g2.setStroke(new BasicStroke(1.5f));
                 g2.drawLine(2, 13, 13, 2);
                 g2.fillRect(1, 12, 3, 3);
@@ -146,7 +159,7 @@ public final class VectorIcons {
         return new ScaledIcon(16, 16) {
             @Override
             protected void paintLogical(Component c, Graphics2D g2) {
-                g2.setColor(new Color(0x1A, 0x1A, 0x1A));
+                g2.setColor(ink());
                 g2.setStroke(new BasicStroke(1.3f));
                 switch (kind) {
                     case RECTANGLE -> g2.drawRect(2, 3, 10, 8);
@@ -195,7 +208,7 @@ public final class VectorIcons {
         return new ScaledIcon(16, 16) {
             @Override
             protected void paintLogical(Component c, Graphics2D g2) {
-                g2.setColor(new Color(0x11, 0x11, 0x11));
+                g2.setColor(ink());
                 g2.setFont(new Font("Serif", Font.BOLD, 14));
                 g2.drawString("T", 3, 13);
             }
@@ -208,7 +221,7 @@ public final class VectorIcons {
             protected void paintLogical(Component c, Graphics2D g2) {
                 g2.setColor(new Color(0xDC, 0xE2, 0xE8));
                 g2.fillRect(1, 3, 13, 9);
-                g2.setColor(new Color(0x22, 0x22, 0x22));
+                g2.setColor(ink());
                 g2.drawRect(1, 3, 13, 9);
                 g2.setColor(new Color(0x00, 0x80, 0x80));
                 g2.fillRect(4, 6, 7, 3);
@@ -220,7 +233,7 @@ public final class VectorIcons {
         return new ScaledIcon(16, 16) {
             @Override
             protected void paintLogical(Component c, Graphics2D g2) {
-                g2.setColor(c.isEnabled() ? new Color(0x1F, 0x4E, 0x79) : new Color(0x99, 0x99, 0x99));
+                g2.setColor(c.isEnabled() ? accentBlue() : new Color(0x99, 0x99, 0x99));
                 g2.setStroke(new BasicStroke(1.7f));
                 g2.drawArc(4, 4, 9, 8, 0, 180);
                 Polygon head = new Polygon(new int[]{2, 6, 6}, new int[]{7, 4, 10}, 3);
@@ -233,7 +246,7 @@ public final class VectorIcons {
         return new ScaledIcon(16, 16) {
             @Override
             protected void paintLogical(Component c, Graphics2D g2) {
-                g2.setColor(c.isEnabled() ? new Color(0x1F, 0x4E, 0x79) : new Color(0x99, 0x99, 0x99));
+                g2.setColor(c.isEnabled() ? accentBlue() : new Color(0x99, 0x99, 0x99));
                 g2.setStroke(new BasicStroke(1.7f));
                 g2.drawArc(2, 4, 9, 8, 0, 180);
                 Polygon head = new Polygon(new int[]{13, 9, 9}, new int[]{7, 4, 10}, 3);
@@ -246,7 +259,7 @@ public final class VectorIcons {
         return new ScaledIcon(8, 16) {
             @Override
             protected void paintLogical(Component c, Graphics2D g2) {
-                g2.setColor(c.isEnabled() ? new Color(0x22, 0x22, 0x22) : new Color(0x99, 0x99, 0x99));
+                g2.setColor(c.isEnabled() ? ink() : new Color(0x99, 0x99, 0x99));
                 Polygon tri = new Polygon(new int[]{1, 7, 4}, new int[]{6, 6, 10}, 3);
                 g2.fillPolygon(tri);
             }
@@ -300,7 +313,7 @@ public final class VectorIcons {
                 g2.fillRect(1, 2, 5, 4);
                 g2.fillRect(1, 9, 5, 4);
                 g2.fillRect(9, 5, 5, 5);
-                g2.setColor(new Color(0x22, 0x22, 0x22));
+                g2.setColor(ink());
                 g2.drawRect(1, 2, 5, 4);
                 g2.drawRect(1, 9, 5, 4);
                 g2.drawRect(9, 5, 5, 5);
@@ -314,7 +327,7 @@ public final class VectorIcons {
         return new ScaledIcon(16, 16) {
             @Override
             protected void paintLogical(Component c, Graphics2D g2) {
-                g2.setColor(new Color(0x1F, 0x4E, 0x79));
+                g2.setColor(accentBlue());
                 g2.setFont(new Font("SansSerif", Font.BOLD, 8));
                 g2.drawString("1", 1, 7);
                 g2.drawString("2", 1, 14);
@@ -360,7 +373,7 @@ public final class VectorIcons {
         return new ScaledIcon(16, 16) {
             @Override
             protected void paintLogical(Component c, Graphics2D g2) {
-                g2.setColor(new Color(0x1A, 0x1A, 0x1A));
+                g2.setColor(ink());
                 g2.setStroke(new BasicStroke(1.4f));
                 g2.drawOval(1, 6, 6, 6);
                 g2.drawOval(9, 6, 6, 6);
@@ -394,7 +407,7 @@ public final class VectorIcons {
         return new ScaledIcon(10, 10) {
             @Override
             protected void paintLogical(Component c, Graphics2D g2) {
-                g2.setColor(new Color(0x33, 0x33, 0x33));
+                g2.setColor(ink());
                 g2.setStroke(new BasicStroke(1.5f));
                 g2.drawLine(2, 2, 8, 8);
                 g2.drawLine(8, 2, 2, 8);
@@ -406,7 +419,7 @@ public final class VectorIcons {
         return new ScaledIcon(10, 10) {
             @Override
             protected void paintLogical(Component c, Graphics2D g2) {
-                g2.setColor(new Color(0x33, 0x33, 0x33));
+                g2.setColor(ink());
                 g2.setStroke(new BasicStroke(1.8f));
                 g2.drawLine(1, 8, 8, 8);
             }
@@ -417,7 +430,7 @@ public final class VectorIcons {
         return new ScaledIcon(10, 10) {
             @Override
             protected void paintLogical(Component c, Graphics2D g2) {
-                g2.setColor(new Color(0x33, 0x33, 0x33));
+                g2.setColor(ink());
                 g2.setStroke(new BasicStroke(1.2f));
                 g2.drawRect(1, 1, 7, 7);
             }
@@ -428,7 +441,7 @@ public final class VectorIcons {
         return new ScaledIcon(10, 10) {
             @Override
             protected void paintLogical(Component c, Graphics2D g2) {
-                g2.setColor(new Color(0x33, 0x33, 0x33));
+                g2.setColor(ink());
                 g2.setStroke(new BasicStroke(1.0f));
                 g2.drawRect(3, 1, 5, 5);
                 g2.drawRect(1, 3, 5, 5);
@@ -458,7 +471,7 @@ public final class VectorIcons {
         return new ScaledIcon(20, 16) {
             @Override
             protected void paintLogical(Component c, Graphics2D g2) {
-                g2.setColor(new Color(0x1A, 0x1A, 0x1A));
+                g2.setColor(ink());
                 g2.setStroke(new BasicStroke(1.4f));
                 g2.drawLine(1, 8, 6, 8);
                 g2.drawLine(13, 8, 18, 8);
@@ -480,7 +493,7 @@ public final class VectorIcons {
         return new ScaledIcon(20, 16) {
             @Override
             protected void paintLogical(Component c, Graphics2D g2) {
-                g2.setColor(new Color(0x1A, 0x1A, 0x1A));
+                g2.setColor(ink());
                 g2.setStroke(new BasicStroke(1.4f));
                 g2.drawLine(1, 8, 5, 8);
                 g2.drawLine(14, 8, 18, 8);
@@ -499,7 +512,7 @@ public final class VectorIcons {
         return new ScaledIcon(20, 16) {
             @Override
             protected void paintLogical(Component c, Graphics2D g2) {
-                g2.setColor(new Color(0x1F, 0x61, 0x8D));
+                g2.setColor(accentBlue());
                 g2.setStroke(new BasicStroke(1.4f));
                 g2.drawLine(1, 4, 18, 4);
                 g2.drawLine(4, 4, 4, 12);
@@ -516,7 +529,7 @@ public final class VectorIcons {
         return new ScaledIcon(22, 16) {
             @Override
             protected void paintLogical(Component c, Graphics2D g2) {
-                g2.setColor(new Color(0x1F, 0x61, 0x8D));
+                g2.setColor(accentBlue());
                 g2.setStroke(new BasicStroke(1.3f));
                 g2.drawLine(0, 8, 3, 8);
                 g2.drawLine(18, 8, 21, 8);

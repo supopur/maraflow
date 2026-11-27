@@ -179,37 +179,23 @@ public class StEditorPanel extends JPanel {
         this.project = project;
         this.page = page;
         this.onStateChanged = onStateChanged;
-        setBackground(new Color(0xEC, 0xEC, 0xEC));
 
         // Configure Styles
         StyledDocument doc = codePane.getStyledDocument();
         styleDefault = codePane.addStyle("default", null);
-        StyleConstants.setForeground(styleDefault, new Color(0x14, 0x18, 0x1F));
-
         styleKeyword = codePane.addStyle("keyword", null);
-        StyleConstants.setForeground(styleKeyword, new Color(0x00, 0x33, 0x99));
-        StyleConstants.setBold(styleKeyword, true);
-
         styleFunction = codePane.addStyle("function", null);
-        StyleConstants.setForeground(styleFunction, new Color(0x00, 0x66, 0x77));
-        StyleConstants.setBold(styleFunction, true);
-
         styleComment = codePane.addStyle("comment", null);
-        StyleConstants.setForeground(styleComment, new Color(0x2E, 0x7D, 0x32));
-        StyleConstants.setItalic(styleComment, true);
-
         styleNumber = codePane.addStyle("number", null);
-        StyleConstants.setForeground(styleNumber, new Color(0x7B, 0x1F, 0xA2));
-
         styleHardwareIo = codePane.addStyle("hwio", null);
-        StyleConstants.setForeground(styleHardwareIo, new Color(0x9A, 0x34, 0x12));
-        StyleConstants.setBold(styleHardwareIo, true);
+        applySyntaxStyles();
 
         // 1. Top Panel: Variable Declaration Table
         JPanel topPanel = buildVariableDeclarationPanel();
 
         // 2. Bottom Panel: Monospaced ST Code Editor
         JPanel bottomPanel = buildCodeEditorPanel();
+        applyThemeColors();
 
         splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, topPanel, bottomPanel);
         splitPane.setDividerSize(6);
@@ -437,15 +423,19 @@ public class StEditorPanel extends JPanel {
         setPage(project, page);
     }
 
+    private JPanel varPanel;
+    private JPanel varBar;
+    private JPanel codePanel;
+    private JPanel codeBar;
+    private JPanel footerPanel;
+
     private JPanel buildVariableDeclarationPanel() {
-        JPanel panel = new JPanel(new BorderLayout(0, 2));
-        panel.setBackground(new Color(0xEC, 0xEC, 0xEC));
-        panel.setBorder(BorderFactory.createEmptyBorder(3, 4, 2, 4));
+        varPanel = new JPanel(new BorderLayout(0, 2));
+        varPanel.setBorder(BorderFactory.createEmptyBorder(3, 4, 2, 4));
 
         // Toolbar above Variable Table
-        JPanel bar = new JPanel(new BorderLayout(6, 0));
-        bar.setBackground(new Color(0xE4, 0xE6, 0xEA));
-        bar.setBorder(BorderFactory.createCompoundBorder(
+        varBar = new JPanel(new BorderLayout(6, 0));
+        varBar.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createEtchedBorder(),
                 BorderFactory.createEmptyBorder(2, 6, 2, 6)
         ));
@@ -469,7 +459,7 @@ public class StEditorPanel extends JPanel {
         downBtn.addActionListener(e -> moveSelectedVariable(1));
         leftControls.add(downBtn);
 
-        bar.add(leftControls, BorderLayout.WEST);
+        varBar.add(leftControls, BorderLayout.WEST);
 
         JPanel rightControls = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
         rightControls.setOpaque(false);
@@ -502,8 +492,8 @@ public class StEditorPanel extends JPanel {
         });
         rightControls.add(orderSpinner);
 
-        bar.add(rightControls, BorderLayout.EAST);
-        panel.add(bar, BorderLayout.NORTH);
+        varBar.add(rightControls, BorderLayout.EAST);
+        varPanel.add(varBar, BorderLayout.NORTH);
 
         // Configure JTable
         varTable.setFont(AppFonts.uiPlain());
@@ -536,8 +526,9 @@ public class StEditorPanel extends JPanel {
                 Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
                 c.setFont(AppFonts.canvasMonoBold(11f));
                 if (!isSelected) {
-                    c.setBackground(new Color(0xF0, 0xF6, 0xEC));
-                    c.setForeground(new Color(0x0B, 0x5E, 0x20));
+                    boolean dark = AppSettings.get().isDarkMode();
+                    c.setBackground(dark ? new Color(0x1E, 0x2B, 0x22) : new Color(0xF0, 0xF6, 0xEC));
+                    c.setForeground(dark ? new Color(0x81, 0xC7, 0x84) : new Color(0x0B, 0x5E, 0x20));
                 }
                 return c;
             }
@@ -545,20 +536,18 @@ public class StEditorPanel extends JPanel {
 
         JScrollPane tableScroll = new JScrollPane(varTable);
         tableScroll.setBorder(BorderFactory.createLoweredBevelBorder());
-        panel.add(tableScroll, BorderLayout.CENTER);
+        varPanel.add(tableScroll, BorderLayout.CENTER);
 
-        return panel;
+        return varPanel;
     }
 
     private JPanel buildCodeEditorPanel() {
-        JPanel panel = new JPanel(new BorderLayout(0, 2));
-        panel.setBackground(new Color(0xEC, 0xEC, 0xEC));
-        panel.setBorder(BorderFactory.createEmptyBorder(2, 4, 4, 4));
+        codePanel = new JPanel(new BorderLayout(0, 2));
+        codePanel.setBorder(BorderFactory.createEmptyBorder(2, 4, 4, 4));
 
         // Code Editor Snippet & Validation Bar
-        JPanel bar = new JPanel(new BorderLayout(6, 0));
-        bar.setBackground(new Color(0xE4, 0xE6, 0xEA));
-        bar.setBorder(BorderFactory.createCompoundBorder(
+        codeBar = new JPanel(new BorderLayout(6, 0));
+        codeBar.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createEtchedBorder(),
                 BorderFactory.createEmptyBorder(2, 6, 2, 6)
         ));
@@ -594,13 +583,15 @@ public class StEditorPanel extends JPanel {
         findBtn.addActionListener(e -> openFindBar(false));
         snippetPanel.add(findBtn);
 
-        bar.add(snippetPanel, BorderLayout.WEST);
+        codeBar.add(snippetPanel, BorderLayout.WEST);
 
-        panel.add(bar, BorderLayout.NORTH);
+        codePanel.add(codeBar, BorderLayout.NORTH);
 
         codePane.setFont(AppFonts.canvasMono(13f));
-        codePane.setBackground(Color.WHITE);
-        codePane.setCaretColor(Color.BLACK);
+        boolean dark = AppSettings.get().isDarkMode();
+        codePane.setBackground(dark ? new Color(0x1B, 0x1D, 0x21) : Color.WHITE);
+        codePane.setForeground(dark ? new Color(0xF5, 0xF7, 0xFA) : new Color(0x14, 0x18, 0x1F));
+        codePane.setCaretColor(dark ? Color.WHITE : Color.BLACK);
 
         JScrollPane codeScroll = new JScrollPane(codePane);
         codeScroll.setRowHeaderView(gutter);
@@ -611,28 +602,85 @@ public class StEditorPanel extends JPanel {
         JPanel editorWithFind = new JPanel(new BorderLayout());
         editorWithFind.add(findBar, BorderLayout.NORTH);
         editorWithFind.add(codeScroll, BorderLayout.CENTER);
-        panel.add(editorWithFind, BorderLayout.CENTER);
+        codePanel.add(editorWithFind, BorderLayout.CENTER);
 
         // Status / Diagnostic Footer
-        JPanel footer = new JPanel(new BorderLayout(8, 0));
-        footer.setBackground(new Color(0xE8, 0xEA, 0xEE));
-        footer.setBorder(BorderFactory.createCompoundBorder(
+        footerPanel = new JPanel(new BorderLayout(8, 0));
+        footerPanel.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLoweredBevelBorder(),
                 BorderFactory.createEmptyBorder(2, 6, 2, 6)
         ));
         statusLabel.setFont(AppFonts.uiBold());
-        statusLabel.setForeground(new Color(0x1B, 0x5E, 0x20));
-        footer.add(statusLabel, BorderLayout.CENTER);
-        panel.add(footer, BorderLayout.SOUTH);
+        statusLabel.setForeground(dark ? new Color(0x81, 0xC7, 0x84) : new Color(0x1B, 0x5E, 0x20));
+        footerPanel.add(statusLabel, BorderLayout.CENTER);
+        codePanel.add(footerPanel, BorderLayout.SOUTH);
 
-        return panel;
+        return codePanel;
+    }
+
+    @Override
+    public void updateUI() {
+        super.updateUI();
+        if (codePane != null) {
+            applySyntaxStyles();
+            applyThemeColors();
+            if (highlightDebounce != null) {
+                highlightDebounce.restart();
+            }
+        }
+    }
+
+    private void applySyntaxStyles() {
+        boolean dark = AppSettings.get().isDarkMode();
+        StyleConstants.setForeground(styleDefault, dark ? new Color(0xF5, 0xF7, 0xFA) : new Color(0x14, 0x18, 0x1F));
+
+        StyleConstants.setForeground(styleKeyword, dark ? new Color(0x64, 0xB5, 0xF6) : new Color(0x00, 0x33, 0x99));
+        StyleConstants.setBold(styleKeyword, true);
+
+        StyleConstants.setForeground(styleFunction, dark ? new Color(0x4D, 0xD0, 0xE1) : new Color(0x00, 0x66, 0x77));
+        StyleConstants.setBold(styleFunction, true);
+
+        StyleConstants.setForeground(styleComment, dark ? new Color(0x81, 0xC7, 0x84) : new Color(0x2E, 0x7D, 0x32));
+        StyleConstants.setItalic(styleComment, true);
+
+        StyleConstants.setForeground(styleNumber, dark ? new Color(0xCE, 0x93, 0xD8) : new Color(0x7B, 0x1F, 0xA2));
+
+        StyleConstants.setForeground(styleHardwareIo, dark ? new Color(0xFF, 0xB7, 0x4D) : new Color(0x9A, 0x34, 0x12));
+        StyleConstants.setBold(styleHardwareIo, true);
+    }
+
+    private void applyThemeColors() {
+        boolean dark = AppSettings.get().isDarkMode();
+        Color panelBg = dark ? new Color(0x23, 0x26, 0x2B) : new Color(0xEC, 0xEC, 0xEC);
+        Color barBg = dark ? new Color(0x2A, 0x2E, 0x35) : new Color(0xE4, 0xE6, 0xEA);
+        setBackground(panelBg);
+        if (varPanel != null) varPanel.setBackground(panelBg);
+        if (varBar != null) varBar.setBackground(barBg);
+        if (codePanel != null) codePanel.setBackground(panelBg);
+        if (codeBar != null) codeBar.setBackground(barBg);
+        if (footerPanel != null) footerPanel.setBackground(dark ? new Color(0x23, 0x26, 0x2B) : new Color(0xE8, 0xEA, 0xEE));
+        if (varTable != null) {
+            varTable.setGridColor(dark ? new Color(0x3A, 0x3F, 0x48) : new Color(0xC8, 0xCC, 0xD2));
+        }
+        if (codePane != null) {
+            codePane.setBackground(dark ? new Color(0x1B, 0x1D, 0x21) : Color.WHITE);
+            codePane.setForeground(dark ? new Color(0xF5, 0xF7, 0xFA) : new Color(0x14, 0x18, 0x1F));
+            codePane.setCaretColor(dark ? Color.WHITE : Color.BLACK);
+        }
+        if (findBar != null) {
+            findBar.setBackground(dark ? new Color(0x23, 0x26, 0x2B) : new Color(0xF3, 0xF5, 0xF8));
+        }
+        if (findMatchesLabel != null) {
+            findMatchesLabel.setForeground(dark ? new Color(0xD8, 0xDE, 0xE9) : new Color(0x40, 0x45, 0x50));
+        }
     }
 
     private JPanel buildFindBar() {
         JPanel bar = new JPanel(new BorderLayout(4, 2));
-        bar.setBackground(new Color(0xF3, 0xF5, 0xF8));
+        boolean dark = AppSettings.get().isDarkMode();
+        bar.setBackground(dark ? new Color(0x23, 0x26, 0x2B) : new Color(0xF3, 0xF5, 0xF8));
         bar.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(0xBB, 0xC4, 0xD0)),
+                BorderFactory.createMatteBorder(0, 0, 1, 0, dark ? new Color(0x45, 0x4B, 0x54) : new Color(0xBB, 0xC4, 0xD0)),
                 BorderFactory.createEmptyBorder(3, 6, 3, 6)
         ));
 
@@ -1162,7 +1210,7 @@ public class StEditorPanel extends JPanel {
 
         if (diagnostics.isEmpty()) {
             statusLabel.setText("✔ ST Syntax OK  |  " + page.getStVariables().size() + " variable(s) declared");
-            statusLabel.setForeground(new Color(0x1B, 0x5E, 0x20));
+            statusLabel.setForeground(AppSettings.get().isDarkMode() ? new Color(0x81, 0xC7, 0x84) : new Color(0x1B, 0x5E, 0x20));
         } else {
             long errors = diagnostics.stream().filter(d -> d.severity() == StLanguageServer.Severity.ERROR).count();
             long warnings = diagnostics.stream().filter(d -> d.severity() == StLanguageServer.Severity.WARNING).count();
@@ -1527,7 +1575,7 @@ public class StEditorPanel extends JPanel {
         applySyntaxHighlighting();
         validateStCode();
         statusLabel.setText("Inserted template for " + def.getTypeName() + " with auto-created variables");
-        statusLabel.setForeground(new Color(0x1B, 0x5E, 0x20));
+        statusLabel.setForeground(AppSettings.get().isDarkMode() ? new Color(0x81, 0xC7, 0x84) : new Color(0x1B, 0x5E, 0x20));
     }
 
     private static String getUniqueVarName(Page page, String base) {
@@ -1722,9 +1770,21 @@ public class StEditorPanel extends JPanel {
 
         LineNumberGutter(JTextPane pane) {
             this.pane = pane;
-            setBackground(new Color(0xEC, 0xEE, 0xF2));
-            setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, new Color(0xB8, 0xBE, 0xC8)));
+            applyGutterTheme();
             ToolTipManager.sharedInstance().registerComponent(this);
+        }
+
+        @Override
+        public void updateUI() {
+            super.updateUI();
+            applyGutterTheme();
+        }
+
+        private void applyGutterTheme() {
+            boolean dark = AppSettings.get().isDarkMode();
+            setBackground(dark ? new Color(0x22, 0x25, 0x2A) : new Color(0xEC, 0xEE, 0xF2));
+            setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1,
+                    dark ? new Color(0x45, 0x4B, 0x54) : new Color(0xB8, 0xBE, 0xC8)));
         }
 
         void setDiagnostics(List<StLanguageServer.Diagnostic> diags) {
@@ -1763,7 +1823,9 @@ public class StEditorPanel extends JPanel {
 
         private static final Color GUTTER_ERROR_COLOR = new Color(0xD3, 0x2F, 0x2F);
         private static final Color GUTTER_WARN_COLOR = new Color(0xF5, 0x7C, 0x00);
-        private static final Color GUTTER_TEXT_COLOR = new Color(0x55, 0x60, 0x70);
+        private static Color gutterTextColor() {
+            return AppSettings.get().isDarkMode() ? new Color(0xC8, 0xD0, 0xDC) : new Color(0x55, 0x60, 0x70);
+        }
 
         private int countLines() {
             return Math.max(1, pane.getDocument().getDefaultRootElement().getElementCount());
@@ -1809,7 +1871,7 @@ public class StEditorPanel extends JPanel {
                     g.setColor(sev == StLanguageServer.Severity.ERROR ? GUTTER_ERROR_COLOR : GUTTER_WARN_COLOR);
                     g.fillOval(3, y - ascent + 2, 7, 7);
                 }
-                g.setColor(GUTTER_TEXT_COLOR);
+                g.setColor(gutterTextColor());
                 String s = Integer.toString(i);
                 int x = getWidth() - fm.stringWidth(s) - 6;
                 g.drawString(s, x, y);

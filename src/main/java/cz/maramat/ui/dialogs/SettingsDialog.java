@@ -39,6 +39,7 @@ public class SettingsDialog extends JDialog {
     private final AppSettings settings = AppSettings.get();
     private final Runnable onSettingsApplied;
 
+    private JComboBox<AppSettings.Theme> themeCombo;
     private JSlider uiScaleSlider;
     private JLabel uiScaleValLabel;
     private JCheckBox antialiasTextChk;
@@ -55,6 +56,7 @@ public class SettingsDialog extends JDialog {
     private JComboBox<String> defaultCommMethodCombo;
     private JComboBox<String> defaultBaudCombo;
     private JTextField defaultPortField;
+    private JComboBox<String> restSimModeCombo;
 
     private JCheckBox stIntelliSenseChk;
     private JCheckBox stAutoPopupChk;
@@ -124,7 +126,8 @@ public class SettingsDialog extends JDialog {
         CardLayout cardLayout = new CardLayout();
         JPanel cardContainer = new JPanel(cardLayout);
         cardContainer.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(0xB8, 0xB8, 0xB8)),
+                BorderFactory.createLineBorder(settings.isDarkMode()
+                        ? new Color(0x45, 0x4B, 0x54) : new Color(0xB8, 0xB8, 0xB8)),
                 BorderFactory.createEmptyBorder(10, 12, 10, 12)
         ));
 
@@ -186,6 +189,9 @@ public class SettingsDialog extends JDialog {
         JPanel p = new JPanel(new GridBagLayout());
         GridBagConstraints gbc = createGbc();
 
+        themeCombo = new JComboBox<>(AppSettings.Theme.values());
+        themeCombo.setSelectedItem(settings.getTheme());
+
         uiScaleSlider = new JSlider(75, 225, settings.getUiScalePercent());
         uiScaleSlider.setMajorTickSpacing(25);
         uiScaleSlider.setMinorTickSpacing(25);
@@ -208,6 +214,12 @@ public class SettingsDialog extends JDialog {
         antialiasTextChk = new JCheckBox("Enable Text Antialiasing (Strictly on Text Only)", settings.isAntialiasText());
 
         int r = 0;
+        gbc.gridx = 0; gbc.gridy = r; gbc.weightx = 0.0; gbc.gridwidth = 1;
+        p.add(new JLabel("UI Theme:"), gbc);
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        p.add(themeCombo, gbc);
+        r++;
+
         gbc.gridx = 0; gbc.gridy = r; gbc.weightx = 0.0;
         p.add(uiScaleValLabel, gbc);
         gbc.gridx = 1; gbc.weightx = 1.0;
@@ -307,6 +319,8 @@ public class SettingsDialog extends JDialog {
         defaultBaudCombo.setSelectedItem(settings.getDefaultBaudRate());
 
         defaultPortField = new JTextField(settings.getDefaultSerialPort(), 14);
+        restSimModeCombo = new JComboBox<>(new String[]{"Real client", "Simulate"});
+        restSimModeCombo.setSelectedItem(settings.getRestSimMode());
 
         int r = 0;
         gbc.gridx = 0; gbc.gridy = r; gbc.weightx = 0.0;
@@ -325,6 +339,12 @@ public class SettingsDialog extends JDialog {
         p.add(new JLabel("Default Serial Port:"), gbc);
         gbc.gridx = 1; gbc.weightx = 1.0;
         p.add(defaultPortField, gbc);
+        r++;
+
+        gbc.gridx = 0; gbc.gridy = r; gbc.weightx = 0.0;
+        p.add(new JLabel("REST Block Simulation Mode:"), gbc);
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        p.add(restSimModeCombo, gbc);
         r++;
 
         pushToTop(p, gbc, r);
@@ -407,6 +427,7 @@ public class SettingsDialog extends JDialog {
     }
 
     private void applyValues() {
+        settings.setTheme((AppSettings.Theme) themeCombo.getSelectedItem());
         int snappedScale = Math.round(uiScaleSlider.getValue() / 25.0f) * 25;
         settings.setUiScalePercent(snappedScale);
         settings.setAntialiasText(antialiasTextChk.isSelected());
@@ -425,6 +446,7 @@ public class SettingsDialog extends JDialog {
         settings.setDefaultCommMethod((String) defaultCommMethodCombo.getSelectedItem());
         settings.setDefaultBaudRate((String) defaultBaudCombo.getSelectedItem());
         settings.setDefaultSerialPort(defaultPortField.getText().trim());
+        settings.setRestSimMode((String) restSimModeCombo.getSelectedItem());
 
         if (stIntelliSenseChk != null) {
             settings.setStIntelliSenseEnabled(stIntelliSenseChk.isSelected());
@@ -435,6 +457,7 @@ public class SettingsDialog extends JDialog {
             settings.setStSquigglyUnderlines(stSquigglyUnderlinesChk.isSelected());
         }
 
+        settings.save();
         settings.applySettingsToUi();
         if (onSettingsApplied != null) {
             onSettingsApplied.run();
